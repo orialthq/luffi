@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "place",
+  "tags": [
+    {
+      "value": "맛집·카페",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "대표 메뉴가 불고기 정식으로 표시됨"
+      ],
+      "citations": []
+    },
+    {
+      "value": "성수",
+      "facet": "area",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e3"
+      ],
+      "quotes": [
+        "성수점",
+        "성수"
+      ],
+      "citations": []
+    },
+    {
+      "value": "한식",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.95,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "대표 메뉴: 불고기 정식"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "모퉁이식당 성수점",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e1"
+    ]
+  },
+  "place": {
+    "name": "모퉁이식당 성수점",
+    "address": null,
+    "searchArea": "성수",
+    "category": "restaurant",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e1",
+      "e3"
+    ]
+  },
+  "summary": "성수점에서 불고기 정식과 한식 반찬 구성을 보여준다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "모퉁이식당 성수점",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "대표 메뉴: 불고기 정식",
+      "region": "menu",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "성수",
+      "region": "image_text",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "대표 메뉴",
+      "value": "불고기 정식",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": [
+    "주소는 화면에 보이지 않음."
+  ]
+}

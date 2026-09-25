@@ -275,9 +275,39 @@ final class _HomeShellState extends State<HomeShell>
       for (final imported in widget.controller.syncedReviewedCaptureImports)
         RecipeImportOption(importId: imported.importId, title: imported.title),
     ];
+    final diningImportOptions = [
+      for (final imported in widget.controller.syncedReviewedCaptureImports)
+        if (widget.controller
+                .captureById(imported.captureId)
+                ?.analysis
+                ?.structuredContent
+            case final structured?
+            when structured.contentKind == ContentKind.place &&
+                (structured.place?.category == PlaceCategory.restaurant ||
+                    structured.place?.category == PlaceCategory.cafe) &&
+                structured.place?.name?.trim().isNotEmpty == true)
+          DiningImportOption(
+            importId: imported.importId,
+            title: imported.title,
+            placeName: structured.place!.name!,
+            searchArea: structured.place?.searchArea ?? '',
+          ),
+    ];
     Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => CommonBoardsScreen(importOptions: importOptions),
+        builder: (_) => CommonBoardsScreen(
+          importOptions: importOptions,
+          diningImportOptions: diningImportOptions,
+          onOpenDiningImport: (importId) {
+            for (final imported
+                in widget.controller.syncedReviewedCaptureImports) {
+              if (imported.importId != importId) continue;
+              final capture = widget.controller.captureById(imported.captureId);
+              if (capture != null) _openCapture(capture);
+              return;
+            }
+          },
+        ),
       ),
     );
   }

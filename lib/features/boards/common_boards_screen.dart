@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/common_kernel_client.dart';
+import '../../data/place_map_links.dart';
 
 KernelJson _object(Object? value) =>
     value is Map ? Map<String, Object?>.from(value) : {};
@@ -77,12 +79,18 @@ final class CommonBoardsScreen extends StatefulWidget {
   const CommonBoardsScreen({
     this.client,
     this.intentStore,
+    this.diningIntentStore,
     this.importOptions = const [],
+    this.diningImportOptions = const [],
+    this.onOpenDiningImport,
     super.key,
   });
   final CommonKernelClient? client;
   final RecipeScenarioIntentStore? intentStore;
+  final DiningScenarioIntentStore? diningIntentStore;
   final List<RecipeImportOption> importOptions;
+  final List<DiningImportOption> diningImportOptions;
+  final void Function(String importId)? onOpenDiningImport;
 
   @override
   State<CommonBoardsScreen> createState() => _CommonBoardsScreenState();
@@ -97,11 +105,27 @@ final class RecipeImportOption {
   final String title;
 }
 
+final class DiningImportOption {
+  const DiningImportOption({
+    required this.importId,
+    required this.title,
+    required this.placeName,
+    required this.searchArea,
+  });
+
+  final String importId;
+  final String title;
+  final String placeName;
+  final String searchArea;
+}
+
 final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   late final CommonKernelClient _client =
       widget.client ?? const HttpCommonKernelClient();
   late final RecipeScenarioIntentStore _intentStore =
       widget.intentStore ?? const FileRecipeScenarioIntentStore();
+  late final DiningScenarioIntentStore _diningIntentStore =
+      widget.diningIntentStore ?? const FileDiningScenarioIntentStore();
   List<KernelJson> _boards = [];
   KernelJson _contracts = {};
   bool _contractsUnavailable = false;
@@ -112,9 +136,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _loadingMore = false;
   bool _creating = false;
   bool _creatingRecipe = false;
+  bool _creatingDining = false;
   bool _intentLoading = true;
+  bool _diningIntentLoading = true;
   KernelJson? _pendingRecipeIntent;
+  KernelJson? _pendingDiningIntent;
   Object? _intentError;
+  Object? _diningIntentError;
   int _loadGeneration = 0;
 
   @override
@@ -122,6 +150,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     super.initState();
     _load();
     unawaited(_loadRecipeIntent());
+    unawaited(_loadDiningIntent());
+  }
+
+  Future<void> _loadDiningIntent() async {
+    setState(() {
+      _diningIntentLoading = true;
+      _diningIntentError = null;
+    });
+    try {
+      final pending = await _diningIntentStore.load();
+      if (mounted) setState(() => _pendingDiningIntent = pending);
+    } catch (error) {
+      if (mounted) setState(() => _diningIntentError = error);
+    } finally {
+      if (mounted) setState(() => _diningIntentLoading = false);
+    }
   }
 
   Future<void> _loadRecipeIntent() async {
@@ -211,6 +255,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
           client: _client,
           activityId: id,
           contracts: _contracts,
+          onOpenDiningImport: widget.onOpenDiningImport,
         ),
       ),
     );
@@ -278,6 +323,128 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       ingredients: _objects(draft['ingredients']),
       importId: _text(draft['importId']),
     );
+  }
+
+  Future<void> _createReviewedDining() async {
+    final draft = await showDialog<KernelJson>(
+      context: context,
+      builder: (_) =>
+          _DiningScenarioDialog(options: widget.diningImportOptions),
+    );
+    if (draft == null ||
+        !mounted ||
+        _pendingDiningIntent != null ||
+        _diningIntentLoading ||
+        _diningIntentError != null) {
+      return;
+    }
+    setState(() => _creatingDining = true);
+    try {
+      final request = <String, Object?>{
+        'commandId': newKernelCommandId(),
+        'activityId': 'dining-${newKernelCommandId()}',
+        'confirmed': true,
+        ...draft,
+      };
+      await _diningIntentStore.save(request);
+      if (mounted) setState(() => _pendingDiningIntent = request);
+      await _sendDiningIntent(request);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingDining = false);
+    }
+  }
+
+  Future<void> _retryDiningIntent() async {
+    final pending = _pendingDiningIntent;
+    if (pending == null || _creatingDining) return;
+    setState(() => _creatingDining = true);
+    try {
+      await _sendDiningIntent(pending);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingDining = false);
+    }
+  }
+
+  Future<void> _sendDiningIntent(KernelJson request) async {
+    KernelJson result;
+    try {
+      result = await _client.createDiningScenario(request);
+    } on CommonKernelException catch (error) {
+      if (const {
+        'INVALID_REQUEST',
+        'INVALID_DOMAIN_VALUE',
+        'IMPORT_NOT_FOUND',
+        'IMPORT_NOT_DINING',
+        'NO_DINING_CANDIDATES',
+        'SCENARIO_DELETED',
+      }.contains(error.code)) {
+        await _diningIntentStore.clear();
+        if (mounted) setState(() => _pendingDiningIntent = null);
+      }
+      rethrow;
+    }
+    final activityId = result['activityId'];
+    if (activityId is! String || activityId != request['activityId']) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '만든 맛집 활동의 ID를 확인할 수 없어요. 같은 요청으로 다시 확인해 주세요.',
+      );
+    }
+    await _diningIntentStore.clear();
+    if (mounted) {
+      setState(() => _pendingDiningIntent = null);
+      await _open(activityId);
+    }
+  }
+
+  Future<void> _discardDiningIntent() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이전 맛집 활동 요청 지우기'),
+        content: const Text('서버에 활동이 이미 만들어졌을 수 있어요. 목록을 확인한 뒤 지워 주세요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('요청 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    try {
+      await _diningIntentStore.clear();
+      if (mounted) {
+        setState(() {
+          _pendingDiningIntent = null;
+          _diningIntentError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    }
   }
 
   Future<void> _submitRecipe({
@@ -520,6 +687,72 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
                       ),
                     ),
                   ),
+                if (widget.diningImportOptions.isNotEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '첫 맛집 시나리오',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '확인한 식당 캡처에서 지역에 맞는 지점 후보를 모으고, 방문 결과까지 기록해요.',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            key: const Key('kernel-create-dining'),
+                            onPressed:
+                                _creatingDining ||
+                                    _diningIntentLoading ||
+                                    _diningIntentError != null ||
+                                    _pendingDiningIntent != null
+                                ? null
+                                : _createReviewedDining,
+                            icon: const Icon(Icons.location_on_outlined),
+                            label: Text(
+                              _creatingDining ? '만드는 중' : '저장한 식당으로 시작',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_pendingDiningIntent != null)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('완료 여부를 확인할 맛집 활동 요청이 있어요.'),
+                          const Text('같은 요청 ID로 다시 보내면 중복 생성되지 않아요.'),
+                          FilledButton(
+                            key: const Key('kernel-retry-dining-create'),
+                            onPressed: _creatingDining
+                                ? null
+                                : _retryDiningIntent,
+                            child: const Text('이전 생성 이어하기'),
+                          ),
+                          TextButton(
+                            key: const Key('kernel-discard-dining-create'),
+                            onPressed: _creatingDining
+                                ? null
+                                : _discardDiningIntent,
+                            child: const Text('이전 요청 지우기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_diningIntentError != null)
+                  _ErrorPanel(
+                    message: '저장된 맛집 활동 요청을 읽지 못했어요.',
+                    onRefresh: _loadDiningIntent,
+                  ),
                 if (_pendingRecipeIntent != null)
                   Card(
                     child: Padding(
@@ -618,11 +851,13 @@ final class CommonBoardScreen extends StatefulWidget {
     required this.client,
     required this.activityId,
     this.contracts = const {},
+    this.onOpenDiningImport,
     super.key,
   });
   final CommonKernelClient client;
   final String activityId;
   final KernelJson contracts;
+  final void Function(String importId)? onOpenDiningImport;
 
   @override
   State<CommonBoardScreen> createState() => _CommonBoardScreenState();
@@ -779,11 +1014,100 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     return ingredients;
   }
 
+  KernelJson? _selectedDiningCandidate() {
+    final selection = _objects(
+      _board?['tasks'],
+    ).where((item) => item['id'] == 'select_place').firstOrNull;
+    if (selection == null) return null;
+    final result = _objects(
+      _board?['results'],
+    ).where((item) => item['id'] == selection['latestOutputRef']).firstOrNull;
+    final candidateId = _object(result?['value'])['candidateId'];
+    return _objects(
+      _object(selection['inputBindings'])['candidates'],
+    ).where((item) => item['id'] == candidateId).firstOrNull;
+  }
+
+  Future<void> _openDiningMap(KernelJson candidate) async {
+    final links = PlaceMapLinks.fromPlace(
+      name: _text(candidate['name']),
+      searchArea: _text(candidate['searchArea']),
+    );
+    if (links == null) return;
+    try {
+      final opened = await launchUrl(
+        links.naver,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('지도 앱을 열지 못했어요.')));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('지도 앱을 열지 못했어요.')));
+      }
+    }
+  }
+
   Future<void> _complete(KernelJson task) async {
+    final capabilityId = _text(task['capabilityId']);
+    if (capabilityId == 'dining.select_place') {
+      final candidates = _objects(_object(_taskInputs(task))['candidates']);
+      final candidateId = await showDialog<String>(
+        context: context,
+        builder: (_) => _DiningPlaceDialog(
+          candidates: candidates,
+          onOpenImport: widget.onOpenDiningImport,
+        ),
+      );
+      if (candidateId == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.selectDiningPlace({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'candidateId': candidateId,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'dining.record_visit_outcome') {
+      final status = await showDialog<String>(
+        context: context,
+        builder: (_) => const _DiningOutcomeDialog(),
+      );
+      if (status == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordDiningVisitOutcome({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'status': status,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'dining.review_visit_details') {
+      final placeId = _text(_object(_taskInputs(task))['placeId']);
+      await _command('task.transition', {
+        'taskId': task['id'],
+        'expectedTaskRevision': task['revision'],
+        'to': 'completed',
+        'output': {
+          'placeId': placeId,
+          'status': 'unknown',
+          'reviewedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      });
+      return;
+    }
     final cap = _capability(task);
     Object? output;
     if (task['outputSchema'] != null || cap['outputType'] != null) {
-      final capabilityId = _text(task['capabilityId']);
       final response = await showDialog<KernelJson>(
         context: context,
         builder: (_) => switch (capabilityId) {
@@ -840,6 +1164,10 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     }.contains(status);
     final renderer = _text(task['rendererKey']);
     final isRecipe = _text(task['capabilityId']).startsWith('recipe.');
+    final isDining = _text(task['capabilityId']).startsWith('dining.');
+    final selectedDiningCandidate = isDining
+        ? _selectedDiningCandidate()
+        : null;
     return Card(
       key: ValueKey('kernel-task-${task['id']}'),
       child: Padding(
@@ -883,6 +1211,25 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 value: _taskInputs(task),
                 ingredients: _recipeIngredients(),
               )
+            else if (isDining && task['id'] == 'select_place')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    Text(
+                      '• ${_text(candidate['name'])} · ${_text(candidate['searchArea'])} · 캡처 ${_strings(candidate['importIds']).length}개',
+                    ),
+                  const Text('같은 이름·지역의 캡처는 선택 전 후보로만 묶여 있어요.'),
+                ],
+              )
+            else if (isDining)
+              Text(
+                task['id'] == 'review_visit_details'
+                    ? '방문 전 영업·예약 정보는 아직 확인되지 않았어요. 직접 확인해도 사실로 자동 저장되지는 않아요.'
+                    : '실제로 방문했는지 직접 기록해 주세요.',
+              )
             else
               _JsonDetails(title: '입력과 연결 정보', value: _taskInputs(task)),
             if (task['latestOutputRef'] != null)
@@ -910,6 +1257,27 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               spacing: 8,
               runSpacing: 4,
               children: [
+                if (isDining &&
+                    task['id'] == 'review_visit_details' &&
+                    selectedDiningCandidate != null)
+                  OutlinedButton.icon(
+                    key: const Key('kernel-open-dining-map'),
+                    onPressed: () => _openDiningMap(selectedDiningCandidate),
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('지도에서 확인'),
+                  ),
+                if (isDining &&
+                    selectedDiningCandidate != null &&
+                    widget.onOpenDiningImport != null)
+                  for (final importId in _strings(
+                    selectedDiningCandidate['importIds'],
+                  ))
+                    OutlinedButton.icon(
+                      key: ValueKey('kernel-open-dining-source-$importId'),
+                      onPressed: () => widget.onOpenDiningImport!(importId),
+                      icon: const Icon(Icons.image_outlined),
+                      label: const Text('저장한 원본 보기'),
+                    ),
                 if (system &&
                     cap['effect'] == 'none' &&
                     status == 'not_started')
@@ -1230,6 +1598,224 @@ final class _ErrorPanel extends StatelessWidget {
         TextButton(onPressed: onRefresh, child: const Text('새로고침')),
       ],
     ),
+  );
+}
+
+final class _DiningScenarioDialog extends StatefulWidget {
+  const _DiningScenarioDialog({required this.options});
+  final List<DiningImportOption> options;
+
+  @override
+  State<_DiningScenarioDialog> createState() => _DiningScenarioDialogState();
+}
+
+final class _DiningScenarioDialogState extends State<_DiningScenarioDialog> {
+  final _selected = <String>{};
+  final _area = TextEditingController();
+  final _date = TextEditingController();
+  final _time = TextEditingController(text: '19:00');
+  final _partySize = TextEditingController(text: '2');
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final day = DateTime.now().add(const Duration(days: 1));
+    _date.text =
+        '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void dispose() {
+    _area.dispose();
+    _date.dispose();
+    _time.dispose();
+    _partySize.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final area = _area.text.trim();
+    final partySize = int.tryParse(_partySize.text.trim());
+    final date = _date.text.trim();
+    final time = _time.text.trim();
+    final when =
+        RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date) &&
+            RegExp(r'^\d{2}:\d{2}$').hasMatch(time)
+        ? DateTime.tryParse('${date}T$time:00')
+        : null;
+    if (_selected.isEmpty ||
+        area.isEmpty ||
+        area.length > 80 ||
+        partySize == null ||
+        partySize < 1 ||
+        partySize > 20 ||
+        when == null) {
+      setState(() => _error = '캡처, 지역, 방문 시각과 인원(1~20명)을 확인해 주세요.');
+      return;
+    }
+    Navigator.pop(context, <String, Object?>{
+      'importIds': widget.options
+          .where((item) => _selected.contains(item.importId))
+          .map((item) => item.importId)
+          .toList(),
+      'area': area,
+      'scheduledAt': when.toUtc().toIso8601String(),
+      'partySize': partySize,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('저장한 맛집으로 식사 계획'),
+    content: SizedBox(
+      width: 430,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('함께 비교할 식당 캡처를 골라 주세요. 같은 지점인지 마지막에 직접 확인합니다.'),
+            for (final option in widget.options)
+              CheckboxListTile(
+                key: ValueKey('dining-import-${option.importId}'),
+                contentPadding: EdgeInsets.zero,
+                value: _selected.contains(option.importId),
+                title: Text(option.placeName),
+                subtitle: Text('${option.searchArea} · ${option.title}'),
+                onChanged: (checked) => setState(() {
+                  if (checked == true) {
+                    _selected.add(option.importId);
+                    if (_area.text.isEmpty) _area.text = option.searchArea;
+                  } else {
+                    _selected.remove(option.importId);
+                  }
+                }),
+              ),
+            TextField(
+              controller: _area,
+              decoration: const InputDecoration(labelText: '식사할 지역'),
+            ),
+            TextField(
+              controller: _date,
+              decoration: const InputDecoration(labelText: '날짜 (YYYY-MM-DD)'),
+            ),
+            TextField(
+              controller: _time,
+              decoration: const InputDecoration(labelText: '시각 (HH:mm)'),
+            ),
+            TextField(
+              controller: _partySize,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: '인원'),
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(
+        key: const Key('dining-create-submit'),
+        onPressed: _submit,
+        child: const Text('계획 제안 받기'),
+      ),
+    ],
+  );
+}
+
+final class _DiningPlaceDialog extends StatelessWidget {
+  const _DiningPlaceDialog({required this.candidates, this.onOpenImport});
+  final List<KernelJson> candidates;
+  final void Function(String importId)? onOpenImport;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('방문할 지점 선택'),
+    content: SizedBox(
+      width: 400,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('캡처에 적힌 상호와 지역을 확인해 주세요. 선택한 캡처만 같은 지점으로 연결돼요.'),
+            const SizedBox(height: 8),
+            for (final candidate in candidates)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ListTile(
+                    key: ValueKey('dining-candidate-${candidate['id']}'),
+                    title: Text(_text(candidate['name'])),
+                    subtitle: Text(
+                      '${_text(candidate['searchArea'])} · 캡처 ${_strings(candidate['importIds']).length}개',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.pop(context, _text(candidate['id'])),
+                  ),
+                  if (onOpenImport != null)
+                    for (final importId in _strings(candidate['importIds']))
+                      TextButton.icon(
+                        key: ValueKey('dining-source-$importId'),
+                        onPressed: () => onOpenImport!(importId),
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('원본 캡처 보기'),
+                      ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+    ],
+  );
+}
+
+final class _DiningOutcomeDialog extends StatelessWidget {
+  const _DiningOutcomeDialog();
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('방문 결과 기록'),
+    content: const Text('직접 방문한 경우에만 방문 기록을 만들어요.'),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      TextButton(
+        key: const Key('dining-outcome-unknown'),
+        onPressed: () => Navigator.pop(context, 'unknown'),
+        child: const Text('아직 몰라요'),
+      ),
+      TextButton(
+        key: const Key('dining-outcome-not-visited'),
+        onPressed: () => Navigator.pop(context, 'not_visited'),
+        child: const Text('못 갔어요'),
+      ),
+      FilledButton(
+        key: const Key('dining-outcome-visited'),
+        onPressed: () => Navigator.pop(context, 'visited'),
+        child: const Text('다녀왔어요'),
+      ),
+    ],
   );
 }
 

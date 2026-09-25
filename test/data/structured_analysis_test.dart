@@ -8,6 +8,31 @@ import 'package:ori_beauty/data/remote_content_analysis_service.dart';
 import 'package:ori_beauty/domain/models.dart';
 
 void main() {
+  test('parses four real image-analysis responses for dining branches', () {
+    const cases = <String, (String, String)>{
+      'a_seongsu': ('모퉁이식당 성수점', '성수'),
+      'b_yeonnam': ('모퉁이식당 연남점', '연남'),
+      'c_seongsu': ('모퉁이식당 성수점', '성수'),
+      'd_noodles': ('성수국수집', '성수'),
+    };
+    for (final entry in cases.entries) {
+      final recorded =
+          jsonDecode(
+                File(
+                  'server/test/fixtures/dining_${entry.key}_live_analysis.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final analysis = StructuredContentAnalysis.fromJson(
+        Map<String, Object?>.from(recorded),
+      );
+      expect(analysis.contentKind, ContentKind.place);
+      expect(analysis.place?.name, entry.value.$1);
+      expect(analysis.place?.searchArea, entry.value.$2);
+      expect(analysis.place?.category, PlaceCategory.restaurant);
+    }
+  });
+
   test('parses the recorded API response for a generated recipe image', () {
     final recorded =
         jsonDecode(

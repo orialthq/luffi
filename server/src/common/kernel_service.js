@@ -15,6 +15,7 @@ import {
 } from "../knowledge/index.js";
 import { retrieveKnowledge, validateRetrievalResult } from "../retrieval/index.js";
 import { buildRecipePlanDraft } from "../scenarios/recipe_plan.js";
+import { buildDiningPlanDraft } from "../scenarios/dining_plan.js";
 import {
   applyResourceCommand, createResourceState,
   getResourceAvailability as projectResourceAvailability,
@@ -36,6 +37,8 @@ export function createCommonKernelState() {
     proposals: {},
     importReceipts: {},
     recipeScenarioReceipts: {},
+    diningScenarioReceipts: {},
+    diningCommandReceipts: {},
   };
 }
 
@@ -93,6 +96,10 @@ function requestObject(value) {
     throw new AppError("INVALID_REQUEST", "요청 형식이 올바르지 않아요.", { httpStatus: 400 });
   }
   return value;
+}
+
+function placeKey(value) {
+  return typeof value === "string" ? value.normalize("NFKC").replace(/\s+/g, "").toLowerCase() : "";
 }
 
 /** Coordinates pure domain kernels within one durable state-store transaction.
@@ -380,9 +387,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   // A confirmed recipe is a derivative of its confirmation source. The KG
   // redacts source values; the activity kernel has separate copies in plans,
   // task results and issued contexts, so erase those in the same transaction.
-  function redactRecipeScenario(state, sourceId) {
-    const receipts = Object.values(state.recipeScenarioReceipts ?? {}).filter((entry) =>
-      entry.result?.confirmationSourceId === sourceId && !entry.deleted);
+  function redactScenarioReceipts(state, receipts, sourceId) {
     for (const receipt of receipts) {
       const { activityId } = receipt.result;
       for (const claim of state.resources.claims.filter((item) => item.ownerId === ownerId &&
@@ -390,7 +395,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         const resource = state.resources.resources.find((item) => item.ownerId === ownerId &&
           item.id === claim.resourceId);
         state.resources = applyResourceCommand(state.resources, {
-          ownerId, commandId: `kernel:recipe-redact:${sourceId}:${claim.id}`,
+          ownerId, commandId: `kernel:scenario-redact:${sourceId}:${claim.id}`,
           type: "claim.release", expectedRevision: resource.revision,
           payload: { activityId, resourceId: claim.resourceId, claimId: claim.id },
         }).state;
@@ -427,9 +432,27 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       state.knowledge = unregisterKnowledgeWatch(state.knowledge, { ownerId, consumerId: activityId });
       delete state.retrievalWatches[activityId];
       delete state.resourceWatches[activityId];
+      for (const item of Object.values(state.diningCommandReceipts ?? {})) {
+        if (item.activityId === activityId) {
+          item.deleted = true;
+          item.result = { activityId };
+        }
+      }
       receipt.deleted = true;
-      receipt.result = { activityId, confirmationSourceId: sourceId };
+      receipt.result = { activityId, ...(receipt.result.confirmationSourceId
+        ? { confirmationSourceId: sourceId } : {}) };
     }
+  }
+
+  function redactRecipeScenario(state, sourceId) {
+    redactScenarioReceipts(state, Object.values(state.recipeScenarioReceipts ?? {}).filter((entry) =>
+      entry.result?.confirmationSourceId === sourceId && !entry.deleted), sourceId);
+  }
+
+  function redactDiningScenario(state, sourceId, activityId = null) {
+    redactScenarioReceipts(state, Object.values(state.diningScenarioReceipts ?? {}).filter((entry) =>
+      !entry.deleted && (entry.result?.activityId === activityId || entry.importIds?.some((id) =>
+        state.importReceipts[id]?.sourceId === sourceId))), sourceId);
   }
 
   function redactImportedCapture(state, sourceId) {
@@ -486,8 +509,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
     }
+    if (source?.kind === "user_report" && source.provenance?.scenario === "dining") {
+      redactDiningScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "capture_analysis") {
       redactImportedCapture(state, source.id);
+      redactDiningScenario(state, source.id);
       for (const sourceId of linkedConfirmations) {
         state.knowledge = applyKnowledgeCommand(state.knowledge, {
           ownerId, commandId: `kernel:source-cascade:${sourceId}`,
@@ -574,6 +601,56 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return { contextId, ...context };
   }
 
+  function diningCandidates(state, importIds, area) {
+    const groups = new Map();
+    const contextQueries = [];
+    for (const importId of importIds) {
+      const receipt = state.importReceipts[importId];
+      if (receipt?.ownerId !== ownerId || receipt.deleted) {
+        throw new AppError("IMPORT_NOT_FOUND", "연결할 확인 자료를 찾을 수 없어요.", { httpStatus: 404 });
+      }
+      const version = state.knowledge.sourceVersions.find((item) =>
+        item.ownerId === ownerId && item.id === receipt.sourceVersionId && item.status === "active");
+      const analysis = version?.content?.analysis;
+      const place = analysis?.place;
+      if (analysis?.contentKind !== "place" ||
+          !["restaurant", "cafe"].includes(place?.category) || !place?.name?.trim()) {
+        throw new AppError("IMPORT_NOT_DINING", "식당·카페로 확인한 자료만 사용할 수 있어요.",
+          { httpStatus: 400 });
+      }
+      const searchArea = place.searchArea?.trim() || "";
+      const address = place.address?.trim() || "";
+      if (searchArea && placeKey(searchArea) !== placeKey(area) &&
+          !placeKey(address).includes(placeKey(area))) continue;
+      if (!searchArea && address && !placeKey(address).includes(placeKey(area))) continue;
+      const mention = state.knowledge.entityMentions.find((item) =>
+        item.ownerId === ownerId && item.sourceVersionId === version.id &&
+        item.entityType === "dining.place" && item.status === "active");
+      if (!mention) continue;
+      const key = [placeKey(place.name), placeKey(searchArea), placeKey(address)].join("|");
+      const id = `dining-candidate:${fingerprint([ownerId, key]).slice(0, 24)}`;
+      const group = groups.get(key) ?? { id, name: place.name.trim(),
+        searchArea: searchArea || area, importIds: [], mentionIds: [], evidenceIds: [] };
+      group.importIds.push(importId);
+      group.mentionIds.push(mention.id);
+      group.evidenceIds.push(...mention.evidenceIds);
+      groups.set(key, group);
+      const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
+        item.subjectId === receipt.result?.materialId &&
+        item.predicate === "ingestion.extracted_field" &&
+        item.typedValue?.value?.path === "/place/name" && item.status === "active");
+      if (field) contextQueries.push({ subjectId: field.subjectId,
+        predicate: field.predicate, scope: field.scope });
+    }
+    const candidates = [...groups.values()].map((item) => ({ ...item,
+      evidenceIds: [...new Set(item.evidenceIds)] }));
+    if (candidates.length === 0) {
+      throw new AppError("NO_DINING_CANDIDATES", "이 지역에서 확인한 식당을 찾지 못했어요.",
+        { httpStatus: 400 });
+    }
+    return { candidates, contextQueries };
+  }
+
   return {
     async contracts() {
       return {
@@ -650,6 +727,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             const task = current.tasks.find((item) => item.id === command.payload?.taskId);
             if (!task) throw new AppError("TASK_NOT_FOUND", "작업을 찾을 수 없어요.", { httpStatus: 404 });
             const spec = registry.getCapability(task.capabilityId);
+            if (["dining.select_place", "dining.record_visit_outcome"].includes(spec.id) &&
+                (command.type === "task.recordResult" || command.payload?.to === "completed" ||
+                  Object.hasOwn(command.payload ?? {}, "output"))) {
+              throw new AppError("TASK_EXECUTION_RESTRICTED", "맛집 선택·방문 결과는 전용 경로로 기록해 주세요.",
+                { httpStatus: 403 });
+            }
             const writesOutput = command.type === "task.recordResult" ||
               Object.hasOwn(command.payload ?? {}, "output");
             if ((writesOutput || command.payload?.to === "completed") &&
@@ -1043,6 +1126,259 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, revision: created.result.revision, proposalId,
             contextId: issued.contextId, recipeEntityId, confirmationSourceId };
           state.recipeScenarioReceipts[receiptKey] = { hash: requestHash, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async createDiningScenario(raw) {
+      try {
+        const input = requestObject(raw);
+        const allowed = new Set(["commandId", "activityId", "confirmed", "importIds",
+          "scheduledAt", "area", "partySize"]);
+        if (Object.keys(input).some((key) => !allowed.has(key)) || input.confirmed !== true ||
+            !Array.isArray(input.importIds) || input.importIds.length < 1 ||
+            input.importIds.length > 20 || !Number.isInteger(input.partySize) ||
+            input.partySize < 1 || input.partySize > 20 ||
+            typeof input.area !== "string" || !input.area.trim() || input.area.length > 80) {
+          throw new AppError("INVALID_REQUEST", "맛집 활동 입력을 확인해 주세요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const importIds = input.importIds.map((id) => safeId(id, "importId"));
+        if (new Set(importIds).size !== importIds.length) {
+          throw new AppError("INVALID_REQUEST", "같은 캡처를 중복 선택했어요.", { httpStatus: 400 });
+        }
+        registry.validate("core.timestamp", input.scheduledAt);
+        const area = input.area.trim();
+        const requestHash = requestFingerprint({ activityId, importIds, scheduledAt: input.scheduledAt,
+          area, partySize: input.partySize });
+        return await store.transact((state) => {
+          assertState(state);
+          state.diningScenarioReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.diningScenarioReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) {
+              throw new AppError("COMMAND_CONFLICT", "명령 ID가 다른 맛집 요청에 사용됐어요.",
+                { httpStatus: 409 });
+            }
+            if (previous.deleted) {
+              throw new AppError("SCENARIO_DELETED", "삭제한 맛집 활동은 다시 만들 수 없어요.",
+                { httpStatus: 410 });
+            }
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const { candidates, contextQueries } = diningCandidates(state, importIds, area);
+          const plan = buildDiningPlanDraft({ candidates, scheduledAt: input.scheduledAt,
+            partySize: input.partySize }, { registry });
+          const stem = `dining:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const created = applyActivityCommand(state.activities, {
+            ownerId, commandId: `${stem}:activity`, type: "activity.create", activityId,
+            expectedRevision: 0,
+            payload: { title: `${area} 식사`, goal: {
+              description: `${input.scheduledAt} · ${area} · ${input.partySize}명 식사` } },
+          }, activityOptions(state));
+          state.activities = created.state;
+          state.resources = applyResourceCommand(state.resources, {
+            ownerId, commandId: `${stem}:resource-activity`, type: "activity.register",
+            expectedRevision: 0, payload: { activityId },
+          }).state;
+          const issued = issueContext(state, { activityId, queries: contextQueries });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE", "식당 캡처의 근거를 확인할 수 없어요.",
+              { httpStatus: 409 });
+          }
+          const enriched = enrichPlan("draft", plan);
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:proposal-check`, type: "plan.applyDraft", activityId,
+            expectedRevision: created.result.revision, payload: { draft: enriched },
+          }, activityOptions(state));
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId, activityId,
+            contextId: issued.contextId, kind: "draft", plan: structuredClone(enriched),
+            run: { scenario: "dining", importIds: [...importIds] },
+            baseActivityRevision: created.result.revision, basePlanRevision: 0,
+            status: "pending", createdAt: new Date().toISOString() };
+          const result = { activityId, revision: created.result.revision, proposalId,
+            contextId: issued.contextId, candidateCount: candidates.length };
+          state.diningScenarioReceipts[receiptKey] = { hash: requestHash,
+            importIds: [...importIds], result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async selectDiningPlace(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "candidateId"].includes(key))) {
+          throw new AppError("INVALID_REQUEST", "식당 선택 요청 형식이 올바르지 않아요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const candidateId = safeId(input.candidateId, "candidateId");
+        const requestHash = requestFingerprint({ activityId, candidateId,
+          expectedRevision: input.expectedRevision });
+        return await store.transact((state) => {
+          assertState(state);
+          state.diningCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.diningCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) {
+              throw new AppError("COMMAND_CONFLICT", "명령 ID가 다른 식당 선택에 사용됐어요.",
+                { httpStatus: 409 });
+            }
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.values(state.diningScenarioReceipts ?? {}).find((item) =>
+            item.result?.activityId === activityId && !item.deleted);
+          if (!scenario) throw new AppError("NOT_FOUND", "맛집 활동을 찾지 못했어요.", { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) {
+            throw new AppError("REVISION_CONFLICT", "활동이 변경됐어요.", { httpStatus: 409 });
+          }
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "select_place" &&
+            item.capabilityId === "dining.select_place");
+          if (task?.readiness?.status !== "ready") {
+            throw new AppError("TASK_BLOCKED", "지금은 식당을 선택할 수 없어요.", { httpStatus: 409 });
+          }
+          const candidate = task.readiness.inputs.candidates.find((item) => item.id === candidateId);
+          if (!candidate) throw new AppError("INVALID_REQUEST", "제안된 식당 후보가 아니에요.", { httpStatus: 400 });
+          const mentions = candidate.mentionIds.map((id) => state.knowledge.entityMentions.find((item) =>
+            item.ownerId === ownerId && item.id === id && item.status === "active"));
+          if (mentions.some((item) => !item)) {
+            throw new AppError("CONTEXT_STALE", "식당 캡처 근거가 변경됐어요.", { httpStatus: 409 });
+          }
+          const stem = `dining:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const accepted = mentions.map((mention) => state.knowledge.identityDecisions.find((item) =>
+            item.ownerId === ownerId && item.mentionId === mention.id && item.status === "accepted"));
+          const existingPlaceIds = new Set(accepted.filter(Boolean).map((item) => item.entityId));
+          if (existingPlaceIds.size > 1) {
+            throw new AppError("IDENTITY_CONFLICT", "선택한 캡처들이 서로 다른 지점에 연결돼 있어요.",
+              { httpStatus: 409 });
+          }
+          const placeId = [...existingPlaceIds][0] ??
+            `${stem}:place:${fingerprint(candidateId).slice(0, 16)}`;
+          const beforeSequence = state.knowledge.sequence;
+          const applyKnowledge = (role, type, payload) => {
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:select:${role}`, type, payload }, { predicates }).state;
+          };
+          if (existingPlaceIds.size === 0) {
+            applyKnowledge("place", "entity.create", { id: placeId,
+              type: "dining.place", label: "사용자가 선택한 식당 지점" });
+          }
+          for (const mention of mentions) {
+            if (accepted.some((item) => item?.mentionId === mention.id)) continue;
+            const role = fingerprint(mention.id).slice(0, 16);
+            const decisionId = `${stem}:identity:${role}`;
+            applyKnowledge(`identity-propose:${role}`, "identity.propose", {
+              id: decisionId, mentionId: mention.id, entityId: placeId,
+              evidenceIds: mention.evidenceIds, reason: "사용자가 이 식당 지점 후보를 선택함",
+            });
+            applyKnowledge(`identity-accept:${role}`, "identity.accept", {
+              decisionId, expectedRevision: 1,
+            });
+          }
+          recordAffectedConsumers(state, beforeSequence);
+          const output = { candidateId, placeId, selectedAt: new Date().toISOString() };
+          const applied = applyActivityCommand(state.activities, {
+            ownerId, commandId: `${stem}:selected`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "select_place", expectedTaskRevision: task.revision,
+              to: "completed", output },
+          }, activityOptions(state));
+          state.activities = applied.state;
+          const result = { activityId, placeId, candidateId, revision: applied.result.revision };
+          state.diningCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async recordDiningVisitOutcome(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "status"].includes(key)) ||
+          !["visited", "not_visited", "unknown"].includes(input.status)) {
+          throw new AppError("INVALID_REQUEST", "방문 결과를 확인해 주세요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const requestHash = requestFingerprint({ activityId, status: input.status,
+          expectedRevision: input.expectedRevision });
+        return await store.transact((state) => {
+          assertState(state);
+          state.diningCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.diningCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) {
+              throw new AppError("COMMAND_CONFLICT", "명령 ID가 다른 방문 결과에 사용됐어요.",
+                { httpStatus: 409 });
+            }
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) {
+            throw new AppError("REVISION_CONFLICT", "활동이 변경됐어요.", { httpStatus: 409 });
+          }
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "record_visit_outcome" &&
+            item.capabilityId === "dining.record_visit_outcome");
+          if (task?.readiness?.status !== "ready") {
+            throw new AppError("TASK_BLOCKED", "방문 결과를 기록할 수 없어요.", { httpStatus: 409 });
+          }
+          const placeId = task.readiness.inputs.placeId;
+          const place = state.knowledge.entities.find((item) => item.ownerId === ownerId &&
+            item.id === placeId && item.type === "dining.place" && item.status === "active");
+          if (!place) throw new AppError("CONTEXT_STALE", "선택한 식당을 찾지 못했어요.", { httpStatus: 409 });
+          const stem = `dining:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const reportedAt = new Date().toISOString();
+          const output = { placeId, status: input.status, reportedAt };
+          const applied = applyActivityCommand(state.activities, {
+            ownerId, commandId: `${stem}:visit-outcome`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "record_visit_outcome", expectedTaskRevision: task.revision,
+              to: "completed", output },
+          }, activityOptions(state));
+          state.activities = applied.state;
+          let visitId = null;
+          if (input.status === "visited") {
+            const sourceId = `${stem}:visit-source`;
+            const versionId = `${stem}:visit-version`;
+            const evidenceId = `${stem}:visit-evidence`;
+            visitId = `${stem}:visit`;
+            const content = { placeId, reportedAt, status: "visited" };
+            const applyKnowledge = (role, type, payload) => {
+              if (type === "assertion.add") validateAssertionRelation(state, payload);
+              state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+                commandId: `${stem}:visit:${role}`, type, payload }, { predicates }).state;
+            };
+            const beforeSequence = state.knowledge.sequence;
+            applyKnowledge("source", "source.create", { id: sourceId, kind: "user_report",
+              title: "방문 기록", provenance: { scenario: "dining", activityId } });
+            applyKnowledge("version", "source.version.add", { id: versionId,
+              sourceId, contentHash: fingerprint(content), content, capturedAt: reportedAt });
+            applyKnowledge("evidence", "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId, quote: "다녀왔어요",
+              locator: { kind: "user_report", jsonPointer: "/status" } });
+            applyKnowledge("entity", "entity.create", { id: visitId,
+              type: "dining.visit", label: "사용자 방문 기록" });
+            applyKnowledge("visited", "assertion.add", { id: `${stem}:visited`,
+              subjectId: visitId, predicate: "dining.visited", objectEntityId: placeId,
+              scope: { type: "activity", id: activityId }, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+              observedAt: reportedAt });
+            recordAffectedConsumers(state, beforeSequence);
+          }
+          const result = { activityId, placeId, status: input.status, visitId,
+            revision: applied.result.revision };
+          state.diningCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

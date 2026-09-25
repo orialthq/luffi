@@ -71,6 +71,22 @@ final class FakeRecipeIntentStore implements RecipeScenarioIntentStore {
   }
 }
 
+final class FakeDiningIntentStore implements DiningScenarioIntentStore {
+  KernelJson? pending;
+
+  @override
+  Future<KernelJson?> load() async => pending;
+
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending dining intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async => pending = null;
+}
+
 final class FakeKernelClient implements CommonKernelClient {
   KernelJson board = _board();
   final commands = <KernelJson>[];
@@ -229,6 +245,81 @@ final class FakeKernelClient implements CommonKernelClient {
       'activityId': activityId,
       'proposalId': 'proposal-1',
       'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> createDiningScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    if (scenarioFailure case final error?) throw error;
+    final activityId = request['activityId'];
+    board = {
+      'id': activityId,
+      'title': '${request['area']} 식사',
+      'goal': {'description': '저장한 식당 방문'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'dining-proposal',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'select_place',
+                'title': '방문할 식당 지점 선택',
+                'capabilityId': 'dining.select_place',
+                'inputBindings': {
+                  'candidates': [
+                    {
+                      'id': 'candidate-a',
+                      'name': '모퉁이식당 성수점',
+                      'searchArea': '성수',
+                      'importIds': request['importIds'],
+                      'mentionIds': ['mention-a'],
+                      'evidenceIds': ['evidence-a'],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    return {
+      'activityId': activityId,
+      'proposalId': 'dining-proposal',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> selectDiningPlace(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'placeId': 'place-a',
+      'candidateId': request['candidateId'],
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> recordDiningVisitOutcome(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'status': request['status'],
+      'revision': board['revision'],
     };
   }
 
@@ -708,6 +799,62 @@ void main() {
       expect(client.acceptedProposals.single['proposalId'], 'proposal-1');
       expect(client.acceptedProposals.single['commandId'], isA<String>());
       expect(find.text('레시피 계획 제안'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'reviewed restaurant captures create an approval-gated dining board',
+    (tester) async {
+      final client = FakeKernelClient();
+      final intentStore = FakeDiningIntentStore();
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardsScreen(
+            client: client,
+            intentStore: FakeRecipeIntentStore(),
+            diningIntentStore: intentStore,
+            diningImportOptions: const [
+              DiningImportOption(
+                importId: 'a',
+                title: '첫 캡처',
+                placeName: '모퉁이식당 성수점',
+                searchArea: '성수',
+              ),
+              DiningImportOption(
+                importId: 'd',
+                title: '다른 캡처',
+                placeName: '성수국수집',
+                searchArea: '성수',
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('kernel-create-dining')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('dining-import-a')));
+      await tester.tap(find.byKey(const ValueKey('dining-import-d')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dining-create-submit')));
+      await tester.pumpAndSettle();
+      expect(client.scenarioRequests, hasLength(1));
+      final request = client.scenarioRequests.single;
+      expect(request['importIds'], ['a', 'd']);
+      expect(request['area'], '성수');
+      expect(request['partySize'], 2);
+      expect(request['scheduledAt'], isA<String>());
+      expect(intentStore.pending, isNull);
+      expect(find.text('계획 제안'), findsOneWidget);
+      expect(
+        ((client.board['pendingProposals'] as List).single['plan']
+            as Map)['tasks'],
+        contains(containsPair('title', '방문할 식당 지점 선택')),
+      );
     },
   );
 

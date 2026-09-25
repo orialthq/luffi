@@ -1,8 +1,8 @@
-import { array, enumeration, object, ref, text } from "./schema.js";
+import { array, enumeration, integer, object, ref, text } from "./schema.js";
 import { artifact, capability, relation, slot, valueRelation } from "./shared.js";
 
 export const diningPack = {
-  id: "dining", version: 1, compatibleKernelVersions: [1],
+  id: "dining", version: 2, compatibleKernelVersions: [1],
   entityTypes: ["dining.place", "dining.reservation", "dining.visit"],
   types: [
     { id: "dining.place", schema: object({ id: text, name: text, branchName: text, providerId: text, address: text }, ["id", "name"]) },
@@ -16,6 +16,18 @@ export const diningPack = {
     { id: "dining.confirm_input", schema: object({ reservationId: text, placeId: text }) },
     { id: "dining.confirmation", schema: object({ reservationId: text, placeId: text, status: enumeration("confirmed"), confirmationReference: text, confirmedAt: ref("core.timestamp"), evidenceIds: ref("core.evidence_ids") }) },
     { id: "dining.visit_input", schema: object({ placeId: text }) },
+    { id: "dining.candidate", schema: object({ id: text, name: text, searchArea: text,
+      importIds: array(text, 1), mentionIds: array(text, 1), evidenceIds: ref("core.evidence_ids") }) },
+    { id: "dining.selection_input", schema: object({ candidates: array(ref("dining.candidate"), 1) }) },
+    { id: "dining.selection", schema: object({ candidateId: text, placeId: text,
+      selectedAt: ref("core.timestamp") }) },
+    { id: "dining.visit_details_input", schema: object({ placeId: text,
+      scheduledAt: ref("core.timestamp"), partySize: integer }) },
+    { id: "dining.visit_details_review", schema: object({ placeId: text,
+      status: enumeration("unknown"), reviewedAt: ref("core.timestamp") }) },
+    { id: "dining.visit_outcome", schema: object({ placeId: text,
+      status: enumeration("visited", "not_visited", "unknown"),
+      reportedAt: ref("core.timestamp") }) },
   ],
   relations: [
     relation("dining.reservation_at", ["dining.reservation"], ["dining.place"], "one"),
@@ -33,6 +45,12 @@ export const diningPack = {
     capability({ id: "dining.prepare_reservation", taskKind: "decision", inputType: "dining.prepare_input", outputType: "dining.reservation_preparation", inputSlots: { scheduledAt: "dining.scheduled_at" }, completion: "preparation_only_not_reservation_confirmation" }),
     capability({ id: "dining.confirm_reservation", taskKind: "observe", inputType: "dining.confirm_input", outputType: "dining.confirmation", outputSlots: { "$": "dining.confirmation" }, completion: "confirmation_reference_and_evidence_required" }),
     capability({ id: "dining.record_visit", taskKind: "observe", inputType: "dining.visit_input", outputType: "dining.visit" }),
+    capability({ id: "dining.select_place", taskKind: "decision", inputType: "dining.selection_input",
+      outputType: "dining.selection" }),
+    capability({ id: "dining.review_visit_details", taskKind: "observe",
+      inputType: "dining.visit_details_input", outputType: "dining.visit_details_review" }),
+    capability({ id: "dining.record_visit_outcome", taskKind: "observe",
+      inputType: "dining.visit_input", outputType: "dining.visit_outcome" }),
   ],
   artifacts: [artifact("dining.comparison", "dining.comparison", "dining.comparison"), artifact("dining.reservation_preparation", "dining.reservation_preparation", "dining.reservation"), artifact("dining.confirmation", "dining.confirmation", "dining.confirmation")],
 };

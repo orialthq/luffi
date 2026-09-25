@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "place",
+  "tags": [
+    {
+      "value": "맛집·카페",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "대표 메뉴: 잔치국수"
+      ],
+      "citations": []
+    },
+    {
+      "value": "성수",
+      "facet": "area",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "성수"
+      ],
+      "citations": []
+    },
+    {
+      "value": "국수",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.96,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "대표 메뉴: 잔치국수"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "partial",
+  "title": {
+    "value": "성수국수집",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e3"
+    ]
+  },
+  "place": {
+    "name": "성수국수집",
+    "address": null,
+    "searchArea": "성수",
+    "category": "restaurant",
+    "confidence": 0.98,
+    "evidenceIds": [
+      "e2",
+      "e3"
+    ]
+  },
+  "summary": "성수에 있는 국수집으로 잔치국수를 대표 메뉴로 소개합니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "대표 메뉴: 잔치국수",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "성수",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "성수국수집",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "합성 자료",
+      "region": "image_text",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "대표 메뉴",
+      "value": "잔치국수",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1"
+      ]
+    },
+    {
+      "label": "자료 유형",
+      "value": "합성 자료",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e4"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": [
+    "주소는 화면에 표시되지 않았습니다.",
+    "화면에 합성 자료라고 표시되어 있습니다."
+  ]
+}

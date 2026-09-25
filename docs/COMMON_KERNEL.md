@@ -46,6 +46,9 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/ingestion/reviewed-capture` | 사용자 확인된 기존 분석의 원자적 가져오기 |
 | `POST /v1/kernel/ingestion/reviewed-capture/delete` | `importId`로 확인 캡처의 서버 Source와 연결된 레시피 시나리오를 원자적으로 삭제하거나 가져오기 전에 삭제 의사를 기록 |
 | `POST /v1/kernel/recipe/scenarios` | 사용자가 직접 확인한 레시피로 근거 그래프·Activity·승인 대기 계획을 한 트랜잭션에서 생성 |
+| `POST /v1/kernel/dining/scenarios` | 확인해 가져온 식당·카페 캡처, 지역·시각·인원으로 승인 대기 맛집 계획 생성 |
+| `POST /v1/kernel/dining/select-place` | 사용자가 후보 지점을 고르고 캡처 Mention의 장소 신원을 연결한 뒤 선택 작업 완료 |
+| `POST /v1/kernel/dining/visit-outcome` | 사용자가 방문 여부를 기록. `visited`일 때만 출처가 있는 방문 관계 생성 |
 | `POST /v1/kernel/domains/execute` | 부수 효과가 없는 등록된 분야 계산만 실행 |
 
 AI가 만든 PlanDraft/PlanPatch를 적용할 때는 `/knowledge/context`가 돌려준 `contextId`를 사용한다. 서버는 이 ID에 연결된 readSet, 없던 사실을 감시하는 queryWatches, 검색의 발견 의존성, 자원 조건, 정책·시간 조건과 Activity revision을 다시 검사한다. API가 전달한 임의 `context` 객체는 신뢰하지 않는다. 발급 맥락은 서버 상태에 저장되며 사용 기한은 1시간이다. `/planning/proposals`는 실제 상태를 바꾸지 않는 컴파일 검사를 먼저 하고, `/planning/accept`에서 기준 버전과 맥락을 다시 검사한다. 같은 명령 ID·같은 요청은 재전송해도 한 번만 처리하고, 같은 ID에 다른 내용은 충돌이다.
@@ -105,7 +108,7 @@ Context의 명시적 `resourceIds`는 최대 100개다. 해당 Activity가 이�
 
 기존 캡처 가져오기는 `reviewed: true`가 명시된 경우에만 허용한다. 현재 서버가 원본 이미지를 업로드받아 보관하지 않았으면 `asset.status`를 `device_only` 또는 `unavailable`로 둔다. 캡처 분석에 근거가 있는 필드는 원본 스냅샷 범위의 `ingestion.extracted_field` 주장으로 저장한다. 레시피 인분·실재 재고·식당 예약 확정·제품 소유처럼 기존 분석만으로 확인할 수 없는 값은 만들지 않는다. 업로드되지 않은 원본을 서버에 있는 것처럼 표시하지 않는다.
 
-캡처를 삭제하면 앱은 로컬 캡처 제거와 서버 삭제 요청을 같은 스냅샷에 기록한다. 삭제 대기함에는 분석 내용 없이 `importId`와 고정된 `commandId`만 남긴다. 앱은 `POST /v1/kernel/ingestion/reviewed-capture/delete`에 `{ "importId": "...", "commandId": "..." }`를 재전송한다. 서버에 이미 가져온 자료가 있으면 Source와 이를 근거로 연결한 레시피 시나리오를 같은 트랜잭션에서 지운다. 가져오기가 아직 완료되지 않았거나 응답을 잃은 경우에도 `importId`를 삭제 상태로 기록해 늦게 도착한 가져오기 재시도를 거부한다. 서버 삭제 응답을 확인할 때까지 앱의 삭제 대기 항목을 유지한다.
+캡처를 삭제하면 앱은 로컬 캡처 제거와 서버 삭제 요청을 같은 스냅샷에 기록한다. 삭제 대기함에는 분석 내용 없이 `importId`와 고정된 `commandId`만 남긴다. 앱은 `POST /v1/kernel/ingestion/reviewed-capture/delete`에 `{ "importId": "...", "commandId": "..." }`를 재전송한다. 서버에 이미 가져온 자료가 있으면 Source와 이를 근거로 연결한 레시피·맛집 시나리오를 같은 트랜잭션에서 지운다. 가져오기가 아직 완료되지 않았거나 응답을 잃은 경우에도 `importId`를 삭제 상태로 기록해 늦게 도착한 가져오기 재시도를 거부한다. 서버 삭제 응답을 확인할 때까지 앱의 삭제 대기 항목을 유지한다.
 
 ## 첫 레시피 시나리오
 
@@ -145,6 +148,12 @@ Flutter에서 캡처 분석을 명시적으로 확인하면 `/ingestion/reviewed
 계획은 `scale_servings → calculate_requirements → cook` 의존성과 별도 `check_inventory → calculate_requirements` 결과 바인딩으로 구성된다. 인분 계산과 부족 수량 계산은 등록된 순수 capability가 실행하고, 재고는 사용자가 `check_inventory` 결과로 관찰한 값만 사용한다. 재고 결과를 고치면 이를 소비한 계산과 후속 작업은 재검토 전까지 진행할 수 없다. 레시피 근거·관계가 바뀌거나 삭제되면 기존 Context의 실행·계획 승인이 막힌다. 확인 Source를 삭제하면 해당 레시피 Activity와 계획·결과·발급 맥락도 같은 트랜잭션에서 지운다. 연결된 가져오기 Source를 삭제하면 그 출처에서 만든 확인 Source에도 삭제가 전파된다. 삭제된 요청 ID는 재전송해 복구하지 않는다.
 
 이 계획 생성기는 **결정적 작업 틀**이며 AI 모델이 작업 순서를 새로 생성하지 않는다. 조리 단계별 안내는 현재 `recipe.recipe`/Task 계약에 없고 `cook`는 사용자가 실제 완료를 기록하는 한 작업이다. 보드의 재고 관찰값은 버전이 있는 TaskResult에 저장하며 지식 그래프의 재고 Assertion이나 공통 ResourceClaim 재고로 자동 승격하지 않고, 실제 소비량으로 차감하지도 않는다. 이 경로와 토큰은 현재 단일 개발 사용자·JSON 저장소용이다.
+
+## 첫 맛집 시나리오
+
+`POST /v1/kernel/dining/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importIds`(1~20개), `scheduledAt`, `area`, `partySize`(1~20명)를 받는다. 서버는 식당·카페 자료의 관측 상호·지역·주소로 임시 후보를 만들고 승인 대기 계획을 반환한다. 계획 승인 후 `select_place → review_visit_details → record_visit_outcome`을 수행한다. 두 특수 명령은 활동의 현재 revision, 준비된 작업, 후보 ID를 검사하며 같은 명령 ID 재전송에 안전하다. 선택 명령은 캡처 Mention의 IdentityDecision을 연결하고, 방문 결과 명령은 `visited`일 때만 사용자 보고 출처와 `dining.visited` 관계를 저장한다.
+
+Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 활동을 만들고 원본·지도 검색을 열 수 있다. 지도 검색은 실장소 확정이 아니며, 방문 전 정보는 현재 `unknown`으로만 기록한다. 제공자 지점 대조·근거 기반 비교·예약 확인·부분 근거 삭제 재계획은 아직 연결되지 않았다. 세부 계약과 검증 이미지는 [첫 맛집 시나리오](DINING_FIRST_SCENARIO.md)를 참조한다.
 
 ## 일관성과 현재 경계
 

@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "place",
+  "tags": [
+    {
+      "value": "맛집·카페",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "대표 메뉴: 제육 정식"
+      ],
+      "citations": []
+    },
+    {
+      "value": "연남",
+      "facet": "area",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "연남"
+      ],
+      "citations": []
+    },
+    {
+      "value": "한식",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.95,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "제육 정식"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "모퉁이식당 연남점",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e3"
+    ]
+  },
+  "place": {
+    "name": "모퉁이식당 연남점",
+    "address": null,
+    "searchArea": "연남",
+    "category": "restaurant",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e2",
+      "e3"
+    ]
+  },
+  "summary": "연남에 있는 모퉁이식당의 대표 메뉴는 제육 정식이다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "대표 메뉴: 제육 정식",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "연남",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "모퉁이식당 연남점",
+      "region": "image_text",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "대표 메뉴",
+      "value": "제육 정식",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

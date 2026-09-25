@@ -11,6 +11,7 @@
     "start": "node src/index.js",
     "test": "node --test test/*.test.js",
     "test:image-live": "node scripts/verify-recipe-image.mjs",
+    "test:dining-image-live": "node scripts/verify-dining-images.mjs",
     "test:watch": "node --test --watch test/*.test.js"
   }
 }

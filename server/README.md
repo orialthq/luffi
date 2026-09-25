@@ -479,3 +479,23 @@ npm run dev
 # 다른 터미널에서
 npm run test:image-live
 ```
+
+### 이미지 기반 맛집 시나리오 검증
+
+`test/fixtures/dining_*.png` 네 장은 A/C의 성수 같은 지점, B의 연남 다른
+지점, D의 성수 경쟁 식당을 표현한 합성 캡처입니다. 각 PNG를 실행 중인
+`POST /v1/analyze`에 실제 전송해 받은 응답은 같은 이름의
+`*_live_analysis.json`에 보관했습니다. `npm test`는 이미지 해시와 이 응답의
+분석 계약, 확인 가져오기, 지역별 후보, 사용자 선택, 방문 관계를 비용 없이
+재생·검사합니다. 다시 실제 API를 호출할 때만 아래 명령을 사용합니다.
+
+```sh
+cd server
+npm run dev
+# 다른 터미널에서; 모델 호출 비용이 발생할 수 있음
+npm run test:dining-image-live
+```
+
+검증에 성공한 새 응답으로 fixture를 교체하려면 스크립트에 `--record`를
+전달합니다. 구현 범위와 현재 미완성인 장소 제공자 검증·후보 비교는
+`docs/DINING_FIRST_SCENARIO.md`에 구분해 적었습니다.
