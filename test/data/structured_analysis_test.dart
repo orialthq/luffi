@@ -8,6 +8,39 @@ import 'package:ori_beauty/data/remote_content_analysis_service.dart';
 import 'package:ori_beauty/domain/models.dart';
 
 void main() {
+  test('parses the recorded API response for a generated recipe image', () {
+    final recorded =
+        jsonDecode(
+              File(
+                'server/test/fixtures/recipe_tomato_egg_live_analysis.json',
+              ).readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    final analysis = StructuredContentAnalysis.fromJson(
+      Map<String, Object?>.from(recorded),
+    );
+
+    expect(analysis.isRecipe, isTrue);
+    expect(analysis.title.value, '토마토 달걀 볶음');
+    expect(
+      analysis.ingredientGroups
+          .expand((group) => group.ingredients)
+          .map(
+            (ingredient) => [
+              ingredient.name,
+              ingredient.amount,
+              ingredient.unit,
+            ],
+          ),
+      [
+        ['달걀', '2', '개'],
+        ['토마토', '200', 'g'],
+        ['식용유', '1', '큰술'],
+      ],
+    );
+    expect(analysis.steps, hasLength(3));
+  });
+
   test('parses the exact Luna analysis contract', () {
     final analysis = StructuredContentAnalysis.fromJson(_validResponse());
 

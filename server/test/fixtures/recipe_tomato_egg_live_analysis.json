@@ -1,0 +1,164 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "recipe",
+  "tags": [
+    {
+      "value": "레시피",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e3",
+        "e4"
+      ],
+      "quotes": [
+        "재료와 조리 순서가 함께 제시된 음식 레시피"
+      ],
+      "citations": []
+    },
+    {
+      "value": "달걀 요리",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.96,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "토마토 달걀 볶음"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "토마토 달걀 볶음",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e1"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "달걀과 토마토를 썰고 볶아 완성하는 2인분 요리",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "토마토 달걀 볶음",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "재료 (2인분)",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "달걀 2개\n토마토 200g\n식용유 1큰술",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "1. 토마토를 썬다.\n2. 달걀을 볶는다.\n3. 함께 볶는다.",
+      "region": "image_text",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [
+    {
+      "name": "주재료",
+      "ingredients": [
+        {
+          "name": "달걀",
+          "amount": "2",
+          "unit": "개",
+          "preparation": null,
+          "optional": false,
+          "originalText": "달걀 2개",
+          "confidence": 0.99,
+          "evidenceIds": [
+            "e3"
+          ]
+        },
+        {
+          "name": "토마토",
+          "amount": "200",
+          "unit": "g",
+          "preparation": null,
+          "optional": false,
+          "originalText": "토마토 200g",
+          "confidence": 0.99,
+          "evidenceIds": [
+            "e3"
+          ]
+        },
+        {
+          "name": "식용유",
+          "amount": "1",
+          "unit": "큰술",
+          "preparation": null,
+          "optional": false,
+          "originalText": "식용유 1큰술",
+          "confidence": 0.99,
+          "evidenceIds": [
+            "e3"
+          ]
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "instruction": "토마토를 썬다.",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "order": 2,
+      "instruction": "달걀을 볶는다.",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "order": 3,
+      "instruction": "토마토와 달걀을 함께 볶는다.",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e4"
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "label": "분량",
+      "value": "2인분",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

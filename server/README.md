@@ -456,5 +456,26 @@ cd server
 npm test
 ```
 
-테스트는 의존성 주입된 가짜 transport/fetch만 사용하므로 OpenAI API를 호출하거나
-비용을 발생시키지 않습니다.
+기본 테스트는 가짜 transport/fetch 또는 저장된 응답을 사용하므로 OpenAI API를
+호출하거나 비용을 발생시키지 않습니다.
+
+### 이미지 기반 레시피 시나리오 검증
+
+`test/fixtures/recipe_tomato_egg_generated.png`는 토마토 달걀 볶음 사진과
+한국어 재료·조리법이 함께 보이는 합성 레시피 화면입니다. 2026-09-25에 이
+PNG를 실행 중인 `POST /v1/analyze`에 실제로 전송해 HTTP 200 응답을 받았고,
+응답 원본을 `test/fixtures/recipe_tomato_egg_live_analysis.json`에 보관했습니다.
+서버 테스트는 이 응답을 재생해 지식 그래프 가져오기와 레시피 보드 실행을
+검증합니다. Flutter 테스트도 같은 응답을 앱 모델로 파싱합니다. 모델이 읽은
+수량과 단위는 사용자 확인 전까지 문자열이며, 보드의 수치 계산에는 확인된
+단위 매핑을 사용합니다.
+
+실제 제공자 호출을 다시 검사할 때는 서버를 실행한 뒤 별도 터미널에서 다음을
+실행합니다. 이 명령은 이미지 분석 API를 호출하므로 비용이 발생할 수 있습니다.
+
+```sh
+cd server
+npm run dev
+# 다른 터미널에서
+npm run test:image-live
+```
