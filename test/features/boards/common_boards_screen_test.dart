@@ -48,15 +48,41 @@ KernelJson _board() => {
   'reminders': [],
 };
 
+final class FakeRecipeIntentStore implements RecipeScenarioIntentStore {
+  KernelJson? pending;
+  bool corrupt = false;
+
+  @override
+  Future<KernelJson?> load() async {
+    if (corrupt) throw const FormatException('corrupt');
+    return pending;
+  }
+
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending recipe intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async {
+    pending = null;
+    corrupt = false;
+  }
+}
+
 final class FakeKernelClient implements CommonKernelClient {
   KernelJson board = _board();
   final commands = <KernelJson>[];
   final runs = <KernelJson>[];
+  final scenarioRequests = <KernelJson>[];
+  final acceptedProposals = <KernelJson>[];
   bool conflict = false;
   bool commitThenTimeout = false;
   bool failContracts = false;
   bool failRead = false;
   bool failNextPage = false;
+  CommonKernelException? scenarioFailure;
   int reads = 0;
   final pageRequests = <String?>[];
   List<KernelJson>? extraBoards;
@@ -139,13 +165,94 @@ final class FakeKernelClient implements CommonKernelClient {
       final task = (board['tasks']! as List).cast<Map>().firstWhere(
         (task) => task['id'] == payload['taskId'],
       );
-      task['executionStatus'] = payload['to'];
+      if (command['type'] == 'task.resolveReview') {
+        task['readiness'] = {'status': 'ready', 'inputs': {}, 'reasons': []};
+      } else {
+        task['executionStatus'] = payload['to'];
+      }
       board['revision'] = (board['revision']! as int) + 1;
     }
     if (commitThenTimeout) {
       throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 초과됐어요.');
     }
     return {'revision': board['revision']};
+  }
+
+  @override
+  Future<KernelJson> createRecipeScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    if (scenarioFailure case final error?) throw error;
+    final activityId = request['activityId'];
+    if (board['id'] == activityId) {
+      return {
+        'activityId': activityId,
+        'proposalId': 'proposal-1',
+        'revision': 1,
+        'replayed': true,
+      };
+    }
+    board = {
+      'id': activityId,
+      'title': (request['recipe'] as Map)['title'],
+      'goal': {'description': '샘플 레시피 만들기'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'proposal-1',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'check',
+                'title': '재고 확인',
+                'capabilityId': 'recipe.check_inventory',
+                'inputBindings': {
+                  'ingredientIds': ['egg', 'tomato'],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    if (commitThenTimeout) {
+      throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 초과됐어요.');
+    }
+    return {
+      'activityId': activityId,
+      'proposalId': 'proposal-1',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> acceptProposal({
+    required String proposalId,
+    required String commandId,
+  }) async {
+    acceptedProposals.add({'proposalId': proposalId, 'commandId': commandId});
+    if (conflict) {
+      throw const CommonKernelException(
+        'CONTEXT_STALE',
+        'changed',
+        statusCode: 409,
+      );
+    }
+    final proposal = (board['pendingProposals'] as List).cast<Map>().first;
+    board['tasks'] = (proposal['plan'] as Map)['tasks'];
+    board['pendingProposals'] = <Object?>[];
+    board['revision'] = (board['revision'] as int) + 1;
+    if (commitThenTimeout) {
+      throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 초과됐어요.');
+    }
+    return {'revision': board['revision'], 'proposalId': proposalId};
   }
 
   @override
@@ -306,7 +413,12 @@ void main() {
   ) async {
     final client = FakeKernelClient();
     await tester.pumpWidget(
-      MaterialApp(home: CommonBoardsScreen(client: client)),
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.text('등록된 분야 recipe'), findsOneWidget);
@@ -321,7 +433,12 @@ void main() {
     (tester) async {
       final client = FakeKernelClient();
       await tester.pumpWidget(
-        MaterialApp(home: CommonBoardsScreen(client: client)),
+        MaterialApp(
+          home: CommonBoardsScreen(
+            client: client,
+            intentStore: FakeRecipeIntentStore(),
+          ),
+        ),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text('활동 만들기'));
@@ -361,7 +478,12 @@ void main() {
         },
       ];
     await tester.pumpWidget(
-      MaterialApp(home: CommonBoardsScreen(client: client)),
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('kernel-list-more')));
@@ -418,7 +540,12 @@ void main() {
   ) async {
     final client = FakeKernelClient()..failContracts = true;
     await tester.pumpWidget(
-      MaterialApp(home: CommonBoardsScreen(client: client)),
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('kernel-board-activity-1')), findsOneWidget);
@@ -476,7 +603,12 @@ void main() {
       ]
       ..failNextPage = true;
     await tester.pumpWidget(
-      MaterialApp(home: CommonBoardsScreen(client: client)),
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('kernel-list-more')));
@@ -516,6 +648,544 @@ void main() {
         'confirmed': true,
       });
       expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'sample recipe is previewed, then its pending plan needs approval',
+    (tester) async {
+      final client = FakeKernelClient();
+      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardsScreen(
+            client: client,
+            intentStore: FakeRecipeIntentStore(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('kernel-create-sample-recipe')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('실제 캡처나 확인된 보유 재료가 아니에요'), findsOneWidget);
+      expect(client.scenarioRequests, isEmpty);
+      await tester.enterText(
+        find.byKey(const Key('kernel-sample-servings')),
+        '3',
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('kernel-confirm-sample-recipe')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.tap(
+        find.byKey(const Key('kernel-sample-recipe-acknowledge')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('kernel-confirm-sample-recipe')));
+      await tester.pumpAndSettle();
+      expect(client.scenarioRequests, hasLength(1));
+      final request = client.scenarioRequests.single;
+      expect(request['confirmed'], true);
+      expect(request['synthetic'], true);
+      expect(request['targetServings'], 3);
+      expect(request['inventory'], isEmpty);
+      expect((request['recipe'] as Map)['title'], contains('샘플'));
+      expect((request['recipe'] as Map)['ingredients'], hasLength(3));
+      expect(client.acceptedProposals, isEmpty);
+      expect(find.text('레시피 계획 제안'), findsOneWidget);
+      expect(find.text('아직 작업이 없는 활동이에요.'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const Key('kernel-approve-proposal-proposal-1')),
+      );
+      await tester.pumpAndSettle();
+      expect(client.acceptedProposals.single['proposalId'], 'proposal-1');
+      expect(client.acceptedProposals.single['commandId'], isA<String>());
+      expect(find.text('레시피 계획 제안'), findsNothing);
+    },
+  );
+
+  testWidgets('a synced capture links only after manual recipe review', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          importOptions: const [
+            RecipeImportOption(
+              importId: 'reviewed-capture-1',
+              title: '저장한 요리 자료',
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('kernel-create-reviewed-recipe')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const Key('kernel-reviewed-recipe-title')),
+          )
+          .controller!
+          .text,
+      isEmpty,
+    );
+    expect(client.scenarioRequests, isEmpty);
+    await tester.enterText(
+      find.byKey(const Key('kernel-reviewed-recipe-title')),
+      '두부국',
+    );
+    await tester.enterText(
+      find.byKey(const Key('kernel-reviewed-base-servings')),
+      '2',
+    );
+    await tester.enterText(
+      find.byKey(const Key('kernel-reviewed-target-servings')),
+      '4',
+    );
+    await tester.enterText(
+      find.byKey(const Key('kernel-reviewed-ingredient-name-0')),
+      '두부',
+    );
+    await tester.enterText(
+      find.byKey(const Key('kernel-reviewed-ingredient-amount-0')),
+      '300',
+    );
+    await tester.tap(find.byKey(const Key('kernel-reviewed-preview')));
+    await tester.pumpAndSettle();
+    expect(find.text('연결할 자료: 저장한 요리 자료'), findsOneWidget);
+    expect(find.text('• 두부 300 g'), findsOneWidget);
+    expect(client.scenarioRequests, isEmpty);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('kernel-reviewed-submit')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(find.byKey(const Key('kernel-reviewed-recipe-confirm')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('kernel-reviewed-submit')));
+    await tester.pumpAndSettle();
+    final request = client.scenarioRequests.single;
+    expect(request['importId'], 'reviewed-capture-1');
+    expect(request.containsKey('synthetic'), isFalse);
+    expect(request['targetServings'], 4);
+    expect((request['recipe'] as Map)['title'], '두부국');
+    final ingredient =
+        ((request['recipe'] as Map)['ingredients'] as List).single as Map;
+    expect(ingredient['quantity'], {
+      'status': 'known',
+      'amount': 300,
+      'unit': 'g',
+    });
+  });
+
+  testWidgets(
+    'timed out recipe creation reuses its durable intent after restart',
+    (tester) async {
+      final client = FakeKernelClient()..commitThenTimeout = true;
+      final intentStore = FakeRecipeIntentStore();
+      tester.view.physicalSize = const Size(900, 1400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardsScreen(client: client, intentStore: intentStore),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('kernel-create-sample-recipe')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('kernel-sample-recipe-acknowledge')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('kernel-confirm-sample-recipe')));
+      await tester.pumpAndSettle();
+      expect(client.scenarioRequests, hasLength(1));
+      expect(intentStore.pending, isNotNull);
+      expect(
+        find.byKey(const Key('kernel-retry-recipe-create')),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox());
+      client.commitThenTimeout = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardsScreen(client: client, intentStore: intentStore),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('kernel-create-sample-recipe')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('kernel-retry-recipe-create')));
+      await tester.pumpAndSettle();
+      expect(client.scenarioRequests, hasLength(2));
+      expect(
+        jsonEncode(client.scenarioRequests[0]),
+        jsonEncode(client.scenarioRequests[1]),
+      );
+      expect(intentStore.pending, isNull);
+      expect(find.byType(CommonBoardScreen), findsOneWidget);
+    },
+  );
+
+  testWidgets('definitive import rejection clears the saved creation request', (
+    tester,
+  ) async {
+    final client = FakeKernelClient()
+      ..scenarioFailure = const CommonKernelException(
+        'IMPORT_NOT_FOUND',
+        '연결할 확인 자료를 찾을 수 없어요.',
+        statusCode: 404,
+      );
+    final intentStore = FakeRecipeIntentStore();
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(client: client, intentStore: intentStore),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('kernel-create-sample-recipe')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('kernel-sample-recipe-acknowledge')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('kernel-confirm-sample-recipe')));
+    await tester.pumpAndSettle();
+    expect(intentStore.pending, isNull);
+    expect(find.byKey(const Key('kernel-retry-recipe-create')), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('kernel-create-sample-recipe')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('corrupt saved intent can be explicitly discarded', (
+    tester,
+  ) async {
+    final intentStore = FakeRecipeIntentStore()..corrupt = true;
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: FakeKernelClient(),
+          intentStore: intentStore,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('kernel-create-sample-recipe')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(
+      find.byKey(const Key('kernel-discard-corrupt-recipe-intent')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('요청 지우기'));
+    await tester.pumpAndSettle();
+    expect(intentStore.corrupt, isFalse);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('kernel-create-sample-recipe')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('changed evidence disables stale proposal approval', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.board['tasks'] = <Object?>[];
+    client.board['pendingProposals'] = [
+      {
+        'id': 'proposal-stale',
+        'kind': 'draft',
+        'plan': {
+          'tasks': [
+            {'id': 'cook', 'title': '요리하기', 'capabilityId': 'recipe.cook'},
+          ],
+        },
+      },
+    ];
+    await _pump(tester, client);
+    final button = tester.widget<FilledButton>(
+      find.byKey(const Key('kernel-approve-proposal-proposal-stale')),
+    );
+    expect(button.onPressed, isNull);
+    expect(client.acceptedProposals, isEmpty);
+    expect(find.textContaining('새 계획을 만든 뒤 승인해 주세요'), findsOneWidget);
+  });
+
+  testWidgets('keeping a reviewed result requires explicit confirmation', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    (client.board['tasks'] as List)[0]['readiness'] = {
+      'status': 'needs_review',
+      'inputs': {},
+      'reasons': ['근거 변경'],
+    };
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('kernel-review-task-Z')));
+    await tester.pumpAndSettle();
+    expect(client.commands, isEmpty);
+    await tester.tap(find.text('취소'));
+    await tester.pumpAndSettle();
+    expect(client.commands, isEmpty);
+    await tester.tap(find.byKey(const Key('kernel-review-task-Z')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('이전 결과 유지').last);
+    await tester.pumpAndSettle();
+    expect(client.commands.single['type'], 'task.resolveReview');
+    expect(client.commands.single['payload'], {
+      'taskId': 'task-Z',
+      'expectedTaskRevision': 2,
+      'resolution': 'keep_consumed',
+    });
+  });
+
+  testWidgets('recipe inventory uses typed known and unknown quantities', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.contract['capabilities'] = [
+      {
+        'id': 'recipe.check_inventory',
+        'actor': 'user',
+        'effect': 'none',
+        'outputType': 'recipe.inventory',
+      },
+    ];
+    client.board['pendingChanges'] = <Object?>[];
+    client.board['tasks'] = [
+      {
+        'id': 'inventory',
+        'title': '재고 확인',
+        'revision': 1,
+        'capabilityId': 'recipe.check_inventory',
+        'executionStatus': 'not_started',
+        'inputBindings': {
+          'ingredientIds': ['egg', 'tomato'],
+        },
+        'readiness': {
+          'status': 'ready',
+          'inputs': {
+            'ingredientIds': ['egg', 'tomato'],
+          },
+          'reasons': <Object?>[],
+        },
+      },
+      {
+        'id': 'scale',
+        'title': '인분 계산',
+        'revision': 1,
+        'capabilityId': 'recipe.scale_servings',
+        'executionStatus': 'not_started',
+        'inputBindings': {
+          'recipe': {
+            'title': '샘플 레시피',
+            'baseServings': 2,
+            'ingredients': [
+              {
+                'ingredientId': 'egg',
+                'name': '달걀',
+                'quantity': {'status': 'known', 'amount': 2, 'unit': 'count'},
+              },
+              {
+                'ingredientId': 'tomato',
+                'name': '토마토',
+                'quantity': {'status': 'known', 'amount': 200, 'unit': 'g'},
+              },
+            ],
+          },
+          'targetServings': 4,
+        },
+        'readiness': {
+          'status': 'blocked',
+          'inputs': {},
+          'reasons': <Object?>[],
+        },
+      },
+    ];
+    await _pump(tester, client);
+    expect(find.text('보유 수량을 확인할 재료'), findsOneWidget);
+    expect(find.text('• 달걀'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('kernel-complete-inventory')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('kernel-inventory-amount-0')),
+      '2',
+    );
+    await tester.tap(find.byKey(const Key('kernel-confirm-inventory')));
+    await tester.pumpAndSettle();
+    final output = (client.commands.single['payload'] as Map)['output'] as List;
+    expect(output[0]['ingredientId'], 'egg');
+    expect(output[0]['quantity'], {
+      'status': 'known',
+      'amount': 2,
+      'unit': 'count',
+    });
+    expect(output[1]['quantity'], {'status': 'unknown'});
+    expect(output[0]['observedAt'], endsWith('Z'));
+  });
+
+  testWidgets('recipe cooking records confirmed completion without JSON', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.contract['capabilities'] = [
+      {
+        'id': 'recipe.cook',
+        'actor': 'user',
+        'effect': 'none',
+        'outputType': 'recipe.cook_result',
+      },
+    ];
+    client.board['pendingChanges'] = <Object?>[];
+    client.board['tasks'] = [
+      {
+        'id': 'cook',
+        'title': '요리하기',
+        'revision': 2,
+        'capabilityId': 'recipe.cook',
+        'executionStatus': 'not_started',
+        'inputBindings': {
+          'recipeId': 'recipe-1',
+          'recipeRevision': 1,
+          'targetServings': 4,
+        },
+        'readiness': {
+          'status': 'ready',
+          'inputs': {
+            'recipeId': 'recipe-1',
+            'recipeRevision': 1,
+            'targetServings': 4,
+          },
+          'reasons': <Object?>[],
+        },
+      },
+    ];
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('kernel-complete-cook')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('재고는 자동으로 차감되지 않아요'), findsWidgets);
+    expect(client.commands, isEmpty);
+    await tester.enterText(find.byKey(const Key('kernel-cook-reporter')), '나');
+    await tester.tap(find.byKey(const Key('kernel-confirm-cook')));
+    await tester.pumpAndSettle();
+    final output = (client.commands.single['payload'] as Map)['output'] as Map;
+    expect(output['recipeId'], 'recipe-1');
+    expect(output['reportedBy'], '나');
+    expect(output['completedAt'], endsWith('Z'));
+  });
+
+  testWidgets(
+    'recipe shopping list uses readable quantities and unknown status',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.contract['capabilities'] = [
+        {
+          'id': 'recipe.calculate_requirements',
+          'actor': 'system',
+          'effect': 'none',
+        },
+      ];
+      client.board['pendingChanges'] = <Object?>[];
+      client.board['tasks'] = [
+        {
+          'id': 'shopping',
+          'title': '부족한 재료 계산',
+          'revision': 2,
+          'capabilityId': 'recipe.calculate_requirements',
+          'executionStatus': 'completed',
+          'latestOutputRef': 'result-1',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {},
+            'reasons': <Object?>[],
+          },
+        },
+      ];
+      client.board['results'] = [
+        {
+          'id': 'result-1',
+          'value': {
+            'items': [
+              {
+                'name': '달걀',
+                'status': 'needed',
+                'requiredQuantity': {
+                  'status': 'known',
+                  'amount': 4,
+                  'unit': 'count',
+                },
+                'availableQuantity': {
+                  'status': 'known',
+                  'amount': 2,
+                  'unit': 'count',
+                },
+                'missingQuantity': {
+                  'status': 'known',
+                  'amount': 2,
+                  'unit': 'count',
+                },
+              },
+              {
+                'name': '토마토',
+                'status': 'unknown',
+                'requiredQuantity': {
+                  'status': 'known',
+                  'amount': 400,
+                  'unit': 'g',
+                },
+                'availableQuantity': {'status': 'unknown'},
+                'missingQuantity': {'status': 'unknown'},
+              },
+            ],
+          },
+        },
+      ];
+      await _pump(tester, client);
+      expect(find.textContaining('달걀: 추가로 필요'), findsOneWidget);
+      expect(find.textContaining('토마토: 재고 확인 필요'), findsOneWidget);
+      expect(find.textContaining('부족 2 count'), findsOneWidget);
     },
   );
 }

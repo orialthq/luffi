@@ -11,9 +11,10 @@ import {
 import {
   applyKnowledgeCommand, buildKnowledgeContext, createKnowledgeState,
   getAffectedKnowledgeConsumers, queryKnowledge, registerKnowledgeWatch,
-  resolveKnowledge, validateKnowledgeContext,
+  resolveKnowledge, unregisterKnowledgeWatch, validateKnowledgeContext,
 } from "../knowledge/index.js";
 import { retrieveKnowledge, validateRetrievalResult } from "../retrieval/index.js";
+import { buildRecipePlanDraft } from "../scenarios/recipe_plan.js";
 import {
   applyResourceCommand, createResourceState,
   getResourceAvailability as projectResourceAvailability,
@@ -34,6 +35,7 @@ export function createCommonKernelState() {
     resourceWatches: {},
     proposals: {},
     importReceipts: {},
+    recipeScenarioReceipts: {},
   };
 }
 
@@ -63,6 +65,19 @@ function toHttpError(error) {
 
 function fingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function canonicalRequest(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalRequest).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).filter((key) => value[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalRequest(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function requestFingerprint(value) {
+  return createHash("sha256").update(canonicalRequest(value)).digest("hex");
 }
 
 function safeId(value, name) {
@@ -362,6 +377,203 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
   }
 
+  // A confirmed recipe is a derivative of its confirmation source. The KG
+  // redacts source values; the activity kernel has separate copies in plans,
+  // task results and issued contexts, so erase those in the same transaction.
+  function redactRecipeScenario(state, sourceId) {
+    const receipts = Object.values(state.recipeScenarioReceipts ?? {}).filter((entry) =>
+      entry.result?.confirmationSourceId === sourceId && !entry.deleted);
+    for (const receipt of receipts) {
+      const { activityId } = receipt.result;
+      for (const claim of state.resources.claims.filter((item) => item.ownerId === ownerId &&
+          item.activityId === activityId && item.state === "held")) {
+        const resource = state.resources.resources.find((item) => item.ownerId === ownerId &&
+          item.id === claim.resourceId);
+        state.resources = applyResourceCommand(state.resources, {
+          ownerId, commandId: `kernel:recipe-redact:${sourceId}:${claim.id}`,
+          type: "claim.release", expectedRevision: resource.revision,
+          payload: { activityId, resourceId: claim.resourceId, claimId: claim.id },
+        }).state;
+        recordResourceChange(state, claim.resourceId);
+      }
+      delete state.activities.activities[activityId];
+      state.activities.events = state.activities.events.filter((item) => item.activityId !== activityId);
+      for (const [key, item] of Object.entries(state.activities.commandReceipts)) {
+        if (item.result?.activityId === activityId) delete state.activities.commandReceipts[key];
+      }
+      for (const [key, item] of Object.entries(state.activities.reminders)) {
+        if (item.activityId === activityId) delete state.activities.reminders[key];
+      }
+      for (const [key, item] of Object.entries(state.activities.occurrences)) {
+        if (item.activityId === activityId) delete state.activities.occurrences[key];
+      }
+      state.resources.claims = state.resources.claims.filter((item) => item.ownerId !== ownerId ||
+        item.activityId !== activityId);
+      state.resources.activities = state.resources.activities.filter((item) => item.ownerId !== ownerId ||
+        item.id !== activityId);
+      state.resources.events = state.resources.events.filter((item) => item.activityId !== activityId);
+      state.resources.receipts = state.resources.receipts.filter((item) =>
+        item.result?.activity?.id !== activityId && item.result?.claim?.activityId !== activityId);
+      for (const [key, item] of Object.entries(state.proposals)) {
+        if (item.activityId === activityId) delete state.proposals[key];
+      }
+      for (const [key, item] of Object.entries(state.issuedContexts)) {
+        if (item.context?.activityId === activityId) delete state.issuedContexts[key];
+      }
+      for (const [key, item] of Object.entries(state.executionReceipts)) {
+        if (item.result?.activityId === activityId) delete state.executionReceipts[key];
+      }
+      state.reviewEvents = state.reviewEvents.filter((item) => item.activityId !== activityId);
+      state.knowledge = unregisterKnowledgeWatch(state.knowledge, { ownerId, consumerId: activityId });
+      delete state.retrievalWatches[activityId];
+      delete state.resourceWatches[activityId];
+      receipt.deleted = true;
+      receipt.result = { activityId, confirmationSourceId: sourceId };
+    }
+  }
+
+  function redactImportedCapture(state, sourceId) {
+    const versions = new Set(state.knowledge.sourceVersions.filter((item) => item.ownerId === ownerId &&
+      item.sourceId === sourceId).map((item) => item.id));
+    for (const entity of state.knowledge.entities.filter((item) => item.ownerId === ownerId &&
+      item.type === "ingestion.material" && versions.has(item.externalIds?.sourceVersionId))) {
+      entity.externalIds = {};
+      entity.revision += 1;
+    }
+    for (const receipt of Object.values(state.importReceipts)) {
+      if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+        receipt.deleted = true;
+        delete receipt.legacyCaptureId;
+      }
+    }
+  }
+
+  function purgeIssuedContextsFromSource(state, sourceId) {
+    const versionIds = new Set(state.knowledge.sourceVersions.filter((item) =>
+      item.ownerId === ownerId && item.sourceId === sourceId).map((item) => item.id));
+    const evidenceIds = new Set(state.knowledge.evidence.filter((item) =>
+      item.ownerId === ownerId && versionIds.has(item.sourceVersionId)).map((item) => item.id));
+    const removed = new Set();
+    for (const [contextId, issued] of Object.entries(state.issuedContexts)) {
+      if (issued.ownerId !== ownerId) continue;
+      const context = issued.context;
+      const cited = context.assertions?.some((item) => item.evidenceIds?.some((id) => evidenceIds.has(id))) ||
+        context.evidenceFragments?.some((item) => versionIds.has(item.sourceVersionId)) ||
+        context.retrieval?.candidates?.some((item) => item.evidenceIds?.some((id) => evidenceIds.has(id)));
+      if (cited) {
+        delete state.issuedContexts[contextId];
+        removed.add(contextId);
+      }
+    }
+    for (const [proposalId, proposal] of Object.entries(state.proposals)) {
+      if (proposal.ownerId === ownerId && removed.has(proposal.contextId)) delete state.proposals[proposalId];
+    }
+  }
+
+  function sourceDeletionContext(state, sourceId) {
+    const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
+      item.id === sourceId && item.status === "active");
+    const linkedConfirmations = source?.kind === "capture_analysis"
+      ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
+        item.status === "active" && item.kind === "user_confirmation" &&
+        item.provenance?.scenario === "recipe" &&
+        item.provenance?.importedSourceId === source.id).map((item) => item.id) : [];
+    return { source, linkedConfirmations };
+  }
+
+  function finishSourceDeletion(state, { source, linkedConfirmations }) {
+    if (source) purgeIssuedContextsFromSource(state, source.id);
+    if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
+      redactRecipeScenario(state, source.id);
+    }
+    if (source?.kind === "capture_analysis") {
+      redactImportedCapture(state, source.id);
+      for (const sourceId of linkedConfirmations) {
+        state.knowledge = applyKnowledgeCommand(state.knowledge, {
+          ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+          type: "source.delete", payload: { sourceId },
+        }, { predicates }).state;
+        purgeIssuedContextsFromSource(state, sourceId);
+        redactRecipeScenario(state, sourceId);
+      }
+    }
+  }
+
+  function issueContext(state, request) {
+    const input = injectOwner(request, ownerId);
+    if (!Array.isArray(input.queries) || input.queries.length > 100) {
+      throw new AppError("INVALID_REQUEST", "조회 조건은 최대 100개예요.", { httpStatus: 400 });
+    }
+    if (input.atTime != null && input.retrievalQuery?.atTime != null &&
+        Date.parse(input.atTime) !== Date.parse(input.retrievalQuery.atTime)) {
+      throw new AppError("INVALID_REQUEST", "검색과 맥락의 기준 시간이 달라요.", { httpStatus: 400 });
+    }
+    const atTime = input.atTime ?? input.retrievalQuery?.atTime ?? new Date().toISOString();
+    const context = buildKnowledgeContext(state.knowledge, { ...input, atTime }, { predicates });
+    const activity = input.activityId == null ? null : board(state, input.activityId);
+    context.activityId = input.activityId ?? null;
+    if (input.resourceIds != null && (!Array.isArray(input.resourceIds) || input.resourceIds.length > 100)) {
+      throw new AppError("INVALID_REQUEST", "자원 조회 조건은 최대 100개예요.", { httpStatus: 400 });
+    }
+    const resourceIds = new Set((input.resourceIds ?? []).map((id) => safeId(id, "resourceId")));
+    for (const claim of activity?.resourceClaims ?? []) {
+      if (claim.state === "held") resourceIds.add(claim.resourceId);
+    }
+    context.resourceAvailability = [...resourceIds].map((resourceId) =>
+      projectResourceAvailability(state.resources, { ownerId, resourceId }));
+    context.resourceReads = context.resourceAvailability.map((item) =>
+      ({ resourceId: item.resourceId, revision: item.resourceRevision,
+        status: item.status, freshUntil: item.freshUntil }));
+    if (input.retrievalQuery != null) {
+      context.retrieval = retrieveKnowledge(state.knowledge,
+        { ...injectOwner(input.retrievalQuery, ownerId), atTime }, { registry: predicates });
+    }
+    const assertionIds = new Set(context.resolutions.flatMap((resolution) => [
+      ...resolution.selectedAssertionIds, ...resolution.alternativeAssertionIds,
+      ...resolution.staleAssertionIds,
+    ]));
+    for (const candidate of context.retrieval?.candidates ?? []) {
+      for (const support of candidate.supports) {
+        for (const id of support.assertionIds ?? []) assertionIds.add(id);
+      }
+    }
+    const assertions = state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && assertionIds.has(item.id));
+    const evidenceIds = new Set(assertions.flatMap((item) => item.evidenceIds));
+    for (const candidate of context.retrieval?.candidates ?? []) {
+      for (const id of candidate.evidenceIds) evidenceIds.add(id);
+    }
+    context.goal = activity?.goal ?? structuredClone(input.goal ?? null);
+    context.explicitConstraints = activity?.constraints ?? structuredClone(input.explicitConstraints ?? []);
+    context.activityRevision = activity?.revision ?? null;
+    context.activePlanRevision = activity?.currentPlanRevision ?? null;
+    context.taskStates = activity?.tasks.map(({ id, executionStatus, revision, latestOutputRef, needsReview }) =>
+      ({ id, executionStatus, revision, latestOutputRef, needsReview })) ?? [];
+    const selectedIds = new Set([
+      ...input.queries.map((query) => query.subjectId),
+      ...(context.retrieval?.candidates ?? []).map((candidate) => candidate.entityId),
+    ]);
+    context.selectedEntities = [...selectedIds].map((id) => state.knowledge.entities.find((item) =>
+      item.ownerId === ownerId && item.id === id && item.status === "active"))
+      .filter(Boolean).map(({ id, type, label, revision }) => ({ id, type, label, revision }));
+    context.assertions = structuredClone(assertions);
+    context.evidenceFragments = state.knowledge.evidence.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" && evidenceIds.has(item.id))
+      .map((item) => ({ id: item.id, sourceVersionId: item.sourceVersionId,
+        locator: item.locator, quote: item.quote.slice(0, 500) }));
+    context.missingFacts = context.resolutions.filter((item) => item.status === "unknown");
+    context.conflicts = context.resolutions.filter((item) => item.status === "disputed");
+    context.staleFacts = context.resolutions.filter((item) => item.status === "stale");
+    context.retrievalVersion = context.retrieval ? "graph-v1" : "direct-query-v1";
+    const contextId = randomUUID();
+    for (const [id, issued] of Object.entries(state.issuedContexts)) {
+      if (Date.parse(issued.expiresAt) <= Date.now()) delete state.issuedContexts[id];
+    }
+    state.issuedContexts[contextId] = { ownerId, context,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() };
+    return { contextId, ...context };
+  }
+
   return {
     async contracts() {
       return {
@@ -448,6 +660,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
                 ["in_progress", "completed"].includes(command.payload?.to)) {
               assertActivityContextCurrent(state, command.activityId, current);
             }
+          }
+          if (!applied.replayed && command.type === "activity.complete") {
+            assertActivityContextCurrent(state, command.activityId, board(state, command.activityId));
           }
           if (!applied.replayed && command.contextId) {
             const context = issuedContext(state, command.contextId);
@@ -565,6 +780,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         return await store.transact((state) => {
           assertState(state);
           const before = state.knowledge.sequence;
+          const deletion = command.type === "source.delete"
+            ? sourceDeletionContext(state, command.payload?.sourceId) : null;
           const applied = applyKnowledgeCommand(state.knowledge, command, { predicates });
           if (!applied.replayed) {
             if (command.type === "entity.create" && !entityTypes.has(command.payload?.type)) {
@@ -579,6 +796,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           }
           state.knowledge = applied.state;
           if (!applied.replayed) {
+            if (deletion) finishSourceDeletion(state, deletion);
             recordAffectedConsumers(state, before);
           }
           return { state, result: { ...applied.result, replayed: applied.replayed,
@@ -592,6 +810,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         return await store.transact((state) => {
           assertState(state);
           const previous = state.importReceipts[input.importId];
+          if (previous?.deleted) {
+            throw new AppError("IMPORT_DELETED", "삭제한 자료는 다시 가져올 수 없어요.", { httpStatus: 410 });
+          }
           const prepared = buildReviewedCaptureImport(input, { previousImport: previous });
           if (previous) {
             return { state, result: { ...previous.result, replayed: true } };
@@ -613,6 +834,215 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             unresolvedMentions: prepared.unresolvedMentions, omissions: prepared.omissions,
             knowledgeSequence: state.knowledge.sequence };
           state.importReceipts[input.importId] = { ...prepared.importReceipt, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async deleteReviewedCapture(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["importId", "commandId"].includes(key))) {
+          throw new AppError("INVALID_REQUEST", "삭제 요청 형식이 올바르지 않아요.", { httpStatus: 400 });
+        }
+        const importId = safeId(input.importId, "importId");
+        const commandId = safeId(input.commandId, "commandId");
+        return await store.transact((state) => {
+          assertState(state);
+          const conflict = Object.values(state.importReceipts).some((entry) =>
+            entry.ownerId === ownerId && entry.importId !== importId &&
+            entry.deletedByCommandId === commandId);
+          if (conflict) {
+            throw new AppError("COMMAND_CONFLICT", "삭제 명령 ID가 다른 자료에 사용됐어요.", { httpStatus: 409 });
+          }
+          const receipt = state.importReceipts[importId];
+          if (receipt && receipt.ownerId !== ownerId) {
+            throw new AppError("IMPORT_NOT_FOUND", "삭제할 자료를 찾을 수 없어요.", { httpStatus: 404 });
+          }
+          if (receipt?.deleted) {
+            return { state, result: { importId, sourceId: receipt.sourceId ?? null,
+              deleted: true, replayed: true } };
+          }
+          const sourceId = receipt?.sourceId ?? null;
+          if (sourceId) {
+            const before = state.knowledge.sequence;
+            const deletion = sourceDeletionContext(state, sourceId);
+            if (deletion.source) {
+              state.knowledge = applyKnowledgeCommand(state.knowledge, {
+                ownerId, commandId: `kernel:import-delete:${requestFingerprint([ownerId, importId]).slice(0,32)}`,
+                type: "source.delete", payload: { sourceId },
+              }, { predicates }).state;
+              finishSourceDeletion(state, deletion);
+              recordAffectedConsumers(state, before);
+            }
+          }
+          state.importReceipts[importId] ??= { ownerId, importId, sourceId };
+          state.importReceipts[importId].deleted = true;
+          state.importReceipts[importId].deletedByCommandId = commandId;
+          delete state.importReceipts[importId].legacyCaptureId;
+          return { state, result: { importId, sourceId, deleted: true, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async createRecipeScenario(raw) {
+      try {
+        const input = requestObject(raw);
+        const allowed = new Set(["commandId", "activityId", "confirmed", "recipe", "targetServings",
+          "inventory", "includeOptionalIngredientIds", "collectInventory", "includeCookTask", "importId", "synthetic"]);
+        if (Object.keys(input).some((key) => !allowed.has(key)) || input.confirmed !== true ||
+            (input.synthetic !== undefined && input.synthetic !== true) ||
+            (input.synthetic === true && input.importId != null)) {
+          throw new AppError("INVALID_REQUEST", "확인한 레시피 요청 형식이 올바르지 않아요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const importId = input.importId == null ? null : safeId(input.importId, "importId");
+        const rawRecipe = requestObject(input.recipe);
+        if (!Array.isArray(rawRecipe.ingredients) || rawRecipe.ingredients.length > 25 ||
+            typeof rawRecipe.title !== "string" || rawRecipe.title.length > 200 ||
+            !Number.isInteger(rawRecipe.baseServings) || rawRecipe.baseServings < 1 ||
+            rawRecipe.baseServings > 50 || !Number.isInteger(input.targetServings) ||
+            input.targetServings < 1 || input.targetServings > 50 ||
+            rawRecipe.ingredients.some((item) => !item || typeof item !== "object" ||
+              typeof item.name !== "string" || item.name.length > 100 ||
+              typeof item.id !== "string" || item.id.length > 512 ||
+              typeof item.ingredientId !== "string" || item.ingredientId.length > 512 ||
+              (item.quantity?.status === "known" && item.quantity.amount > 1e9)) ||
+            (input.inventory != null && (!Array.isArray(input.inventory) || input.inventory.length > 0)) ||
+            input.collectInventory === false) {
+          throw new AppError("INVALID_REQUEST", "레시피 크기 또는 재고 확인 형식이 올바르지 않아요.", { httpStatus: 400 });
+        }
+        const requestHash = requestFingerprint({ activityId, confirmed: input.confirmed, recipe: input.recipe,
+          targetServings: input.targetServings, inventory: input.inventory ?? [],
+          includeOptionalIngredientIds: input.includeOptionalIngredientIds ?? [],
+          collectInventory: input.collectInventory ?? null, includeCookTask: input.includeCookTask ?? true,
+          importId, synthetic: input.synthetic === true });
+        return await store.transact((state) => {
+          assertState(state);
+          state.recipeScenarioReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.recipeScenarioReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) {
+              throw new AppError("COMMAND_CONFLICT", "명령 ID가 다른 레시피 요청에 사용됐어요.", { httpStatus: 409 });
+            }
+            if (previous.deleted) {
+              throw new AppError("SCENARIO_DELETED", "삭제한 레시피 활동은 다시 만들 수 없어요.", { httpStatus: 410 });
+            }
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const imported = importId === null ? null : state.importReceipts[importId];
+          if (importId !== null && (imported?.ownerId !== ownerId ||
+              !state.knowledge.sources.some((item) => item.ownerId === ownerId &&
+                item.id === imported.sourceId && item.status === "active"))) {
+            throw new AppError("IMPORT_NOT_FOUND", "연결할 확인 자료를 찾을 수 없어요.", { httpStatus: 404 });
+          }
+          if (imported) {
+            const importedVersion = state.knowledge.sourceVersions.find((item) =>
+              item.ownerId === ownerId && item.id === imported.sourceVersionId &&
+              item.status === "active");
+            if (!["recipe", "sauce_recipe"].includes(importedVersion?.content?.analysis?.contentKind)) {
+              throw new AppError("IMPORT_NOT_RECIPE", "레시피로 확인한 자료만 연결할 수 있어요.",
+                { httpStatus: 400 });
+            }
+          }
+          const stem = `recipe:${fingerprint([ownerId, activityId]).slice(0,32)}`;
+          const recipeEntityId = `${stem}:entity`;
+          const confirmationSourceId = `${stem}:source`;
+          const confirmationVersionId = `${stem}:version`;
+          const confirmationEvidenceId = `${stem}:evidence`;
+          const recipe = { ...rawRecipe, id: recipeEntityId, revision: 1 };
+          const inventory = input.inventory ?? [];
+          const collectInventory = true;
+          const plan = buildRecipePlanDraft({ confirmed: true, recipe,
+            targetServings: input.targetServings, inventory,
+            includeOptionalIngredientIds: input.includeOptionalIngredientIds ?? [],
+            collectInventory, includeCookTask: input.includeCookTask ?? true,
+            evidenceIds: [confirmationEvidenceId] }, { registry });
+          const now = new Date().toISOString();
+          const content = { recipe, targetServings: input.targetServings, inventory,
+            includeOptionalIngredientIds: input.includeOptionalIngredientIds ?? [],
+            ...(imported ? { importedSourceId: imported.sourceId } : {}) };
+          const applyKnowledge = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, {
+              ownerId, commandId: `${stem}:${role}`, type, payload,
+            }, { predicates }).state;
+          };
+          const beforeSequence = state.knowledge.sequence;
+          applyKnowledge("source", "source.create", { id: confirmationSourceId,
+            kind: "user_confirmation", title: recipe.title,
+            provenance: { scenario: "recipe", activityId, synthetic: input.synthetic === true,
+              ...(imported ? { importedSourceId: imported.sourceId } : {}) } });
+          applyKnowledge("version", "source.version.add", { id: confirmationVersionId,
+            sourceId: confirmationSourceId, contentHash: fingerprint(content), content, capturedAt: now });
+          applyKnowledge("evidence", "evidence.add", { id: confirmationEvidenceId,
+            sourceVersionId: confirmationVersionId,
+            locator: { kind: "user_confirmation", jsonPointer: "/recipe" }, quote: recipe.title });
+          applyKnowledge("recipe", "entity.create", { id: recipeEntityId,
+            type: "recipe.recipe", label: "확인한 레시피" });
+          const scope = { type: "activity", id: activityId };
+          const contextQueries = [];
+          const assertion = (role, subjectId, predicate, value, valueType = "recipe.recipe") => {
+            const payload = { id: `${stem}:${role}`, subjectId, predicate, scope,
+              origin: "user_reported", assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [confirmationEvidenceId], observedAt: now,
+              ...(typeof value === "string" ? { objectEntityId: value } :
+                { typedValue: { type: valueType, value } }) };
+            applyKnowledge(role, "assertion.add", payload);
+            if (!contextQueries.some((query) => query.subjectId === subjectId &&
+                query.predicate === predicate)) {
+              contextQueries.push({ subjectId, predicate, scope });
+            }
+          };
+          assertion("confirmed", recipeEntityId, "recipe.confirmed_recipe", recipe);
+          const ingredientIds = new Map();
+          for (const item of recipe.ingredients) {
+            let ingredientEntityId = ingredientIds.get(item.ingredientId);
+            if (!ingredientEntityId) {
+              ingredientEntityId = `${stem}:ingredient:${fingerprint(item.ingredientId).slice(0,16)}`;
+              ingredientIds.set(item.ingredientId, ingredientEntityId);
+              applyKnowledge(`ingredient:${item.ingredientId}`, "entity.create", {
+                id: ingredientEntityId, type: "recipe.ingredient", label: "재료" });
+            }
+            const requirementId = `${stem}:requirement:${fingerprint(item.id).slice(0,16)}`;
+            applyKnowledge(`requirement:${item.id}`, "entity.create", {
+              id: requirementId, type: "recipe.ingredient_requirement", label: "재료 항목" });
+            assertion(`has:${item.id}`, recipeEntityId, "recipe.has_requirement", requirementId);
+            assertion(`requires:${item.id}`, requirementId, "recipe.requires_ingredient", ingredientEntityId);
+            assertion(`value:${item.id}`, requirementId, "recipe.requirement_value", item,
+              "recipe.ingredient_requirement");
+          }
+          recordAffectedConsumers(state, beforeSequence);
+          const created = applyActivityCommand(state.activities, {
+            ownerId, commandId: `${stem}:activity`, type: "activity.create", activityId,
+            expectedRevision: 0,
+            payload: { title: recipe.title,
+              goal: { description: `${input.targetServings}인분 ${recipe.title} 만들기` } },
+          }, activityOptions(state));
+          state.activities = created.state;
+          state.resources = applyResourceCommand(state.resources, {
+            ownerId, commandId: `${stem}:resource-activity`, type: "activity.register",
+            expectedRevision: 0, payload: { activityId },
+          }).state;
+          const issued = issueContext(state, { activityId, queries: contextQueries });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE", "확인한 레시피 사실을 계획에 연결할 수 없어요.", { httpStatus: 409 });
+          }
+          const enriched = enrichPlan("draft", plan);
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:proposal-check`, type: "plan.applyDraft", activityId,
+            expectedRevision: created.result.revision, payload: { draft: enriched },
+          }, activityOptions(state));
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId, activityId,
+            contextId: issued.contextId, kind: "draft", plan: structuredClone(enriched),
+            run: { scenario: "recipe", synthetic: input.synthetic === true, confirmationSourceId,
+              ...(importId ? { importId } : {}) },
+            baseActivityRevision: created.result.revision, basePlanRevision: 0,
+            status: "pending", createdAt: now };
+          const result = { activityId, revision: created.result.revision, proposalId,
+            contextId: issued.contextId, recipeEntityId, confirmationSourceId };
+          state.recipeScenarioReceipts[receiptKey] = { hash: requestHash, result };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -671,81 +1101,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         return await store.transact((state) => {
           assertState(state);
-          const input = injectOwner(request, ownerId);
-          if (!Array.isArray(input.queries) || input.queries.length > 100) {
-            throw new AppError("INVALID_REQUEST", "조회 조건은 최대 100개예요.", { httpStatus: 400 });
-          }
-          if (input.atTime != null && input.retrievalQuery?.atTime != null &&
-              Date.parse(input.atTime) !== Date.parse(input.retrievalQuery.atTime)) {
-            throw new AppError("INVALID_REQUEST", "검색과 맥락의 기준 시간이 달라요.", { httpStatus: 400 });
-          }
-          const atTime = input.atTime ?? input.retrievalQuery?.atTime ?? new Date().toISOString();
-          const context = buildKnowledgeContext(state.knowledge, { ...input, atTime }, { predicates });
-          const activity = input.activityId == null ? null : board(state, input.activityId);
-          context.activityId = input.activityId ?? null;
-          if (input.resourceIds != null && (!Array.isArray(input.resourceIds) || input.resourceIds.length > 100)) {
-            throw new AppError("INVALID_REQUEST", "자원 조회 조건은 최대 100개예요.", { httpStatus: 400 });
-          }
-          const resourceIds = new Set((input.resourceIds ?? []).map((id) => safeId(id, "resourceId")));
-          for (const claim of activity?.resourceClaims ?? []) {
-            if (claim.state === "held") resourceIds.add(claim.resourceId);
-          }
-          context.resourceAvailability = [...resourceIds].map((resourceId) =>
-            projectResourceAvailability(state.resources, { ownerId, resourceId }));
-          context.resourceReads = context.resourceAvailability.map((item) =>
-            ({ resourceId: item.resourceId, revision: item.resourceRevision,
-              status: item.status, freshUntil: item.freshUntil }));
-          if (input.retrievalQuery != null) {
-            context.retrieval = retrieveKnowledge(state.knowledge,
-              { ...injectOwner(input.retrievalQuery, ownerId), atTime }, { registry: predicates });
-          }
-          const assertionIds = new Set(context.resolutions.flatMap((resolution) => [
-            ...resolution.selectedAssertionIds, ...resolution.alternativeAssertionIds,
-            ...resolution.staleAssertionIds,
-          ]));
-          for (const candidate of context.retrieval?.candidates ?? []) {
-            for (const support of candidate.supports) {
-              for (const id of support.assertionIds ?? []) assertionIds.add(id);
-            }
-          }
-          const assertions = state.knowledge.assertions.filter((item) =>
-            item.ownerId === ownerId && assertionIds.has(item.id));
-          const evidenceIds = new Set(assertions.flatMap((item) => item.evidenceIds));
-          for (const candidate of context.retrieval?.candidates ?? []) {
-            for (const id of candidate.evidenceIds) evidenceIds.add(id);
-          }
-          context.goal = activity?.goal ?? structuredClone(input.goal ?? null);
-          context.explicitConstraints = activity?.constraints ?? structuredClone(input.explicitConstraints ?? []);
-          context.activityRevision = activity?.revision ?? null;
-          context.activePlanRevision = activity?.currentPlanRevision ?? null;
-          context.taskStates = activity?.tasks.map(({ id, executionStatus, revision, latestOutputRef, needsReview }) =>
-            ({ id, executionStatus, revision, latestOutputRef, needsReview })) ?? [];
-          const selectedIds = new Set([
-            ...input.queries.map((query) => query.subjectId),
-            ...(context.retrieval?.candidates ?? []).map((candidate) => candidate.entityId),
-          ]);
-          context.selectedEntities = [...selectedIds].map((id) => state.knowledge.entities.find((item) =>
-            item.ownerId === ownerId && item.id === id && item.status === "active"))
-            .filter(Boolean).map(({ id, type, label, revision }) => ({ id, type, label, revision }));
-          context.assertions = structuredClone(assertions);
-          context.evidenceFragments = state.knowledge.evidence.filter((item) =>
-            item.ownerId === ownerId && item.status === "active" && evidenceIds.has(item.id))
-            .map((item) => ({ id: item.id, sourceVersionId: item.sourceVersionId,
-              locator: item.locator, quote: item.quote.slice(0, 500) }));
-          context.missingFacts = context.resolutions.filter((item) => item.status === "unknown");
-          context.conflicts = context.resolutions.filter((item) => item.status === "disputed");
-          context.staleFacts = context.resolutions.filter((item) => item.status === "stale");
-          context.retrievalVersion = context.retrieval ? "graph-v1" : "direct-query-v1";
-          const contextId = randomUUID();
-          for (const [id, issued] of Object.entries(state.issuedContexts)) {
-            if (Date.parse(issued.expiresAt) <= Date.now()) delete state.issuedContexts[id];
-          }
-          state.issuedContexts[contextId] = { ownerId, context,
-            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() };
-          return { state, result: { contextId, ...context } };
+          return { state, result: issueContext(state, request) };
         });
-      }
-      catch (error) { throw toHttpError(error); }
+      } catch (error) { throw toHttpError(error); }
     },
     async watchContext(request) {
       try {

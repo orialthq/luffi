@@ -6,6 +6,32 @@ import 'package:ori_beauty/data/common_kernel_client.dart';
 
 void main() {
   test(
+    'recipe create intent survives a new file-store instance until cleared',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'luffi-recipe-intent-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final first = FileRecipeScenarioIntentStore(
+        directoryPath: directory.path,
+      );
+      final request = <String, Object?>{
+        'commandId': 'stable-create',
+        'activityId': 'board-1',
+        'confirmed': true,
+        'recipe': {'id': 'recipe-1'},
+      };
+      await first.save(request);
+      final reopened = FileRecipeScenarioIntentStore(
+        directoryPath: directory.path,
+      );
+      expect(await reopened.load(), request);
+      await reopened.clear();
+      expect(await first.load(), isNull);
+    },
+  );
+
+  test(
     'uses bearer auth and reads contracts, list and encoded stable board id',
     () async {
       final requests = <String>[];
@@ -55,7 +81,7 @@ void main() {
   );
 
   test(
-    'command and run task preserve task id, revision and idempotency key without client owner',
+    'recipe creation, proposal acceptance and task commands preserve stable ids without client owner',
     () async {
       final bodies = <Map<String, dynamic>>[];
       final paths = <String>[];
@@ -82,6 +108,18 @@ void main() {
         'type': 'task.transition',
         'payload': {'taskId': 'task-Z', 'to': 'completed'},
       });
+      await client.createRecipeScenario({
+        'commandId': 'recipe-create',
+        'activityId': 'recipe-board',
+        'confirmed': true,
+        'recipe': {'id': 'recipe-a'},
+        'targetServings': 4,
+        'inventory': <Object?>[],
+      });
+      await client.acceptProposal(
+        proposalId: 'proposal-a',
+        commandId: 'accept-a',
+      );
       await client.runTask(
         activityId: 'a',
         taskId: 'task-Y',
@@ -90,10 +128,14 @@ void main() {
       );
       expect(paths, [
         '/v1/kernel/activities/commands',
+        '/v1/kernel/recipe/scenarios',
+        '/v1/kernel/planning/accept',
         '/v1/kernel/activities/run-task',
       ]);
       expect(bodies[0]['payload']['taskId'], 'task-Z');
-      expect(bodies[1], {
+      expect(bodies[1]['confirmed'], true);
+      expect(bodies[2], {'proposalId': 'proposal-a', 'commandId': 'accept-a'});
+      expect(bodies[3], {
         'activityId': 'a',
         'taskId': 'task-Y',
         'expectedRevision': 8,

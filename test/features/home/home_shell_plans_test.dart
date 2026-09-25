@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/core/app_theme.dart';
+import 'package:ori_beauty/data/app_snapshot_store.dart';
+import 'package:ori_beauty/data/content_analysis_service.dart';
 import 'package:ori_beauty/data/incoming_share_service.dart';
 import 'package:ori_beauty/data/plan_recommendation_service.dart';
 import 'package:ori_beauty/data/place_reminder_service.dart';
@@ -20,6 +22,52 @@ import 'package:ori_beauty/state/app_controller.dart';
 import 'package:ori_beauty/state/plan_controller.dart';
 
 void main() {
+  testWidgets('development drawer exposes a pending server deletion retry', (
+    tester,
+  ) async {
+    final store = InMemoryAppSnapshotStore();
+    await store.saveWithPendingSourceDeletions(
+      const [],
+      pendingSourceDeletions: const [
+        PendingReviewedSourceDeletion(
+          importId: 'reviewed-synthetic',
+          commandId: 'reviewed-source-delete:reviewed-synthetic',
+        ),
+      ],
+    );
+    final controller = AppController(
+      InMemoryIncomingShareService(),
+      const BaselineContentAnalysisService(),
+      store,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    tester.view.physicalSize = const Size(430, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: HomeShell(
+          controller: controller,
+          placeReminderOpenInbox: InMemoryPlaceReminderOpenInbox(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shell-menu-button')));
+    await tester.pumpAndSettle();
+
+    final retry = find.byKey(const Key('drawer-item-서버 자료 삭제 대기 1건'));
+    expect(retry, findsOneWidget);
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('서버 자료 삭제 대기 1건이 남아 있어요'), findsOneWidget);
+  });
+
   testWidgets('reaches 계획함 with no tab bar left to reach it by', (
     tester,
   ) async {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,9 @@ import 'package:ori_beauty/data/app_snapshot_store.dart';
 import 'package:ori_beauty/data/content_analysis_service.dart';
 import 'package:ori_beauty/data/incoming_share_service.dart';
 import 'package:ori_beauty/data/place_enrichment_service.dart';
+import 'package:ori_beauty/data/reviewed_capture_import_client.dart';
+import 'package:ori_beauty/data/tag_merge_service.dart';
+import 'package:ori_beauty/data/tag_sense_service.dart';
 import 'package:ori_beauty/domain/models.dart';
 import 'package:ori_beauty/state/app_controller.dart';
 
@@ -412,6 +416,282 @@ void main() {
       expect(
         AppSnapshotCodec.decode(snapshotStore.snapshot!).single.status,
         CaptureStatus.organized,
+      );
+    },
+  );
+
+  test(
+    'explicit structured confirmation durably imports a safe snapshot',
+    () async {
+      final snapshotStore = InMemoryAppSnapshotStore();
+      final importer = _RecordingReviewedImportClient();
+      final reviewedController = _reviewedController(snapshotStore, importer);
+      addTearDown(reviewedController.dispose);
+      await reviewedController.initialize();
+      final captureId = reviewedController.addManualInput(
+        '두부조림 레시피 https://example.com/recipe?private=token',
+      );
+
+      await reviewedController.confirmStructured(captureId);
+      await _waitUntil(
+        () =>
+            reviewedController.captureById(captureId)?.reviewedImport?.status ==
+            ReviewedCaptureImportStatus.synced,
+      );
+
+      final request = importer.requests.single;
+      final captured = request['capture']! as Map<String, Object?>;
+      expect(request['importId'], startsWith('reviewed-'));
+      expect(request['reviewed'], isTrue);
+      expect(request['analysisRunId'], isNotNull);
+      expect(captured['sourceUrl'], 'https://example.com/recipe');
+      expect(captured['asset'], {'status': 'unavailable'});
+      expect(jsonEncode(request), isNot(contains('private=token')));
+      expect(jsonEncode(request), isNot(contains('filePath')));
+      expect(jsonEncode(request), isNot(contains('sharedText')));
+      final durable = AppSnapshotCodec.decode(snapshotStore.snapshot!).single;
+      expect(
+        durable.reviewedImport?.status,
+        ReviewedCaptureImportStatus.synced,
+      );
+      expect(durable.reviewedImport?.sourceId, 'source-test');
+      expect(durable.reviewedImport?.request, request);
+      expect(reviewedController.syncedReviewedCaptureImports, hasLength(1));
+      expect(
+        reviewedController.syncedReviewedCaptureImports.single.title,
+        '두부조림',
+      );
+      expect(
+        reviewedController.syncedReviewedCaptureImports.single.importId,
+        request['importId'],
+      );
+      expect(
+        await reviewedController.retryReviewedCaptureImport(captureId),
+        isFalse,
+      );
+      expect(importer.requests, hasLength(1));
+    },
+  );
+
+  test('ambiguous import retries exact same request after restart', () async {
+    final snapshotStore = InMemoryAppSnapshotStore();
+    final firstImporter = _RecordingReviewedImportClient()..failRequests = true;
+    final first = _reviewedController(snapshotStore, firstImporter);
+    await first.initialize();
+    final captureId = first.addManualInput('두부조림 레시피');
+    await first.confirmStructured(captureId);
+    await _waitUntil(() => firstImporter.finishedCalls == 1);
+    expect(first.captureById(captureId)?.status, CaptureStatus.organized);
+    expect(
+      first.captureById(captureId)?.reviewedImport?.status,
+      ReviewedCaptureImportStatus.pending,
+    );
+    expect(first.syncedReviewedCaptureImports, isEmpty);
+    final sent = firstImporter.requests.single;
+    first.dispose();
+
+    final replayImporter = _RecordingReviewedImportClient();
+    final restored = _reviewedController(snapshotStore, replayImporter);
+    addTearDown(restored.dispose);
+    await restored.initialize();
+    await _waitUntil(
+      () =>
+          restored.captureById(captureId)?.reviewedImport?.status ==
+          ReviewedCaptureImportStatus.synced,
+    );
+
+    expect(replayImporter.requests.single, sent);
+    expect(replayImporter.requests.single['importId'], sent['importId']);
+    expect(
+      AppSnapshotCodec.decode(
+        snapshotStore.snapshot!,
+      ).single.reviewedImport?.status,
+      ReviewedCaptureImportStatus.synced,
+    );
+  });
+
+  test('quick organization never creates a reviewed import intent', () async {
+    final snapshotStore = InMemoryAppSnapshotStore();
+    final importer = _RecordingReviewedImportClient();
+    final reviewedController = _reviewedController(snapshotStore, importer);
+    addTearDown(reviewedController.dispose);
+    await reviewedController.initialize();
+    final captureId = reviewedController.addManualInput('두부조림 레시피');
+
+    expect(await reviewedController.quickOrganize(captureId), isTrue);
+    expect(reviewedController.captureById(captureId)?.reviewedImport, isNull);
+    expect(
+      AppSnapshotCodec.decode(snapshotStore.snapshot!).single.reviewedImport,
+      isNull,
+    );
+    expect(importer.requests, isEmpty);
+    expect(reviewedController.syncedReviewedCaptureImports, isEmpty);
+  });
+
+  test('recipe source picker excludes a synced non-recipe capture', () async {
+    final snapshotStore = InMemoryAppSnapshotStore();
+    final importer = _RecordingReviewedImportClient();
+    final reviewedController = _reviewedController(
+      snapshotStore,
+      importer,
+      analysisService: const _NonRecipeStructuredAnalysisService(),
+    );
+    addTearDown(reviewedController.dispose);
+    await reviewedController.initialize();
+    final captureId = reviewedController.addManualInput('합성 장소 소개');
+    await reviewedController.confirmStructured(captureId);
+    await _waitUntil(
+      () =>
+          reviewedController.captureById(captureId)?.reviewedImport?.status ==
+          ReviewedCaptureImportStatus.synced,
+    );
+
+    expect(importer.requests, hasLength(1));
+    expect(reviewedController.syncedReviewedCaptureImports, isEmpty);
+  });
+
+  test(
+    'deleting a synced capture durably removes only its imported source',
+    () async {
+      final snapshotStore = InMemoryAppSnapshotStore();
+      final importer = _RecordingReviewedImportClient();
+      final reviewedController = _reviewedController(snapshotStore, importer);
+      addTearDown(reviewedController.dispose);
+      await reviewedController.initialize();
+      final captureId = reviewedController.addManualInput('두부조림 레시피');
+      await reviewedController.confirmStructured(captureId);
+      await _waitUntil(
+        () =>
+            reviewedController.captureById(captureId)?.reviewedImport?.status ==
+            ReviewedCaptureImportStatus.synced,
+      );
+      final importId = reviewedController
+          .captureById(captureId)!
+          .reviewedImport!
+          .importId;
+
+      expect(await reviewedController.deleteCapture(captureId), isTrue);
+      await _waitUntil(
+        () =>
+            importer.deletions.length == 1 &&
+            reviewedController.pendingReviewedSourceDeletionCount == 0,
+      );
+
+      expect(importer.deletions.single.importId, importId);
+      expect(
+        importer.deletions.single.commandId,
+        'reviewed-source-delete:$importId',
+      );
+      expect(reviewedController.captureById(captureId), isNull);
+      expect(
+        AppSnapshotCodec.decodePendingSourceDeletions(snapshotStore.snapshot!),
+        isEmpty,
+      );
+      expect(importer.requests, hasLength(1));
+    },
+  );
+
+  test(
+    'ambiguous source deletion replays the same command after restart',
+    () async {
+      final snapshotStore = InMemoryAppSnapshotStore();
+      final firstImporter = _RecordingReviewedImportClient()
+        ..failDeletions = true;
+      final first = _reviewedController(snapshotStore, firstImporter);
+      await first.initialize();
+      final captureId = first.addManualInput('두부조림 레시피');
+      await first.confirmStructured(captureId);
+      await _waitUntil(
+        () =>
+            first.captureById(captureId)?.reviewedImport?.status ==
+            ReviewedCaptureImportStatus.synced,
+      );
+      expect(await first.deleteCapture(captureId), isTrue);
+      await _waitUntil(() => firstImporter.deletions.length == 1);
+      expect(first.pendingReviewedSourceDeletionCount, 1);
+      final previousCommand = firstImporter.deletions.single.commandId;
+      first.dispose();
+
+      final nextImporter = _RecordingReviewedImportClient();
+      final restored = _reviewedController(snapshotStore, nextImporter);
+      addTearDown(restored.dispose);
+      await restored.initialize();
+      await _waitUntil(
+        () =>
+            nextImporter.deletions.length == 1 &&
+            restored.pendingReviewedSourceDeletionCount == 0,
+      );
+      expect(nextImporter.deletions.single.commandId, previousCommand);
+      expect(nextImporter.requests, isEmpty);
+      expect(AppSnapshotCodec.decode(snapshotStore.snapshot!), isEmpty);
+    },
+  );
+
+  test(
+    'deleting an ambiguous import stores only a tombstone through restart',
+    () async {
+      final snapshotStore = InMemoryAppSnapshotStore();
+      final firstImporter = _RecordingReviewedImportClient()
+        ..failRequests = true
+        ..failDeletions = true;
+      final first = _reviewedController(snapshotStore, firstImporter);
+      await first.initialize();
+      final captureId = first.addManualInput('두부조림 레시피');
+      await first.confirmStructured(captureId);
+      await _waitUntil(() => firstImporter.finishedCalls == 1);
+      final importId = firstImporter.requests.single['importId'];
+      expect(await first.deleteCapture(captureId), isTrue);
+      await _waitUntil(() => firstImporter.deletions.length == 1);
+      expect(first.pendingReviewedSourceDeletionCount, 1);
+      final outbox = AppSnapshotCodec.decodePendingSourceDeletions(
+        snapshotStore.snapshot!,
+      );
+      expect(outbox.single.importId, importId);
+      expect(outbox.single.toJson().keys.toSet(), {'importId', 'commandId'});
+      expect(jsonEncode(outbox.single.toJson()), isNot(contains('analysis')));
+      first.dispose();
+
+      final nextImporter = _RecordingReviewedImportClient();
+      final restored = _reviewedController(snapshotStore, nextImporter);
+      addTearDown(restored.dispose);
+      await restored.initialize();
+      await _waitUntil(
+        () =>
+            nextImporter.deletions.length == 1 &&
+            restored.pendingReviewedSourceDeletionCount == 0,
+      );
+      expect(nextImporter.requests, isEmpty);
+      expect(nextImporter.deletions.single.importId, importId);
+      expect(AppSnapshotCodec.decode(snapshotStore.snapshot!), isEmpty);
+    },
+  );
+
+  test(
+    'clearing user captures queues their imported source tombstones',
+    () async {
+      final snapshotStore = InMemoryAppSnapshotStore();
+      final importer = _RecordingReviewedImportClient();
+      final reviewedController = _reviewedController(snapshotStore, importer);
+      addTearDown(reviewedController.dispose);
+      await reviewedController.initialize();
+      final firstId = reviewedController.addManualInput('첫 번째 두부조림 레시피');
+      final secondId = reviewedController.addManualInput('두 번째 두부조림 레시피');
+      await reviewedController.confirmStructured(firstId);
+      await reviewedController.confirmStructured(secondId);
+      await _waitUntil(
+        () => reviewedController.syncedReviewedCaptureImports.length == 2,
+      );
+
+      expect(await reviewedController.clearAllUserCaptures(), isTrue);
+      await _waitUntil(
+        () =>
+            importer.deletions.length == 2 &&
+            reviewedController.pendingReviewedSourceDeletionCount == 0,
+      );
+      expect(AppSnapshotCodec.decode(snapshotStore.snapshot!), isEmpty);
+      expect(
+        importer.deletions.map((item) => item.commandId).toSet(),
+        hasLength(2),
       );
     },
   );
@@ -1245,6 +1525,118 @@ Future<void> _waitUntil(bool Function() predicate) async {
     await Future<void>.delayed(const Duration(milliseconds: 5));
   }
   fail('Timed out waiting for the asynchronous controller operation.');
+}
+
+AppController _reviewedController(
+  InMemoryAppSnapshotStore snapshotStore,
+  ReviewedCaptureImportClient importer, {
+  ContentAnalysisService analysisService = const _StructuredAnalysisService(),
+}) => AppController(
+  InMemoryIncomingShareService(),
+  analysisService,
+  snapshotStore,
+  null,
+  const NoPlaceEnrichmentService(),
+  const NoTagMergeService(),
+  const NoTagSenseService(),
+  null,
+  null,
+  importer,
+);
+
+final class _NonRecipeStructuredAnalysisService
+    implements ContentAnalysisService {
+  const _NonRecipeStructuredAnalysisService();
+  static const _baseline = BaselineContentAnalysisService();
+
+  @override
+  CaptureRecord analyzeShare(
+    IncomingShare share, {
+    CaptureOrigin origin = CaptureOrigin.androidShare,
+  }) {
+    final capture = _baseline.prepareShare(share, origin: origin);
+    return capture.copyWith(
+      status: CaptureStatus.needsReview,
+      analysis: _analysisFor(capture),
+    );
+  }
+
+  @override
+  CaptureRecord prepareShare(
+    IncomingShare share, {
+    CaptureOrigin origin = CaptureOrigin.androidShare,
+  }) => _baseline.prepareShare(share, origin: origin);
+
+  @override
+  Future<AnalysisRun> analyze(CaptureRecord capture) async =>
+      capture.analysis ?? _analysisFor(capture);
+
+  static AnalysisRun _analysisFor(CaptureRecord capture) {
+    final recipe = _StructuredAnalysisService._analysisFor(capture);
+    return AnalysisRun(
+      id: recipe.id,
+      inputId: recipe.inputId,
+      normalizerVersion: recipe.normalizerVersion,
+      analyzerVersion: recipe.analyzerVersion,
+      status: recipe.status,
+      completedAt: recipe.completedAt,
+      evidence: recipe.evidence,
+      productMentions: recipe.productMentions,
+      statements: recipe.statements,
+      disclosure: recipe.disclosure,
+      structuredContent: StructuredContentAnalysis.fromJson({
+        ...recipe.structuredContent!.toJson(),
+        'contentKind': 'place',
+      }),
+    );
+  }
+}
+
+final class _RecordingReviewedImportClient
+    implements ReviewedCaptureImportClient {
+  final List<Map<String, Object?>> requests = [];
+  final List<({String importId, String commandId})> deletions = [];
+  bool failRequests = false;
+  bool failDeletions = false;
+  int finishedCalls = 0;
+
+  @override
+  Future<void> deleteReviewedImport({
+    required String importId,
+    required String commandId,
+  }) async {
+    deletions.add((importId: importId, commandId: commandId));
+    if (failDeletions) {
+      throw const ReviewedCaptureImportException(
+        'NETWORK_TIMEOUT',
+        'simulated ambiguous source deletion',
+      );
+    }
+  }
+
+  @override
+  Future<ReviewedCaptureImportReceipt> importReviewedCapture(
+    Map<String, Object?> request,
+  ) async {
+    requests.add(jsonDecode(jsonEncode(request)) as Map<String, Object?>);
+    try {
+      if (failRequests) {
+        throw const ReviewedCaptureImportException(
+          'NETWORK_TIMEOUT',
+          'simulated ambiguous response',
+        );
+      }
+      return ReviewedCaptureImportReceipt(
+        importId: request['importId']! as String,
+        sourceId: 'source-test',
+        sourceVersionId: 'source-version-test',
+        materialId: 'material-test',
+        replayed: requests.length > 1,
+      );
+    } finally {
+      finishedCalls += 1;
+    }
+  }
 }
 
 final class _StructuredAnalysisService implements ContentAnalysisService {

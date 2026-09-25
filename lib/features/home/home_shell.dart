@@ -271,9 +271,26 @@ final class _HomeShellState extends State<HomeShell>
 
   void _openCommonBoards() {
     if (!commonKernelDebugEnabled) return;
-    Navigator.of(
-      context,
-    ).push<void>(MaterialPageRoute(builder: (_) => const CommonBoardsScreen()));
+    final importOptions = [
+      for (final imported in widget.controller.syncedReviewedCaptureImports)
+        RecipeImportOption(importId: imported.importId, title: imported.title),
+    ];
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => CommonBoardsScreen(importOptions: importOptions),
+      ),
+    );
+  }
+
+  Future<void> _retryPendingSourceDeletions() async {
+    await widget.controller.retryPendingReviewedSourceDeletions();
+    if (!mounted) return;
+    final remaining = widget.controller.pendingReviewedSourceDeletionCount;
+    _showMessage(
+      remaining == 0
+          ? '서버 자료 삭제를 완료했어요.'
+          : '서버 자료 삭제 대기 $remaining건이 남아 있어요. 연결을 확인하고 다시 시도해 주세요.',
+    );
   }
 
   /// The 콘텐츠 list, pushed rather than switched to.
@@ -711,19 +728,25 @@ final class _HomeShellState extends State<HomeShell>
         child: Scaffold(
           key: _scaffoldKey,
           drawerEnableOpenDragGesture: false,
-          drawer: _HomeDrawer(
-            tabs: _tabs,
-            current: _tab,
-            sharedCount: sharedCount,
-            onSelect: _selectTab,
-            onOpenContents: _openContentList,
-            onOpenPast: planController == null ? null : _openPastPlans,
-            onBackupContents: _shareDevelopmentBackup,
-            onRestoreContents: _restoreDevelopmentBackup,
-            onClearContents: _confirmAndClearUserCaptures,
-            onOpenCommonBoards: commonKernelDebugEnabled
-                ? _openCommonBoards
-                : null,
+          drawer: AnimatedBuilder(
+            animation: widget.controller,
+            builder: (context, _) => _HomeDrawer(
+              tabs: _tabs,
+              current: _tab,
+              sharedCount: sharedCount,
+              onSelect: _selectTab,
+              onOpenContents: _openContentList,
+              onOpenPast: planController == null ? null : _openPastPlans,
+              onBackupContents: _shareDevelopmentBackup,
+              onRestoreContents: _restoreDevelopmentBackup,
+              onClearContents: _confirmAndClearUserCaptures,
+              onOpenCommonBoards: commonKernelDebugEnabled
+                  ? _openCommonBoards
+                  : null,
+              pendingSourceDeletionCount:
+                  widget.controller.pendingReviewedSourceDeletionCount,
+              onRetrySourceDeletions: _retryPendingSourceDeletions,
+            ),
           ),
           body: Stack(
             children: [
@@ -1434,6 +1457,8 @@ final class _HomeDrawer extends StatelessWidget {
     required this.onBackupContents,
     required this.onRestoreContents,
     required this.onClearContents,
+    required this.pendingSourceDeletionCount,
+    required this.onRetrySourceDeletions,
     this.onOpenCommonBoards,
   });
 
@@ -1445,6 +1470,8 @@ final class _HomeDrawer extends StatelessWidget {
   final VoidCallback onBackupContents;
   final VoidCallback onRestoreContents;
   final VoidCallback onClearContents;
+  final int pendingSourceDeletionCount;
+  final VoidCallback onRetrySourceDeletions;
   final VoidCallback? onOpenCommonBoards;
 
   /// Null when there are no plans at all, and then the drawer does not offer a
@@ -1554,6 +1581,15 @@ final class _HomeDrawer extends StatelessWidget {
                         onTap: () {
                           Navigator.of(context).pop();
                           openCommonBoards();
+                        },
+                      ),
+                    if (pendingSourceDeletionCount > 0)
+                      _DrawerItem(
+                        icon: Icons.sync_problem_outlined,
+                        label: '서버 자료 삭제 대기 $pendingSourceDeletionCount건',
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          onRetrySourceDeletions();
                         },
                       ),
                     _DrawerItem(

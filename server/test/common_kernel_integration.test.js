@@ -46,6 +46,9 @@ test("an unknown fact watched by a board becomes an evidence-backed review, then
   });
   assert.equal((await service.resolveKnowledge(query)).status, "resolved");
   assert.ok((await service.getBoard("dinner")).pendingChanges.some((item) => item.eventIds.includes("knowledge:5")));
+  await assert.rejects(service.activityCommand({ commandId: "complete-with-stale-fact",
+    type: "activity.complete", activityId: "dinner", expectedRevision: 1,
+    payload: { goalConfirmed: true } }), (error) => error.code === "CONTEXT_STALE");
 
   await knowledge("delete-1", "source.delete", { sourceId: "message" });
   assert.equal((await service.resolveKnowledge(query)).status, "unknown");

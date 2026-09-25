@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -8,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import '../data/app_snapshot_store.dart';
 import '../data/batch_content_analysis_service.dart';
 import '../data/content_analysis_service.dart';
+import '../data/common_kernel_client.dart' show commonKernelDebugEnabled;
 import '../data/demo_catalog.dart';
 import '../data/development_backup_service.dart';
 import '../data/incoming_share_service.dart';
@@ -16,6 +18,7 @@ import '../data/portable_tip_service.dart';
 import '../data/place_enrichment_service.dart';
 import '../data/place_map_links.dart';
 import '../data/remote_content_analysis_service.dart';
+import '../data/reviewed_capture_import_client.dart';
 import '../data/tag_merge_service.dart';
 import '../data/tag_sense_service.dart';
 import '../domain/models.dart';
@@ -42,6 +45,24 @@ final class IncomingCaptureBatch {
   String get primaryCaptureId => captureIds.last;
 }
 
+/// A human-reviewed source that the common kernel has acknowledged. Scenario
+/// screens may offer this as provenance, but must still ask the user to confirm
+/// recipe quantities and ingredient identity before planning.
+@immutable
+final class ReviewedCaptureImportSummary {
+  const ReviewedCaptureImportSummary({
+    required this.captureId,
+    required this.importId,
+    required this.title,
+    required this.sourceId,
+  });
+
+  final String captureId;
+  final String importId;
+  final String title;
+  final String sourceId;
+}
+
 final class AppController extends ChangeNotifier {
   /// Keeps image decoding, base64 payloads, and upstream requests bounded on a
   /// phone while still letting a large picker batch make progress in parallel.
@@ -61,9 +82,15 @@ final class AppController extends ChangeNotifier {
     this._tagSenseService = const NoTagSenseService(),
     DevelopmentBackupService? developmentBackupService,
     this._batchAnalysisService,
+    ReviewedCaptureImportClient? reviewedCaptureImportClient,
   ]) : _captures = [...DemoCatalog.captures],
        _groups = [...DemoCatalog.groups],
        _snapshotStore = snapshotStore ?? InMemoryAppSnapshotStore(),
+       _reviewedCaptureImportClient =
+           reviewedCaptureImportClient ??
+           (commonKernelDebugEnabled
+               ? const HttpReviewedCaptureImportClient()
+               : null),
        _developmentBackupService =
            developmentBackupService ?? const DevelopmentBackupService();
 
@@ -76,6 +103,10 @@ final class AppController extends ChangeNotifier {
   final TagSenseService _tagSenseService;
   final DevelopmentBackupService _developmentBackupService;
   final BatchContentAnalysisService? _batchAnalysisService;
+  final ReviewedCaptureImportClient? _reviewedCaptureImportClient;
+  final Set<String> _reviewedImportsInFlight = {};
+  final List<PendingReviewedSourceDeletion> _pendingSourceDeletions = [];
+  final Set<String> _sourceDeletionsInFlight = {};
   CaptureAnalysisMode? _selectedAnalysisMode;
   Timer? _batchPollTimer;
   bool _pollingBatch = false;
@@ -152,6 +183,29 @@ final class AppController extends ChangeNotifier {
   Future<void>? _initialization;
 
   List<CaptureRecord> get captures => List.unmodifiable(_captures);
+  int get pendingReviewedSourceDeletionCount => _pendingSourceDeletions.length;
+  List<ReviewedCaptureImportSummary> get syncedReviewedCaptureImports =>
+      List.unmodifiable([
+        for (final capture in _captures)
+          if (capture.reviewedImport case final imported?
+              when imported.status == ReviewedCaptureImportStatus.synced &&
+                  imported.sourceId != null &&
+                  capture.analysis?.structuredContent?.isRecipe == true)
+            ReviewedCaptureImportSummary(
+              captureId: capture.raw.id,
+              importId: imported.importId,
+              title: _reviewedImportTitle(imported.request),
+              sourceId: imported.sourceId!,
+            ),
+      ]);
+
+  static String _reviewedImportTitle(Map<String, Object?> request) {
+    final analysis = request['analysis'];
+    final title = analysis is Map ? analysis['title'] : null;
+    final value = title is Map ? title['value'] : null;
+    return value is String && value.trim().isNotEmpty ? value : '확인한 캡처';
+  }
+
   List<ProductGroup> get groups => List.unmodifiable(_groups);
   CaptureFilter get filter => _filter;
   Stream<IncomingCaptureBatch> get incomingCaptureAdded =>
@@ -286,12 +340,23 @@ final class AppController extends ChangeNotifier {
       return false;
     }
 
+    final import = _captures[captureIndex].reviewedImport;
+    if (import != null &&
+        _snapshotStore is! ReviewedSourceDeletionOutboxStore) {
+      // Never discard the only server cleanup handle without an atomic outbox.
+      return false;
+    }
+
     final previousCaptures = List<CaptureRecord>.of(_captures);
     final previousGroups = List<ProductGroup>.of(_groups);
+    final previousSourceDeletions = List<PendingReviewedSourceDeletion>.of(
+      _pendingSourceDeletions,
+    );
     final sourceDeletionWasAvailable = _sourceDeletionAvailableCaptureIds
         .remove(captureId);
     final deletedCapture = _captures.removeAt(captureIndex);
     _removeCaptureFromGroups(captureId);
+    _enqueueImportedSourceDeletion(deletedCapture);
 
     final saved = await _persistState();
     if (!saved) {
@@ -301,6 +366,9 @@ final class AppController extends ChangeNotifier {
       _groups
         ..clear()
         ..addAll(previousGroups);
+      _pendingSourceDeletions
+        ..clear()
+        ..addAll(previousSourceDeletions);
       if (sourceDeletionWasAvailable) {
         _sourceDeletionAvailableCaptureIds.add(captureId);
       }
@@ -308,6 +376,7 @@ final class AppController extends ChangeNotifier {
     }
 
     notifyListeners();
+    if (import != null) unawaited(retryPendingReviewedSourceDeletions());
     if (sourceDeletionWasAvailable) {
       try {
         await _incomingShareService.keepSharedSource(
@@ -319,6 +388,22 @@ final class AppController extends ChangeNotifier {
     }
     await _deleteUnreferencedManagedAttachments(deletedCapture);
     return true;
+  }
+
+  void _enqueueImportedSourceDeletion(CaptureRecord capture) {
+    final imported = capture.reviewedImport;
+    if (imported == null ||
+        _pendingSourceDeletions.any(
+          (item) => item.importId == imported.importId,
+        )) {
+      return;
+    }
+    _pendingSourceDeletions.add(
+      PendingReviewedSourceDeletion(
+        importId: imported.importId,
+        commandId: 'reviewed-source-delete:${imported.importId}',
+      ),
+    );
   }
 
   int get userCaptureCount => _captures
@@ -391,6 +476,20 @@ final class AppController extends ChangeNotifier {
       final deletedCaptures = _captures
           .where((capture) => capture.raw.origin != CaptureOrigin.demo)
           .toList(growable: false);
+      final retainedImportIds = {
+        for (final capture in plan.captures)
+          if (capture.reviewedImport case final imported?) imported.importId,
+      };
+      if (deletedCaptures.any(
+            (capture) =>
+                capture.reviewedImport != null &&
+                !retainedImportIds.contains(capture.reviewedImport!.importId),
+          ) &&
+          _snapshotStore is! ReviewedSourceDeletionOutboxStore) {
+        throw const DevelopmentBackupRestoreException(
+          'source_cleanup_unavailable',
+        );
+      }
       try {
         await _incomingShareService.acknowledge(
           deletedCaptures.map((capture) => capture.raw.transportEventId),
@@ -408,6 +507,8 @@ final class AppController extends ChangeNotifier {
       final installed = await plan.installAttachments();
       final previousCaptures = List<CaptureRecord>.of(_captures);
       final previousGroups = List<ProductGroup>.of(_groups);
+      final previousPendingSourceDeletions =
+          List<PendingReviewedSourceDeletion>.of(_pendingSourceDeletions);
       final previousTagSenses = Map<String, List<String>>.of(_tagSenses);
       final previousSourceDeletionIds = Set<String>.of(
         _sourceDeletionAvailableCaptureIds,
@@ -423,6 +524,12 @@ final class AppController extends ChangeNotifier {
         _captures
           ..clear()
           ..addAll(DemoCatalog.captures);
+        for (final capture in deletedCaptures) {
+          if (capture.reviewedImport case final imported?
+              when !retainedImportIds.contains(imported.importId)) {
+            _enqueueImportedSourceDeletion(capture);
+          }
+        }
         _groups
           ..clear()
           ..addAll(DemoCatalog.groups);
@@ -452,6 +559,9 @@ final class AppController extends ChangeNotifier {
         _groups
           ..clear()
           ..addAll(previousGroups);
+        _pendingSourceDeletions
+          ..clear()
+          ..addAll(previousPendingSourceDeletions);
         _tagSenses
           ..clear()
           ..addAll(previousTagSenses);
@@ -470,6 +580,7 @@ final class AppController extends ChangeNotifier {
       }
 
       notifyListeners();
+      unawaited(retryPendingReviewedSourceDeletions());
       for (final capture in deletedCaptures) {
         if (previousSourceDeletionIds.contains(capture.raw.id)) {
           try {
@@ -522,6 +633,10 @@ final class AppController extends ChangeNotifier {
         .where((capture) => capture.raw.origin != CaptureOrigin.demo)
         .toList(growable: false);
     if (deletedCaptures.isEmpty) return true;
+    if (deletedCaptures.any((capture) => capture.reviewedImport != null) &&
+        _snapshotStore is! ReviewedSourceDeletionOutboxStore) {
+      return false;
+    }
 
     // A previously failed native acknowledge can leave an envelope behind
     // even though its Dart capture is already durable and analyzed. Remove
@@ -542,6 +657,8 @@ final class AppController extends ChangeNotifier {
     final deletedIds = deletedCaptures.map((capture) => capture.raw.id).toSet();
     final previousCaptures = List<CaptureRecord>.of(_captures);
     final previousGroups = List<ProductGroup>.of(_groups);
+    final previousPendingSourceDeletions =
+        List<PendingReviewedSourceDeletion>.of(_pendingSourceDeletions);
     final previousTagSenses = Map<String, List<String>>.of(_tagSenses);
     final previousSourceDeletionIds = Set<String>.of(
       _sourceDeletionAvailableCaptureIds,
@@ -553,6 +670,9 @@ final class AppController extends ChangeNotifier {
     final previousFilter = _filter;
 
     _captures.removeWhere((capture) => deletedIds.contains(capture.raw.id));
+    for (final capture in deletedCaptures) {
+      _enqueueImportedSourceDeletion(capture);
+    }
     for (final captureId in deletedIds) {
       _removeCaptureFromGroups(captureId);
     }
@@ -572,6 +692,9 @@ final class AppController extends ChangeNotifier {
       _groups
         ..clear()
         ..addAll(previousGroups);
+      _pendingSourceDeletions
+        ..clear()
+        ..addAll(previousPendingSourceDeletions);
       _tagSenses
         ..clear()
         ..addAll(previousTagSenses);
@@ -589,6 +712,7 @@ final class AppController extends ChangeNotifier {
     }
 
     notifyListeners();
+    unawaited(retryPendingReviewedSourceDeletions());
     for (final capture in deletedCaptures) {
       if (previousSourceDeletionIds.contains(capture.raw.id)) {
         try {
@@ -844,6 +968,8 @@ final class AppController extends ChangeNotifier {
     });
     await _drainIncomingShares();
     await _drainPortableTips();
+    unawaited(retryPendingReviewedCaptureImports());
+    unawaited(retryPendingReviewedSourceDeletions());
     unawaited(_topUpTagSenses());
   }
 
@@ -1731,12 +1857,14 @@ final class AppController extends ChangeNotifier {
     if (capture == null) {
       return;
     }
+    _markReviewedImportPending(captureId);
     notifyListeners();
 
     final saved = await _persistState();
     if (saved && capture.raw.origin == CaptureOrigin.androidShare) {
       await _incomingShareService.acknowledge([capture.raw.transportEventId]);
     }
+    if (saved) unawaited(retryReviewedCaptureImport(captureId));
   }
 
   CaptureRecord? _applyProductOrganization({
@@ -1876,13 +2004,160 @@ final class AppController extends ChangeNotifier {
     if (capture == null) {
       return;
     }
+    _markReviewedImportPending(captureId);
     notifyListeners();
 
     final saved = await _persistState();
     if (saved && capture.raw.origin == CaptureOrigin.androidShare) {
       await _incomingShareService.acknowledge([capture.raw.transportEventId]);
     }
+    if (saved) unawaited(retryReviewedCaptureImport(captureId));
     unawaited(_topUpTagSenses());
+  }
+
+  void _markReviewedImportPending(String captureId) {
+    if (_reviewedCaptureImportClient == null) return;
+    final index = _captures.indexWhere(
+      (capture) => capture.raw.id == captureId,
+    );
+    if (index < 0) return;
+    final capture = _captures[index];
+    // Reconfirming an unchanged analysis must not create a second source.
+    if (capture.reviewedImport != null &&
+        capture.reviewedImport!.request['analysisRunId'] ==
+            capture.analysis?.id) {
+      return;
+    }
+    final request = reviewedCaptureImportRequest(capture);
+    if (request == null) return;
+    final frozenRequest =
+        jsonDecode(jsonEncode(request)) as Map<String, Object?>;
+    _captures[index] = capture.copyWith(
+      reviewedImport: ReviewedCaptureImport(
+        request: Map<String, Object?>.unmodifiable(frozenRequest),
+        status: ReviewedCaptureImportStatus.pending,
+      ),
+    );
+  }
+
+  /// Retry one durable intent with the same importId and exact same body.
+  /// A timeout is ambiguous, so the pending state remains until the server
+  /// returns a receipt; this never changes the legacy organized capture.
+  Future<bool> retryReviewedCaptureImport(String captureId) async {
+    final client = _reviewedCaptureImportClient;
+    final current = captureById(captureId);
+    final pending = current?.reviewedImport;
+    if (client == null ||
+        pending == null ||
+        pending.status != ReviewedCaptureImportStatus.pending ||
+        !_reviewedImportsInFlight.add(pending.importId)) {
+      return false;
+    }
+    try {
+      // Save again before every attempted send so an in-memory pending intent
+      // created during a failed snapshot write cannot escape the phone.
+      if (!await _persistState()) return false;
+      final beforeSend = captureById(captureId)?.reviewedImport;
+      if (_disposed ||
+          beforeSend?.importId != pending.importId ||
+          beforeSend?.status != ReviewedCaptureImportStatus.pending) {
+        return false;
+      }
+      final receipt = await client.importReviewedCapture(pending.request);
+      if (receipt.importId != pending.importId) return false;
+      final index = _captures.indexWhere(
+        (capture) => capture.raw.id == captureId,
+      );
+      if (_disposed ||
+          index < 0 ||
+          _captures[index].reviewedImport?.importId != pending.importId) {
+        return false;
+      }
+      _captures[index] = _captures[index].copyWith(
+        reviewedImport: pending.synced(receipt.sourceId),
+      );
+      notifyListeners();
+      if (!await _persistState()) {
+        final latestIndex = _captures.indexWhere(
+          (capture) => capture.raw.id == captureId,
+        );
+        if (latestIndex >= 0 &&
+            _captures[latestIndex].reviewedImport?.importId ==
+                pending.importId) {
+          _captures[latestIndex] = _captures[latestIndex].copyWith(
+            reviewedImport: pending,
+          );
+          notifyListeners();
+        }
+        return false;
+      }
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint(
+        'Reviewed capture import remains pending: $error\n$stackTrace',
+      );
+      return false;
+    } finally {
+      _reviewedImportsInFlight.remove(pending.importId);
+    }
+  }
+
+  Future<void> retryPendingReviewedCaptureImports() async {
+    if (_reviewedCaptureImportClient == null) return;
+    final pendingIds = _captures
+        .where(
+          (capture) =>
+              capture.reviewedImport?.status ==
+              ReviewedCaptureImportStatus.pending,
+        )
+        .map((capture) => capture.raw.id)
+        .toList(growable: false);
+    for (final captureId in pendingIds) {
+      if (_disposed) return;
+      await retryReviewedCaptureImport(captureId);
+    }
+  }
+
+  /// A tombstone by importId is safe even when the import response was lost or
+  /// the import has not reached the server yet. The outbox stores no analysis.
+  Future<bool> retryPendingReviewedSourceDeletion(String importId) async {
+    final client = _reviewedCaptureImportClient;
+    if (client == null || !_sourceDeletionsInFlight.add(importId)) return false;
+    try {
+      var index = _pendingSourceDeletions.indexWhere(
+        (item) => item.importId == importId,
+      );
+      if (index < 0) return false;
+      if (_disposed) return false;
+      await client.deleteReviewedImport(
+        importId: importId,
+        commandId: _pendingSourceDeletions[index].commandId,
+      );
+      index = _pendingSourceDeletions.indexWhere(
+        (pending) => pending.importId == importId,
+      );
+      if (_disposed || index < 0) return false;
+      final removed = _pendingSourceDeletions.removeAt(index);
+      if (!await _persistState()) {
+        _pendingSourceDeletions.insert(index, removed);
+        return false;
+      }
+      notifyListeners();
+      return true;
+    } catch (error) {
+      debugPrint('Reviewed source deletion remains pending: $error');
+      return false;
+    } finally {
+      _sourceDeletionsInFlight.remove(importId);
+    }
+  }
+
+  Future<void> retryPendingReviewedSourceDeletions() async {
+    final ids = [for (final item in _pendingSourceDeletions) item.importId];
+    for (final id in ids) {
+      if (_disposed) return;
+      await retryPendingReviewedSourceDeletion(id);
+    }
   }
 
   CaptureRecord? _applyStructuredOrganization(
@@ -2068,6 +2343,11 @@ final class AppController extends ChangeNotifier {
     try {
       _tagSenses.addAll(await _snapshotStore.loadTagSenses());
       final persistedCaptures = await _snapshotStore.load();
+      if (_snapshotStore case final ReviewedSourceDeletionOutboxStore outbox) {
+        _pendingSourceDeletions.addAll(
+          await outbox.loadPendingSourceDeletions(),
+        );
+      }
       final knownTransportIds = _captures
           .map((capture) => capture.raw.transportEventId)
           .toSet();
@@ -2121,6 +2401,7 @@ final class AppController extends ChangeNotifier {
       analysisMode: persisted.analysisMode,
       batchRequestId: persisted.batchRequestId,
       batchStatus: persisted.batchStatus,
+      reviewedImport: persisted.reviewedImport,
     );
     final reviewResolution = persisted.reviewResolution;
     final identity = persisted.confirmedIdentity;
@@ -2336,10 +2617,25 @@ final class AppController extends ChangeNotifier {
     final persistedTransportIds = persisted
         .map((capture) => capture.transportEventId)
         .toSet();
+    final pendingSourceDeletions = List<PendingReviewedSourceDeletion>.of(
+      _pendingSourceDeletions,
+    );
     var saved = false;
     _snapshotWriteTail = _snapshotWriteTail.then((_) async {
       try {
-        await _snapshotStore.save(persisted, tagSenses: _prunedTagSenses());
+        if (_snapshotStore
+            case final ReviewedSourceDeletionOutboxStore outbox) {
+          await outbox.saveWithPendingSourceDeletions(
+            persisted,
+            pendingSourceDeletions: pendingSourceDeletions,
+            tagSenses: _prunedTagSenses(),
+          );
+        } else {
+          if (pendingSourceDeletions.isNotEmpty) {
+            throw StateError('Snapshot store lacks a source deletion outbox.');
+          }
+          await _snapshotStore.save(persisted, tagSenses: _prunedTagSenses());
+        }
         _durablySavedTransportIds
           ..clear()
           ..addAll(persistedTransportIds);

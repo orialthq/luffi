@@ -1,5 +1,5 @@
 import { array, assertUnique, enumeration, fail, object, ref, text } from "./schema.js";
-import { artifact, capability, relation, slot } from "./shared.js";
+import { artifact, capability, relation, slot, valueRelation } from "./shared.js";
 
 const ingredient = object({
   id: text, ingredientId: text, name: text, quantity: ref("core.ingredient_quantity"),
@@ -115,6 +115,8 @@ export const recipePack = {
     { id: "recipe.cook_result", schema: object({ recipeId: text, completedAt: ref("core.timestamp"), reportedBy: text }) },
   ],
   relations: [
+    valueRelation("recipe.confirmed_recipe", ["recipe.recipe"], "recipe.recipe", "explicit_user_observation"),
+    valueRelation("recipe.requirement_value", ["recipe.ingredient_requirement"], "recipe.ingredient_requirement", "explicit_user_observation"),
     relation("recipe.has_requirement", ["recipe.recipe"], ["recipe.ingredient_requirement"]),
     relation("recipe.requires_ingredient", ["recipe.ingredient_requirement"], ["recipe.ingredient"], "one"),
     relation("recipe.observes_inventory", ["recipe.inventory_observation"], ["recipe.ingredient"], "one"),

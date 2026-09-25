@@ -44,6 +44,8 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/resources/availability` | `{resourceId,timeRange?}`에 대한 가용량·유지 중인 claim 투영 |
 | `POST /v1/kernel/planning/proposals`, `/accept` | 사전 컴파일된 계획 변경안의 저장·재검증·적용 |
 | `POST /v1/kernel/ingestion/reviewed-capture` | 사용자 확인된 기존 분석의 원자적 가져오기 |
+| `POST /v1/kernel/ingestion/reviewed-capture/delete` | `importId`로 확인 캡처의 서버 Source와 연결된 레시피 시나리오를 원자적으로 삭제하거나 가져오기 전에 삭제 의사를 기록 |
+| `POST /v1/kernel/recipe/scenarios` | 사용자가 직접 확인한 레시피로 근거 그래프·Activity·승인 대기 계획을 한 트랜잭션에서 생성 |
 | `POST /v1/kernel/domains/execute` | 부수 효과가 없는 등록된 분야 계산만 실행 |
 
 AI가 만든 PlanDraft/PlanPatch를 적용할 때는 `/knowledge/context`가 돌려준 `contextId`를 사용한다. 서버는 이 ID에 연결된 readSet, 없던 사실을 감시하는 queryWatches, 검색의 발견 의존성, 자원 조건, 정책·시간 조건과 Activity revision을 다시 검사한다. API가 전달한 임의 `context` 객체는 신뢰하지 않는다. 발급 맥락은 서버 상태에 저장되며 사용 기한은 1시간이다. `/planning/proposals`는 실제 상태를 바꾸지 않는 컴파일 검사를 먼저 하고, `/planning/accept`에서 기준 버전과 맥락을 다시 검사한다. 같은 명령 ID·같은 요청은 재전송해도 한 번만 처리하고, 같은 ID에 다른 내용은 충돌이다.
@@ -102,6 +104,47 @@ Context의 명시적 `resourceIds`는 최대 100개다. 해당 Activity가 이�
 ## 기존 캡처 가져오기
 
 기존 캡처 가져오기는 `reviewed: true`가 명시된 경우에만 허용한다. 현재 서버가 원본 이미지를 업로드받아 보관하지 않았으면 `asset.status`를 `device_only` 또는 `unavailable`로 둔다. 캡처 분석에 근거가 있는 필드는 원본 스냅샷 범위의 `ingestion.extracted_field` 주장으로 저장한다. 레시피 인분·실재 재고·식당 예약 확정·제품 소유처럼 기존 분석만으로 확인할 수 없는 값은 만들지 않는다. 업로드되지 않은 원본을 서버에 있는 것처럼 표시하지 않는다.
+
+캡처를 삭제하면 앱은 로컬 캡처 제거와 서버 삭제 요청을 같은 스냅샷에 기록한다. 삭제 대기함에는 분석 내용 없이 `importId`와 고정된 `commandId`만 남긴다. 앱은 `POST /v1/kernel/ingestion/reviewed-capture/delete`에 `{ "importId": "...", "commandId": "..." }`를 재전송한다. 서버에 이미 가져온 자료가 있으면 Source와 이를 근거로 연결한 레시피 시나리오를 같은 트랜잭션에서 지운다. 가져오기가 아직 완료되지 않았거나 응답을 잃은 경우에도 `importId`를 삭제 상태로 기록해 늦게 도착한 가져오기 재시도를 거부한다. 서버 삭제 응답을 확인할 때까지 앱의 삭제 대기 항목을 유지한다.
+
+## 첫 레시피 시나리오
+
+Flutter에서 캡처 분석을 명시적으로 확인하면 `/ingestion/reviewed-capture` 요청을 먼저 기기에 저장한 뒤 재전송한다. 서버가 동기화한 자료는 개발용 보드의 **확인한 자료로 레시피 만들기**에서 선택할 수 있다. 캡처의 재료 문자열과 인분을 계산 입력으로 자동 확정하지 않는다. 사용자가 레시피 이름, 기준·목표 인분, 재료별 기준 수량·단위를 직접 입력하고 최종 확인한다. 캡처가 없어도 개발용 **샘플 레시피로 시작**에서 만든 예시 데이터로 같은 경로를 시험할 수 있다. 샘플 요청은 `synthetic: true`를 보내며 서버가 확인 Source의 provenance와 계획 변경안의 run 메타데이터에 이 표식을 남긴다. `synthetic: true`와 `importId`를 함께 보낼 수 없다. 샘플은 실제 캡처나 실제 재고의 증거가 아니다.
+
+`POST /v1/kernel/recipe/scenarios`에는 Bearer 토큰과 다음 형태의 JSON을 보낸다. `commandId`는 재시도 시 그대로 유지하고, `activityId`는 새 활동 ID다. `importId`는 앞서 성공한 확인 캡처를 근거 출처로 연결할 때만 넣는다. 서버는 전달된 `recipe.id`와 `recipe.revision` 대신 활동에 연결된 새 ID와 revision 1을 부여한다.
+
+```json
+{
+  "commandId": "confirm-tofu-001",
+  "activityId": "cook-tofu-001",
+  "confirmed": true,
+  "importId": "reviewed-capture-import-id",
+  "recipe": {
+    "title": "두부국",
+    "baseServings": 2,
+    "ingredients": [
+      {
+        "id": "tofu-line",
+        "ingredientId": "tofu",
+        "name": "두부",
+        "quantity": { "status": "known", "amount": 300, "unit": "g" },
+        "scaling": "linear",
+        "optional": false
+      }
+    ]
+  },
+  "targetServings": 4,
+  "inventory": []
+}
+```
+
+레시피 재료는 1~25행이고 제목은 최대 200자, 재료명은 최대 100자다. 기준·목표 인분은 각각 1~50의 정수이며, 수량 상태가 `known`인 재료의 기준 수량은 10억 이하여야 한다. `commandId`, `activityId`, `importId`, 재료 행 `id`와 `ingredientId`는 각각 최대 512자다. 이름·수량·단위의 나머지 조건은 등록된 분야 계약으로 검증한다. 이 API는 초기 재고를 모른다고 간주해 비어 있는 `inventory`만 받으며 `collectInventory: false`도 거부한다. 이미 가진 재고를 0으로 추정하지 않는다. 선택 재료는 `includeOptionalIngredientIds`에 재료 **행 ID**를 명시해야 포함된다. `includeCookTask: false`를 보내면 마지막 요리 완료 기록 작업을 생략할 수 있다.
+
+서버는 확인 Source/Version/Evidence를 만들고, `recipe.confirmed_recipe` 값, 레시피에서 재료 항목으로 가는 `recipe.has_requirement`, 항목의 수량·이름인 `recipe.requirement_value`, 항목에서 재료로 가는 `recipe.requires_ingredient`를 근거가 있는 Assertion으로 저장한다. Entity의 이름은 일반 표기이며 사용자가 입력한 제목·재료명·수량은 Source와 근거가 있는 값에 둔다. 계획 Context는 이 값과 관계를 조회·감시한다. 응답의 `proposalId`는 아직 적용되지 않은 계획 변경안이다. `POST /v1/kernel/planning/accept`에 `{ "proposalId": "...", "commandId": "..." }`를 보내 승인해야 작업이 보드에 나타난다.
+
+계획은 `scale_servings → calculate_requirements → cook` 의존성과 별도 `check_inventory → calculate_requirements` 결과 바인딩으로 구성된다. 인분 계산과 부족 수량 계산은 등록된 순수 capability가 실행하고, 재고는 사용자가 `check_inventory` 결과로 관찰한 값만 사용한다. 재고 결과를 고치면 이를 소비한 계산과 후속 작업은 재검토 전까지 진행할 수 없다. 레시피 근거·관계가 바뀌거나 삭제되면 기존 Context의 실행·계획 승인이 막힌다. 확인 Source를 삭제하면 해당 레시피 Activity와 계획·결과·발급 맥락도 같은 트랜잭션에서 지운다. 연결된 가져오기 Source를 삭제하면 그 출처에서 만든 확인 Source에도 삭제가 전파된다. 삭제된 요청 ID는 재전송해 복구하지 않는다.
+
+이 계획 생성기는 **결정적 작업 틀**이며 AI 모델이 작업 순서를 새로 생성하지 않는다. 조리 단계별 안내는 현재 `recipe.recipe`/Task 계약에 없고 `cook`는 사용자가 실제 완료를 기록하는 한 작업이다. 보드의 재고 관찰값은 버전이 있는 TaskResult에 저장하며 지식 그래프의 재고 Assertion이나 공통 ResourceClaim 재고로 자동 승격하지 않고, 실제 소비량으로 차감하지도 않는다. 이 경로와 토큰은 현재 단일 개발 사용자·JSON 저장소용이다.
 
 ## 일관성과 현재 경계
 

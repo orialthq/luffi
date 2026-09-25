@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'analysis_server.dart';
 
@@ -14,6 +15,60 @@ bool get commonKernelDebugEnabled =>
     kDebugMode && _kernelToken.trim().isNotEmpty;
 
 typedef KernelJson = Map<String, Object?>;
+
+/// One durable request body is retained until the server confirms it. Reusing
+/// the exact commandId after an ambiguous response makes creation replay-safe.
+abstract interface class RecipeScenarioIntentStore {
+  Future<KernelJson?> load();
+  Future<void> save(KernelJson request);
+  Future<void> clear();
+}
+
+final class FileRecipeScenarioIntentStore implements RecipeScenarioIntentStore {
+  const FileRecipeScenarioIntentStore({this.directoryPath});
+
+  final String? directoryPath;
+
+  Future<File> _file() async {
+    final directory = directoryPath == null
+        ? await getApplicationSupportDirectory()
+        : Directory(directoryPath!);
+    await directory.create(recursive: true);
+    return File('${directory.path}/luffi_recipe_scenario_intent.json');
+  }
+
+  @override
+  Future<KernelJson?> load() async {
+    final file = await _file();
+    if (!await file.exists()) return null;
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, dynamic> ||
+        !_nonEmptyText(decoded['commandId']) ||
+        !_nonEmptyText(decoded['activityId']) ||
+        decoded['confirmed'] != true ||
+        decoded['recipe'] is! Map<String, dynamic>) {
+      throw const FormatException('저장된 레시피 생성 요청 형식이 올바르지 않아요.');
+    }
+    return Map<String, Object?>.from(decoded);
+  }
+
+  @override
+  Future<void> save(KernelJson request) async {
+    final file = await _file();
+    if (await file.exists()) {
+      throw StateError('An unconfirmed recipe creation intent already exists');
+    }
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(request), flush: true);
+    await temporary.rename(file.path);
+  }
+
+  @override
+  Future<void> clear() async {
+    final file = await _file();
+    if (await file.exists()) await file.delete();
+  }
+}
 
 bool _nonEmptyText(Object? value) => value is String && value.isNotEmpty;
 bool _nonNegativeInt(Object? value) => value is int && value >= 0;
@@ -42,6 +97,11 @@ abstract interface class CommonKernelClient {
   Future<KernelBoardPage> listBoardsPage({int limit = 20, String? cursor});
   Future<KernelJson> getBoard(String activityId);
   Future<KernelJson> command(KernelJson command);
+  Future<KernelJson> createRecipeScenario(KernelJson request);
+  Future<KernelJson> acceptProposal({
+    required String proposalId,
+    required String commandId,
+  });
   Future<KernelJson> runTask({
     required String activityId,
     required String taskId,
@@ -142,6 +202,19 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> command(KernelJson command) =>
       _request('POST', '/v1/kernel/activities/commands', command);
+
+  @override
+  Future<KernelJson> createRecipeScenario(KernelJson request) =>
+      _request('POST', '/v1/kernel/recipe/scenarios', request);
+
+  @override
+  Future<KernelJson> acceptProposal({
+    required String proposalId,
+    required String commandId,
+  }) => _request('POST', '/v1/kernel/planning/accept', {
+    'proposalId': proposalId,
+    'commandId': commandId,
+  });
 
   @override
   Future<KernelJson> runTask({

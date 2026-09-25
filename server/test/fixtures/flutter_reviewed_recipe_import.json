@@ -1,0 +1,107 @@
+{
+  "importId": "reviewed-7aa07de88ebbe1c61a4eadd3ae5b26e98c5a5b936b8508c0afc4773d138b7cad",
+  "capture": {
+    "id": "capture-synthetic-recipe",
+    "capturedAt": "2026-09-20T10:00:00.000Z",
+    "sourceApp": "synthetic.recipe",
+    "sourceUrl": "https://example.invalid/recipe",
+    "locale": null,
+    "asset": {
+      "status": "unavailable"
+    }
+  },
+  "reviewed": true,
+  "reviewedAt": "2026-09-25T10:00:00.000Z",
+  "analysis": {
+    "schemaVersion": "2.1",
+    "model": "gpt-5.6-luna",
+    "domain": "food",
+    "contentKind": "recipe",
+    "tags": [
+      {
+        "value": "레시피",
+        "source": "ai",
+        "confidence": 1.0,
+        "evidenceIds": [
+          "e-title"
+        ],
+        "quotes": [],
+        "citations": []
+      }
+    ],
+    "completeness": "complete",
+    "title": {
+      "value": "두부조림",
+      "status": "observed",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e-title"
+      ]
+    },
+    "place": null,
+    "summary": "두부 200g으로 만드는 두부조림",
+    "evidence": [
+      {
+        "id": "e-title",
+        "text": "두부조림",
+        "region": "image_text",
+        "confidence": 0.98
+      },
+      {
+        "id": "e-ingredient",
+        "text": "두부 200g",
+        "region": "image_text",
+        "confidence": 0.97
+      },
+      {
+        "id": "e-step",
+        "text": "팬에서 5분 졸이기",
+        "region": "caption",
+        "confidence": 0.9
+      }
+    ],
+    "ingredientGroups": [
+      {
+        "name": "주재료",
+        "ingredients": [
+          {
+            "name": "두부",
+            "amount": "200",
+            "unit": "g",
+            "preparation": null,
+            "optional": false,
+            "originalText": "두부 200g",
+            "confidence": 0.97,
+            "evidenceIds": [
+              "e-ingredient"
+            ]
+          }
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "instruction": "팬에서 5분 졸이기",
+        "durationSeconds": 300,
+        "temperature": null,
+        "evidenceIds": [
+          "e-step"
+        ]
+      }
+    ],
+    "facts": [
+      {
+        "label": "기준 인분",
+        "value": "2인분",
+        "confidence": 0.9,
+        "evidenceIds": [
+          "e-title"
+        ]
+      }
+    ],
+    "conflicts": [],
+    "warnings": []
+  },
+  "analysisRunId": "analysis-synthetic-recipe"
+}

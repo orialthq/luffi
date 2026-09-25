@@ -21,6 +21,33 @@ enum AnalysisRunStatus { succeeded, failed }
 
 enum CaptureAnalysisMode { instant, batch }
 
+/// A reviewed capture's explicit, durable request to join the common kernel.
+/// Pending also covers an ambiguous network response: the same request is
+/// replayed until the server returns its idempotent receipt.
+enum ReviewedCaptureImportStatus { pending, synced }
+
+final class ReviewedCaptureImport {
+  const ReviewedCaptureImport({
+    required this.request,
+    required this.status,
+    this.sourceId,
+  });
+
+  /// The complete request is frozen when the review is saved. Later analysis
+  /// spelling changes must not change the hash behind its importId on retry.
+  final Map<String, Object?> request;
+  final ReviewedCaptureImportStatus status;
+  final String? sourceId;
+
+  String get importId => request['importId']! as String;
+
+  ReviewedCaptureImport synced(String sourceId) => ReviewedCaptureImport(
+    request: request,
+    status: ReviewedCaptureImportStatus.synced,
+    sourceId: sourceId,
+  );
+}
+
 enum FieldOrigin { deterministicRule, catalogMatch, user }
 
 enum EvidenceKind { sharedText, url, userInput, ocrText, imageRegion }
@@ -1700,6 +1727,7 @@ final class CaptureRecord {
     this.analysisMode = CaptureAnalysisMode.instant,
     this.batchRequestId,
     this.batchStatus,
+    this.reviewedImport,
   });
 
   final RawCapture raw;
@@ -1714,6 +1742,7 @@ final class CaptureRecord {
   final CaptureAnalysisMode analysisMode;
   final String? batchRequestId;
   final String? batchStatus;
+  final ReviewedCaptureImport? reviewedImport;
 
   /// The tags the reader settled on, when they have touched them.
   ///
@@ -1764,6 +1793,7 @@ final class CaptureRecord {
     CaptureAnalysisMode? analysisMode,
     String? batchRequestId,
     String? batchStatus,
+    ReviewedCaptureImport? reviewedImport,
     bool clearBatchRequest = false,
   }) {
     return CaptureRecord(
@@ -1779,6 +1809,7 @@ final class CaptureRecord {
           ? null
           : batchRequestId ?? this.batchRequestId,
       batchStatus: clearBatchRequest ? null : batchStatus ?? this.batchStatus,
+      reviewedImport: reviewedImport ?? this.reviewedImport,
     );
   }
 }

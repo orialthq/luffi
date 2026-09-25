@@ -18,6 +18,54 @@ abstract interface class AppSnapshotStore {
   });
 }
 
+/// Added only to stores that can save capture removal and its server cleanup
+/// intent in one native snapshot write. Existing test stores remain usable for
+/// flows without reviewed imports.
+abstract interface class ReviewedSourceDeletionOutboxStore {
+  Future<List<PendingReviewedSourceDeletion>> loadPendingSourceDeletions();
+
+  Future<void> saveWithPendingSourceDeletions(
+    List<PersistedCapture> captures, {
+    required List<PendingReviewedSourceDeletion> pendingSourceDeletions,
+    Map<String, List<String>> tagSenses,
+  });
+}
+
+final class PendingReviewedSourceDeletion {
+  const PendingReviewedSourceDeletion({
+    required this.importId,
+    required this.commandId,
+  });
+
+  final String importId;
+  final String commandId;
+
+  factory PendingReviewedSourceDeletion.fromJson(Map<String, Object?> json) {
+    final importId = json['importId'];
+    final commandId = json['commandId'];
+    if (importId is! String ||
+        importId.isEmpty ||
+        commandId is! String ||
+        commandId.isEmpty ||
+        json.keys.any(
+          (key) => !const {'importId', 'commandId'}.contains(key),
+        )) {
+      throw const FormatException(
+        'Pending reviewed source deletion is invalid.',
+      );
+    }
+    return PendingReviewedSourceDeletion(
+      importId: importId,
+      commandId: commandId,
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    'importId': importId,
+    'commandId': commandId,
+  };
+}
+
 abstract final class _AnalysisRunCodec {
   static Map<String, Object?> toJson(AnalysisRun analysis) {
     return {
@@ -226,7 +274,8 @@ abstract final class _AnalysisRunCodec {
   }
 }
 
-final class MethodChannelAppSnapshotStore implements AppSnapshotStore {
+final class MethodChannelAppSnapshotStore
+    implements AppSnapshotStore, ReviewedSourceDeletionOutboxStore {
   const MethodChannelAppSnapshotStore();
 
   static const _channel = MethodChannel(
@@ -252,13 +301,37 @@ final class MethodChannelAppSnapshotStore implements AppSnapshotStore {
   }
 
   @override
+  Future<List<PendingReviewedSourceDeletion>>
+  loadPendingSourceDeletions() async {
+    final snapshot = await _channel.invokeMethod<String>('loadAppSnapshot');
+    return snapshot == null || snapshot.isEmpty
+        ? const []
+        : AppSnapshotCodec.decodePendingSourceDeletions(snapshot);
+  }
+
+  @override
   Future<void> save(
     List<PersistedCapture> captures, {
+    Map<String, List<String>> tagSenses = const {},
+  }) => saveWithPendingSourceDeletions(
+    captures,
+    pendingSourceDeletions: const [],
+    tagSenses: tagSenses,
+  );
+
+  @override
+  Future<void> saveWithPendingSourceDeletions(
+    List<PersistedCapture> captures, {
+    required List<PendingReviewedSourceDeletion> pendingSourceDeletions,
     Map<String, List<String>> tagSenses = const {},
   }) async {
     final saved = await _channel.invokeMethod<bool>(
       'saveAppSnapshot',
-      AppSnapshotCodec.encode(captures, tagSenses: tagSenses),
+      AppSnapshotCodec.encode(
+        captures,
+        tagSenses: tagSenses,
+        pendingSourceDeletions: pendingSourceDeletions,
+      ),
     );
     if (saved != true) {
       throw StateError('The app snapshot was not saved.');
@@ -266,7 +339,8 @@ final class MethodChannelAppSnapshotStore implements AppSnapshotStore {
   }
 }
 
-final class InMemoryAppSnapshotStore implements AppSnapshotStore {
+final class InMemoryAppSnapshotStore
+    implements AppSnapshotStore, ReviewedSourceDeletionOutboxStore {
   String? _snapshot;
 
   String? get snapshot => _snapshot;
@@ -286,25 +360,54 @@ final class InMemoryAppSnapshotStore implements AppSnapshotStore {
   }
 
   @override
+  Future<List<PendingReviewedSourceDeletion>>
+  loadPendingSourceDeletions() async {
+    final snapshot = _snapshot;
+    return snapshot == null
+        ? const []
+        : AppSnapshotCodec.decodePendingSourceDeletions(snapshot);
+  }
+
+  @override
   Future<void> save(
     List<PersistedCapture> captures, {
     Map<String, List<String>> tagSenses = const {},
+  }) => saveWithPendingSourceDeletions(
+    captures,
+    pendingSourceDeletions: const [],
+    tagSenses: tagSenses,
+  );
+
+  @override
+  Future<void> saveWithPendingSourceDeletions(
+    List<PersistedCapture> captures, {
+    required List<PendingReviewedSourceDeletion> pendingSourceDeletions,
+    Map<String, List<String>> tagSenses = const {},
   }) async {
-    _snapshot = AppSnapshotCodec.encode(captures, tagSenses: tagSenses);
+    _snapshot = AppSnapshotCodec.encode(
+      captures,
+      tagSenses: tagSenses,
+      pendingSourceDeletions: pendingSourceDeletions,
+    );
   }
 }
 
 abstract final class AppSnapshotCodec {
-  static const schemaVersion = 5;
+  static const schemaVersion = 6;
 
   static String encode(
     List<PersistedCapture> captures, {
     Map<String, List<String>> tagSenses = const {},
+    List<PendingReviewedSourceDeletion> pendingSourceDeletions = const [],
   }) {
     return jsonEncode({
       'schemaVersion': schemaVersion,
       'captures': captures.map((capture) => capture.toJson()).toList(),
       if (tagSenses.isNotEmpty) 'tagSenses': tagSenses,
+      if (pendingSourceDeletions.isNotEmpty)
+        'pendingSourceDeletions': [
+          for (final deletion in pendingSourceDeletions) deletion.toJson(),
+        ],
     });
   }
 
@@ -318,6 +421,7 @@ abstract final class AppSnapshotCodec {
         decodedVersion != 2 &&
         decodedVersion != 3 &&
         decodedVersion != 4 &&
+        decodedVersion != 5 &&
         decodedVersion != schemaVersion) {
       throw const FormatException('Unsupported app snapshot schema.');
     }
@@ -353,6 +457,27 @@ abstract final class AppSnapshotCodec {
           ),
     };
   }
+
+  static List<PendingReviewedSourceDeletion> decodePendingSourceDeletions(
+    String snapshot,
+  ) {
+    final decoded = jsonDecode(snapshot);
+    if (decoded is! Map<String, Object?>) {
+      throw const FormatException('Unsupported app snapshot schema.');
+    }
+    final raw = decoded['pendingSourceDeletions'];
+    if (raw == null) return const [];
+    if (raw is! List<Object?>) {
+      throw const FormatException('Pending source deletions are invalid.');
+    }
+    return List.unmodifiable([
+      for (final item in raw)
+        if (item is Map<String, Object?>)
+          PendingReviewedSourceDeletion.fromJson(item)
+        else
+          throw const FormatException('Pending source deletion is invalid.'),
+    ]);
+  }
 }
 
 final class PersistedCapture {
@@ -378,6 +503,7 @@ final class PersistedCapture {
     this.analysisMode = CaptureAnalysisMode.instant,
     this.batchRequestId,
     this.batchStatus,
+    this.reviewedImport,
   });
 
   factory PersistedCapture.fromRecord(
@@ -406,6 +532,7 @@ final class PersistedCapture {
       analysisMode: capture.analysisMode,
       batchRequestId: capture.batchRequestId,
       batchStatus: capture.batchStatus,
+      reviewedImport: capture.reviewedImport,
     );
   }
 
@@ -426,6 +553,7 @@ final class PersistedCapture {
     final rawAnalysis = json['analysis'];
     final batchRequestId = json['batchRequestId'];
     final batchStatus = json['batchStatus'];
+    final reviewedImportJson = json['reviewedImport'];
     if ((batchRequestId != null &&
             (batchRequestId is! String ||
                 !RegExp(r'^[a-f0-9]{64}$').hasMatch(batchRequestId))) ||
@@ -490,6 +618,9 @@ final class PersistedCapture {
       ),
       batchRequestId: batchRequestId as String?,
       batchStatus: batchStatus as String?,
+      reviewedImport: reviewedImportJson == null
+          ? null
+          : _reviewedImportFromJson(reviewedImportJson),
     );
   }
 
@@ -516,6 +647,7 @@ final class PersistedCapture {
   final CaptureAnalysisMode analysisMode;
   final String? batchRequestId;
   final String? batchStatus;
+  final ReviewedCaptureImport? reviewedImport;
 
   IncomingShare toIncomingShare() {
     return IncomingShare(
@@ -563,7 +695,39 @@ final class PersistedCapture {
       'analysisMode': analysisMode.name,
       'batchRequestId': batchRequestId,
       'batchStatus': batchStatus,
+      'reviewedImport': reviewedImport == null
+          ? null
+          : {
+              'request': reviewedImport!.request,
+              'status': reviewedImport!.status.name,
+              'sourceId': reviewedImport!.sourceId,
+            },
     };
+  }
+
+  static ReviewedCaptureImport _reviewedImportFromJson(Object? value) {
+    if (value is! Map<String, Object?>) {
+      throw const FormatException('Persisted reviewed import is invalid.');
+    }
+    final request = value['request'];
+    final status = value['status'];
+    final sourceId = value['sourceId'];
+    if (request is! Map<String, Object?> ||
+        request['importId'] is! String ||
+        (request['importId']! as String).isEmpty ||
+        status is! String ||
+        (status != 'pending' && status != 'synced') ||
+        (sourceId != null && (sourceId is! String || sourceId.isEmpty)) ||
+        (status == 'synced' && sourceId == null)) {
+      throw const FormatException('Persisted reviewed import is invalid.');
+    }
+    return ReviewedCaptureImport(
+      request: Map<String, Object?>.unmodifiable(request),
+      status: status == 'synced'
+          ? ReviewedCaptureImportStatus.synced
+          : ReviewedCaptureImportStatus.pending,
+      sourceId: sourceId as String?,
+    );
   }
 
   static T _enumByName<T extends Enum>(

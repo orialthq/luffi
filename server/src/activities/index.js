@@ -210,6 +210,7 @@ function readiness(activity, task) {
   for (const edge of activity.dependencyLinks.filter((entry) => entry.toTaskId === task.id)) {
     const source = lookup(activity.tasks, edge.fromTaskId, "Task");
     const consumed = task.consumedDependencies?.find((entry) => entry.dependencyId === edge.id);
+    if (source.needsReview) reasons.push(`Dependency ${source.id} needs review`);
     if (!(edge.acceptedStatuses ?? ["completed"]).includes(consumed?.executionStatus ?? source.executionStatus)) reasons.push(`Dependency ${source.id} is not satisfied`);
     if (edge.when) {
       const value = field(taskResult(activity, consumed?.resultId ?? source.latestOutputRef)?.value, edge.when.field);
@@ -222,6 +223,7 @@ function readiness(activity, task) {
     const consumed = task.consumedBindings.find((entry) => entry.bindingId === binding.id);
     const result = consumed ? taskResult(activity, consumed.resultId) : boundResult(activity, binding);
     const source = lookup(activity.tasks, binding.sourceTaskId, "Task");
+    if (source.needsReview) reasons.push(`Source ${source.id} needs review`);
     if (!(binding.acceptedStatuses ?? ["completed"]).includes(source.executionStatus)) reasons.push(`Source ${source.id} is not complete`);
     const value = field(result?.value, binding.outputKey);
     if (value === undefined) reasons.push(`Input ${binding.inputKey} is missing`);
