@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 
 // A single-process durable adapter for local development. The kernel depends
 // only on snapshot()/transact(), so a transactional database can replace it.
-export function createJsonStateStore({ filePath, initialState }) {
+export function createJsonStateStore({ filePath, initialState, fsApi = fs }) {
   if (typeof filePath !== "string" || filePath.length === 0) {
     throw new TypeError("filePath is required");
   }
@@ -19,7 +19,7 @@ export function createJsonStateStore({ filePath, initialState }) {
   async function load() {
     if (!loaded) {
       try {
-        current = JSON.parse(await fs.readFile(filePath, "utf8"));
+        current = JSON.parse(await fsApi.readFile(filePath, "utf8"));
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
         current = initialState();
@@ -32,28 +32,28 @@ export function createJsonStateStore({ filePath, initialState }) {
 
   async function persist(next) {
     const folder = dirname(filePath);
-    await fs.mkdir(folder, { recursive: true, mode: 0o700 });
+    await fsApi.mkdir(folder, { recursive: true, mode: 0o700 });
     const temp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
     let renamed = false;
     try {
-      const handle = await fs.open(temp, "wx", 0o600);
+      const handle = await fsApi.open(temp, "wx", 0o600);
       try {
         await handle.writeFile(JSON.stringify(next), "utf8");
         await handle.sync();
       } finally {
         await handle.close();
       }
-      await fs.rename(temp, filePath);
+      await fsApi.rename(temp, filePath);
       renamed = true;
       current = structuredClone(next);
-      const directory = await fs.open(folder, "r");
+      const directory = await fsApi.open(folder, "r");
       try {
         await directory.sync();
       } finally {
         await directory.close();
       }
     } finally {
-      if (!renamed) await fs.rm(temp, { force: true });
+      if (!renamed) await fsApi.rm(temp, { force: true });
     }
   }
 

@@ -41,6 +41,26 @@ test("rejects duplicate stable ids, unregistered capabilities and incompatible b
   rejects(() => validatePlanDraft({ tasks: [task("a", { outputSchema: { type: "string" } }), task("b", { inputSchema: { type: "object", properties: { x: { type: "number" } } } })], dataBindings: [{ id: "bad", sourceTaskId: "a", targetTaskId: "b", inputKey: "x" }] }), "INVALID_PLAN");
 });
 
+test("plan completion policies cannot mark unfinished required tasks complete", () => {
+  for (const allowedTerminalStatuses of [[], ["not_started"], ["in_progress"], ["waiting"], ["completed", "not_started"]]) {
+    rejects(() => validatePlanDraft({ tasks: [task("a", { completionPolicy: { allowedTerminalStatuses } })] }), "INVALID_PLAN");
+  }
+  const s = session({ tasks: [task("a", { completionPolicy: { allowedTerminalStatuses: ["completed", "skipped"] } })] });
+  rejects(() => s.run("activity.complete", { goalConfirmed: true }), "TASK_BLOCKED");
+  s.run("task.transition", { taskId: "a", to: "skipped" });
+  s.run("activity.complete", { goalConfirmed: true });
+  assert.equal(s.board.lifecycle, "completed");
+});
+
+test("bindings must name declared source outputs and target inputs", () => {
+  const source = task("source", { outputSchema: { type: "object", properties: { result: { type: "string" } } } });
+  const target = task("target", { inputSchema: { type: "object", properties: { selected: { type: "string" } } } });
+  const binding = { id: "bound", sourceTaskId: "source", targetTaskId: "target", outputKey: "result", inputKey: "selected" };
+  assert.equal(validatePlanDraft({ tasks: [source, target], dataBindings: [binding] }).valid, true);
+  rejects(() => validatePlanDraft({ tasks: [source, target], dataBindings: [{ ...binding, outputKey: "absent" }] }), "INVALID_PLAN");
+  rejects(() => validatePlanDraft({ tasks: [source, target], dataBindings: [{ ...binding, inputKey: "absent" }] }), "INVALID_PLAN");
+});
+
 test("activity revisions reject stale commands atomically", () => {
   const s = session({ tasks: [task("a")] }); const before = JSON.stringify(s.state);
   rejects(() => s.run("task.transition", { taskId: "a", to: "completed" }, { expectedRevision: 0 }), "REVISION_CONFLICT");
@@ -74,6 +94,17 @@ test("output schema is enforced and blocked transition leaves no result behind",
   rejects(() => s.run("task.transition", { taskId: "observe", to: "completed", output: { missing: "tofu" } }), "INVALID_OUTPUT");
   assert.equal(JSON.stringify(s.state), before);
   rejects(() => s.run("task.transition", { taskId: "observe", to: "completed" }), "INVALID_OUTPUT");
+});
+
+test("inline task output cannot be recorded by a non-completion transition", () => {
+  const s = session({ tasks: [task("a", { outputSchema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } })] });
+  const before = JSON.stringify(s.state);
+  for (const to of ["in_progress", "waiting", "skipped", "canceled"]) {
+    rejects(() => s.run("task.transition", { taskId: "a", to, output: { answer: "injected" } }), "INVALID_TRANSITION");
+    assert.equal(JSON.stringify(s.state), before);
+  }
+  s.run("task.transition", { taskId: "a", to: "completed", output: { answer: "confirmed" } });
+  assert.equal(s.board.tasks[0].latestOutputRef !== null, true);
 });
 
 test("result versions are immutable and running consumers preserve exact consumed results", () => {
@@ -120,6 +151,29 @@ test("patch checks plan, task, knowledge versions and protects pinned input", ()
   rejects(() => s.run("plan.applyPatch", { basePlanRevision: 1, expectedTaskRevisions: { a: 0 }, operations: [] }), "REVISION_CONFLICT");
   rejects(() => s.run("plan.applyPatch", { basePlanRevision: 1, expectedKnowledgeDependencies: ["fact-1"], operations: [] }), "INVALID_PLAN");
   rejects(() => s.run("plan.applyPatch", { basePlanRevision: 1, operations: [{ type: "updateTaskInput", taskId: "a", inputs: { color: "blue" } }] }), "PROTECTED_FIELD");
+});
+
+test("patch dependency validator receives the owning activity ID", () => {
+  const calls = [];
+  const s = session({ tasks: [task("a")] }, { validateKnowledgeDependencies: (dependencies, activityId) => {
+    calls.push({ dependencies, activityId });
+    return true;
+  } });
+  s.run("plan.applyPatch", { basePlanRevision: 1, expectedKnowledgeDependencies: ["fact-1"], operations: [] });
+  assert.deepEqual(calls, [{ dependencies: ["fact-1"], activityId: "activity-1" }]);
+});
+
+test("activity and reminder timestamps reject impossible dates and unsupported precision", () => {
+  for (const now of ["2026-02-30T12:00:00Z", "2026-02-29T12:00:00Z", "2026-09-25T12:00:00+15:00", "2026-09-25T12:00:00.1234Z"]) {
+    rejects(() => applyActivityCommand(createActivityState(), {
+      commandId: "create", ownerId: "owner-1", activityId: "a", expectedRevision: 0,
+      type: "activity.create", payload: { planDraft: { tasks: [] } },
+    }, { now }), "INVALID_INPUT");
+  }
+  const s = session({ tasks: [task("a")] });
+  rejects(() => s.run("reminder.schedule", { id: "bad", taskId: "a", dueAt: "2026-02-30T12:00:00Z", timeZone: "Asia/Seoul" }), "INVALID_INPUT");
+  s.run("reminder.schedule", { id: "leap", taskId: "a", dueAt: "2024-02-29T12:00:00Z", timeZone: "Asia/Seoul" });
+  assert.equal(s.board.reminders[0].id, "leap");
 });
 
 test("user artifact edits are preserved from subsequent generated replacements", () => {

@@ -21,6 +21,8 @@
 
 TaskBoard는 Activity 읽기 모델이다. 화면 순서가 작업 ID나 실행 순서가 아니다. 작업은 `activityId + taskId`로 식별하고, 선행조건/입출력 바인딩이 실행 DAG를 정의한다. TaskResult는 버전별로 남으며 완료한 작업의 소비 결과를 나중의 새 결과로 몰래 교체하지 않는다. 실행 상태, 진행 가능 여부, 분야 상태, 반복·알림 상태는 서로 다른 값이다.
 
+Flutter 목록은 요약 API를 페이지별로 읽고, 사용자가 활동을 열 때만 전체 보드를 요청한다. 기존 `/boards` 전체 목록은 개발 호환 경로이며 결과 이력까지 모두 실어 보내므로 활동이 늘어날수록 응답이 커진다. 커서 조회는 ID 순서이며 조회 사이 변경에 대한 고정 스냅샷은 제공하지 않는다.
+
 ## 개발 서버에서 사용
 
 새 API는 기존 분석 API와 별도로 Bearer 인증을 요구한다. `LUFFI_KERNEL_OWNER_ID`는 현재 **단일 개발 사용자**의 서버 측 소유자이며 요청 본문이 이를 바꿀 수 없다. 길이 32자 이상의 임의 토큰을 서버 환경변수 `LUFFI_KERNEL_TOKEN`으로 제공한다. 토큰이 없으면 새 경로는 503이고 기존 분석 API는 그대로 동작한다. 토큰을 설정했는데 길이가 부족하거나 소유자가 없으면 서버 시작 단계에서 오류가 난다. 상태 파일의 기본 위치는 Git에서 제외된 `server/data/common-kernel.json`이다. `LUFFI_KERNEL_STATE_PATH`로 변경할 수 있다.
@@ -31,6 +33,7 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | --- | --- |
 | `GET /v1/kernel/contracts` | 커널·팩·capability·renderer 버전 |
 | `GET /v1/kernel/boards`, `/boards/{activityId}` | Activity 보드 읽기 모델 |
+| `GET /v1/kernel/board-summaries?limit=20&cursor=...` | ID 순서의 가벼운 Activity 요약 목록. 한 페이지 최대 100개, `nextCursor`로 이어 읽기 |
 | `POST /v1/kernel/activities/commands` | ID·expectedRevision이 있는 작업·활동 명령 |
 | `POST /v1/kernel/activities/run-task` | 순수 시스템 capability의 입력 검사·실행·결과 저장·완료를 한 트랜잭션에서 처리 |
 | `POST /v1/kernel/knowledge/commands` | Source/Entity/Evidence/Assertion/Identity 명령 |

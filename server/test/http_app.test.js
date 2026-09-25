@@ -371,6 +371,91 @@ test("normalizes invalid JSON and content type errors", async (t) => {
     (await invalidType.json()).error.code,
     "UNSUPPORTED_CONTENT_TYPE",
   );
+
+  const jsonpType = await fetch(`${baseUrl}/v1/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/jsonp" },
+    body: JSON.stringify(makeValidRequest()),
+  });
+  assert.equal(jsonpType.status, 415);
+
+  const charsetType = await fetch(`${baseUrl}/v1/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "Application/JSON; charset=utf-8" },
+    body: JSON.stringify(makeValidRequest()),
+  });
+  assert.equal(charsetType.status, 200);
+});
+
+test("kernel routes require their full service contract at server construction", () => {
+  assert.throws(() => createHttpServer({
+    analysisService: { async analyze() { return makeValidAnalysis(); } },
+    kernelService: {
+      async activityCommand() {},
+      async knowledgeCommand() {},
+    },
+    kernelToken: "t".repeat(32),
+  }), /every route method/);
+});
+
+test("kernel HTTP routes forward each request to its declared service method", async (t) => {
+  const postRoutes = [
+    ["/activities/commands", "activityCommand"],
+    ["/activities/run-task", "runTask"],
+    ["/planning/proposals", "proposePlan"],
+    ["/planning/accept", "acceptProposal"],
+    ["/knowledge/commands", "knowledgeCommand"],
+    ["/knowledge/query", "queryKnowledge"],
+    ["/knowledge/resolve", "resolveKnowledge"],
+    ["/knowledge/search", "searchKnowledge"],
+    ["/knowledge/context", "createContext"],
+    ["/knowledge/watch", "watchContext"],
+    ["/ingestion/reviewed-capture", "importReviewedCapture"],
+    ["/domains/execute", "executeCapability"],
+    ["/resources/commands", "resourceCommand"],
+    ["/resources/availability", "resourceAvailability"],
+  ];
+  const calls = [];
+  const kernelService = Object.fromEntries(postRoutes.map(([, method]) => [method,
+    async (input) => {
+      calls.push([method, input]);
+      return { method, input };
+    },
+  ]));
+  kernelService.contracts = async () => ({ method: "contracts" });
+  kernelService.listBoards = async () => ["board"];
+  kernelService.listBoardSummaries = async (options) => ({ method: "listBoardSummaries", options });
+  kernelService.listResources = async () => ["resource"];
+  kernelService.getBoard = async (activityId) => ({ method: "getBoard", activityId });
+  const token = "t".repeat(32);
+  const baseUrl = await startServer(t, { kernelService, kernelToken: token });
+  const authorization = { Authorization: `Bearer ${token}` };
+
+  for (const [path, method] of postRoutes) {
+    const input = { route: path };
+    const response = await fetch(`${baseUrl}/v1/kernel${path}`, {
+      method: "POST",
+      headers: { ...authorization, "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    assert.equal(response.status, 200, path);
+    assert.deepEqual(await response.json(), { method, input }, path);
+  }
+  assert.deepEqual(calls, postRoutes.map(([path, method]) => [method, { route: path }]));
+
+  for (const [path, expected] of [
+    ["/contracts", { method: "contracts" }],
+    ["/boards", { boards: ["board"] }],
+    ["/board-summaries?limit=2&cursor=previous", { method: "listBoardSummaries",
+      options: { limit: 2, cursor: "previous" } }],
+    ["/resources", { resources: ["resource"] }],
+    ["/boards/summaries", { method: "getBoard", activityId: "summaries" }],
+    ["/boards/meal%20plan", { method: "getBoard", activityId: "meal plan" }],
+  ]) {
+    const response = await fetch(`${baseUrl}/v1/kernel${path}`, { headers: authorization });
+    assert.equal(response.status, 200, path);
+    assert.deepEqual(await response.json(), expected, path);
+  }
 });
 
 test("maps upstream rate limits to a stable app error", async (t) => {

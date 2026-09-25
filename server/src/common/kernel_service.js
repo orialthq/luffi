@@ -73,6 +73,13 @@ function safeId(value, name) {
   return value;
 }
 
+function requestObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AppError("INVALID_REQUEST", "요청 형식이 올바르지 않아요.", { httpStatus: 400 });
+  }
+  return value;
+}
+
 /** Coordinates pure domain kernels within one durable state-store transaction.
  * The JSON adapter is single-process development storage. A production adapter
  * must provide the same atomic snapshot/transact contract backed by SQL. */
@@ -226,12 +233,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         validateEvidenceReferences(state, result.value);
         return true;
       },
-      validateKnowledgeDependencies(dependencies) {
+      validateKnowledgeDependencies(dependencies, activityId) {
+        if (!Array.isArray(dependencies)) return false;
         return dependencies.every((item) => {
           if (typeof item?.contextId !== "string") return false;
           try {
             const context = issuedContext(state, item.contextId);
-            return validateKnowledgeContext(state.knowledge, context, { predicates }).valid;
+            validateContext(state, context, { activityId, requireActivityBinding: true });
+            return true;
           } catch { return false; }
         });
       },
@@ -271,11 +280,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         (context.retrieval && !validateRetrievalResult(state.knowledge, context.retrieval, { registry: predicates }).valid)) {
       throw new AppError("CONTEXT_STALE", "계획의 근거가 변경됐어요.", { httpStatus: 409 });
     }
-    if ((context.resourceReads ?? []).some(({ resourceId, revision, status }) => {
-      const resource = state.resources.resources.find((item) => item.ownerId === ownerId && item.id === resourceId);
-      return !resource || resource.revision !== revision ||
-        projectResourceAvailability(state.resources, { ownerId, resourceId }).status !== status;
-    })) {
+    if (hasStaleResourceReads(state, context.resourceReads)) {
       throw new AppError("CONTEXT_STALE", "자원 상태가 변경돼 맥락을 새로 확인해야 해요.", { httpStatus: 409 });
     }
     if (activityId != null) {
@@ -284,6 +289,30 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (context.activityId != null && context.activityRevision !== board(state, activityId).revision)) {
         throw new AppError("CONTEXT_STALE", "활동이 변경돼 맥락을 새로 확인해야 해요.", { httpStatus: 409 });
       }
+    }
+  }
+
+  function hasStaleResourceReads(state, reads = []) {
+    return reads.some(({ resourceId, revision, status }) => {
+      const resource = state.resources.resources.find((item) => item.ownerId === ownerId && item.id === resourceId);
+      return !resource || resource.revision !== revision ||
+        projectResourceAvailability(state.resources, { ownerId, resourceId }).status !== status;
+    });
+  }
+
+  function activityContextIsStale(state, activityId, current = board(state, activityId)) {
+    const watched = state.knowledge.subscriptions.find((item) =>
+      item.ownerId === ownerId && item.consumerId === activityId);
+    return current.pendingChanges.length > 0 ||
+      (watched && !validateKnowledgeContext(state.knowledge, watched.context, { predicates }).valid) ||
+      (state.retrievalWatches[activityId] && !validateRetrievalResult(state.knowledge,
+        state.retrievalWatches[activityId], { registry: predicates }).valid) ||
+      hasStaleResourceReads(state, state.resourceWatches[activityId]);
+  }
+
+  function assertActivityContextCurrent(state, activityId, current) {
+    if (activityContextIsStale(state, activityId, current)) {
+      throw new AppError("CONTEXT_STALE", "근거가 변경돼 작업을 재검토해야 해요.", { httpStatus: 409 });
     }
   }
 
@@ -350,6 +379,44 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           .map((activity) => board(state, activity.id)));
       } catch (error) { throw toHttpError(error); }
     },
+    async listBoardSummaries(options = {}) {
+      try {
+        const { limit = 20, cursor = null } = requestObject(options);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100 ||
+            (cursor !== null && (typeof cursor !== "string" || !cursor.trim()))) {
+          throw new AppError("INVALID_REQUEST", "목록 조회 범위가 올바르지 않아요.", { httpStatus: 400 });
+        }
+        return await read((state) => {
+          const ids = Object.values(state.activities.activities)
+            .filter((activity) => activity.ownerId === ownerId && (cursor === null || activity.id > cursor))
+            .map((activity) => activity.id).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+          const pageIds = ids.slice(0, limit);
+          const pageSet = new Set(pageIds);
+          const pendingChanges = new Map();
+          const pendingProposals = new Map();
+          for (const event of state.reviewEvents) {
+            if (pageSet.has(event.activityId)) {
+              pendingChanges.set(event.activityId, (pendingChanges.get(event.activityId) ?? 0) + 1);
+            }
+          }
+          for (const proposal of Object.values(state.proposals)) {
+            if (proposal.ownerId === ownerId && proposal.status === "pending" && pageSet.has(proposal.activityId)) {
+              pendingProposals.set(proposal.activityId, (pendingProposals.get(proposal.activityId) ?? 0) + 1);
+            }
+          }
+          const boards = pageIds.map((id) => {
+            const activity = state.activities.activities[id];
+            const readyTaskCount = getActivityBoard(state.activities, id, { ownerId }).nextActions.length;
+            return { id, title: activity.title, goal: activity.goal, lifecycle: activity.lifecycle,
+              revision: activity.revision, currentPlanRevision: activity.currentPlanRevision,
+              taskCount: activity.tasks.length, readyTaskCount,
+              pendingChangeCount: pendingChanges.get(id) ?? 0,
+              pendingProposalCount: pendingProposals.get(id) ?? 0 };
+          });
+          return { boards, nextCursor: ids.length > limit ? pageIds.at(-1) : null };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
     async getBoard(activityId) {
       try { return await read((state) => board(state, activityId)); }
       catch (error) { throw toHttpError(error); }
@@ -371,17 +438,29 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             const task = current.tasks.find((item) => item.id === command.payload?.taskId);
             if (!task) throw new AppError("TASK_NOT_FOUND", "작업을 찾을 수 없어요.", { httpStatus: 404 });
             const spec = registry.getCapability(task.capabilityId);
-            if ((command.type === "task.recordResult" || command.payload?.to === "completed") &&
+            const writesOutput = command.type === "task.recordResult" ||
+              Object.hasOwn(command.payload ?? {}, "output");
+            if ((writesOutput || command.payload?.to === "completed") &&
                 (spec.actor === "system" || spec.effect === "external_write")) {
               throw new AppError("TASK_EXECUTION_RESTRICTED", "이 작업은 등록된 실행기를 통해서만 완료할 수 있어요.", { httpStatus: 403 });
+            }
+            if (writesOutput ||
+                ["in_progress", "completed"].includes(command.payload?.to)) {
+              assertActivityContextCurrent(state, command.activityId, current);
             }
           }
           if (!applied.replayed && command.contextId) {
             const context = issuedContext(state, command.contextId);
             const activityId = command.activityId ?? applied.result.activityId;
-            validateContext(state, context, { activityId: command.type === "activity.create" ? null : activityId });
+            const createsActivity = ["activity.create", "recurrence.materialize"].includes(command.type);
+            if (createsActivity && context.activityId != null) {
+              throw new AppError("CONTEXT_STALE", "다른 활동의 맥락을 새 활동에 사용할 수 없어요.", { httpStatus: 409 });
+            }
+            validateContext(state, context, { activityId: createsActivity ? null : activityId });
             registerContextWatch(state, activityId, context);
-            state.reviewEvents = state.reviewEvents.filter((item) => item.activityId !== activityId);
+            if (["plan.applyDraft", "plan.applyPatch"].includes(command.type)) {
+              state.reviewEvents = state.reviewEvents.filter((item) => item.activityId !== activityId);
+            }
           }
           state.activities = applied.state;
           if (!applied.replayed && ["activity.create", "recurrence.materialize"].includes(command.type)) {
@@ -412,8 +491,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         });
       } catch (error) { throw toHttpError(error); }
     },
-    async proposePlan({ activityId, contextId, kind, plan, run = {} }) {
+    async proposePlan(request) {
       try {
+        const { activityId, contextId, kind, plan, run = {} } = requestObject(request);
+        safeId(activityId, "activityId");
+        safeId(contextId, "contextId");
         return await store.transact((state) => {
           assertState(state);
           if (!["draft", "patch"].includes(kind) || !plan || typeof plan !== "object" || Array.isArray(plan)) {
@@ -441,8 +523,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         });
       } catch (error) { throw toHttpError(error); }
     },
-    async acceptProposal({ proposalId, commandId }) {
+    async acceptProposal(request) {
       try {
+        const { proposalId, commandId } = requestObject(request);
+        safeId(proposalId, "proposalId");
+        safeId(commandId, "commandId");
         return await store.transact((state) => {
           assertState(state);
           const proposal = state.proposals[proposalId];
@@ -662,8 +747,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }
       catch (error) { throw toHttpError(error); }
     },
-    async watchContext({ activityId, contextId }) {
+    async watchContext(request) {
       try {
+        const { activityId, contextId } = requestObject(request);
+        safeId(activityId, "activityId");
+        safeId(contextId, "contextId");
         return await store.transact((state) => {
           assertState(state);
           board(state, activityId); // Checks ownership before saving a watch.
@@ -681,8 +769,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         });
       } catch (error) { throw toHttpError(error); }
     },
-    async executeCapability({ id, input }) {
-      try { return { output: registry.execute(id, input) }; }
+    async executeCapability(request) {
+      try {
+        const { id, input } = requestObject(request);
+        safeId(id, "id");
+        return { output: registry.execute(id, input) };
+      }
       catch (error) { throw toHttpError(error); }
     },
     async runTask(input) {
@@ -708,19 +800,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           }
           const current = board(state, activityId);
           if (current.revision !== expectedRevision) throw new AppError("REVISION_CONFLICT", "활동이 변경됐어요.", { httpStatus: 409 });
-          const watched = state.knowledge.subscriptions.find((item) =>
-            item.ownerId === ownerId && item.consumerId === activityId);
-          if (current.pendingChanges.length ||
-              (watched && !validateKnowledgeContext(state.knowledge, watched.context, { predicates }).valid) ||
-              (state.retrievalWatches[activityId] && !validateRetrievalResult(state.knowledge,
-                state.retrievalWatches[activityId], { registry: predicates }).valid) ||
-              (state.resourceWatches[activityId] ?? []).some(({ resourceId, revision, status }) => {
-                const resource = state.resources.resources.find((item) => item.ownerId === ownerId && item.id === resourceId);
-                return !resource || resource.revision !== revision ||
-                  projectResourceAvailability(state.resources, { ownerId, resourceId }).status !== status;
-              })) {
-            throw new AppError("CONTEXT_STALE", "지식 근거가 변경돼 작업을 재검토해야 해요.", { httpStatus: 409 });
-          }
+          assertActivityContextCurrent(state, activityId, current);
           const task = current.tasks.find((item) => item.id === taskId);
           if (!task) throw new AppError("TASK_NOT_FOUND", "작업을 찾을 수 없어요.", { httpStatus: 404 });
           if (task.readiness.status !== "ready" || task.executionStatus !== "not_started") {

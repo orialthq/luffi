@@ -70,6 +70,18 @@ test("knowledge commands are immutable, serializable, idempotent, and fail atomi
   assert.deepEqual(f.state, before);
 });
 
+test("knowledge timestamps reject impossible dates without changing the state", () => {
+  const f = fixture();
+  const before = structuredClone(f.state);
+  for (const observedAt of ["2026-02-30T12:00:00Z", "2026-02-29T12:00:00Z", "2026-09-25T12:00:00+15:00", "2026-09-25T12:00:00.1234Z"]) {
+    assert.throws(() => f.apply("assertion.add", f.assertion("invalid", "present", { observedAt })), { code: "INVALID_KNOWLEDGE_INPUT" });
+    assert.deepEqual(f.state, before);
+  }
+  assert.throws(() => f.context({ atTime: "2026-02-30T12:00:00Z" }), { code: "INVALID_KNOWLEDGE_INPUT" });
+  f.apply("assertion.add", f.assertion("leap", "present", { observedAt: "2024-02-29T12:00:00Z" }));
+  assert.equal(queryKnowledge(f.state, { ownerId: "alice", subjectId: "tofu" })[0].observedAt, "2024-02-29T12:00:00.000Z");
+});
+
 test("only registered and typed predicates with real evidence can be written", () => {
   const f = fixture();
   for (const replacement of [

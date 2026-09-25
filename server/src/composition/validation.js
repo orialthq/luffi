@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { AppError } from "../errors.js";
+import { normalizeIsoTimestamp } from "../common/iso_time.js";
 
 export class ResourceError extends AppError {
   constructor(code, message) {
@@ -42,17 +43,9 @@ export function oneOf(value, allowed, label) {
   return value;
 }
 export function date(value, label) {
-  const parts = typeof value === "string" && /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
-  if (!parts) fail("INVALID_RESOURCE_INPUT", `${label} must be an ISO timestamp with timezone and millisecond or coarser precision`);
-  const [, year, month, day, hour, minute, second, , zone, , zoneHour, zoneMinute] = parts;
-  const days = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
-  if (Number(year) < 1970 || Number(month) < 1 || Number(month) > 12 || Number(day) < 1 ||
-      Number(day) > days || Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59 ||
-      (zone !== "Z" && (Number(zoneHour) > 14 || Number(zoneMinute) > 59 || (Number(zoneHour) === 14 && Number(zoneMinute) !== 0))) ||
-      !Number.isFinite(Date.parse(value))) {
-    fail("INVALID_RESOURCE_INPUT", `${label} must be a real timestamp`);
-  }
-  return new Date(value).toISOString();
+  const normalized = normalizeIsoTimestamp(value, { minYear: 1970 });
+  if (!normalized) fail("INVALID_RESOURCE_INPUT", `${label} must be a real ISO timestamp with timezone and millisecond or coarser precision`);
+  return normalized;
 }
 export function nowIso(now) {
   const value = typeof now === "function" ? now() : now;

@@ -22,10 +22,20 @@ void main() {
         request.response.write(
           jsonEncode(switch (request.uri.path) {
             '/v1/kernel/contracts' => {'kernelVersion': 1, 'capabilities': []},
-            '/v1/kernel/boards' => {
+            '/v1/kernel/board-summaries' => {
               'boards': [
-                {'id': 'a'},
+                {
+                  'id': 'a',
+                  'title': '활동',
+                  'lifecycle': 'active',
+                  'revision': 1,
+                  'taskCount': 2,
+                  'readyTaskCount': 1,
+                  'pendingChangeCount': 0,
+                  'pendingProposalCount': 0,
+                },
               ],
+              'nextCursor': null,
             },
             _ => {'id': 'a/b', 'revision': 4},
           }),
@@ -37,7 +47,8 @@ void main() {
         token: 'development-token',
       );
       expect((await client.contracts())['kernelVersion'], 1);
-      expect((await client.listBoards()).single['id'], 'a');
+      expect((await client.listBoardsPage()).boards.single['id'], 'a');
+      expect(requests[1], '/v1/kernel/board-summaries?limit=20');
       expect((await client.getBoard('a/b'))['id'], 'a/b');
       expect(requests.last, '/v1/kernel/boards/a%2Fb');
     },
@@ -134,7 +145,7 @@ void main() {
       addTearDown(() => server.close(force: true));
       server.listen((request) async {
         await request.drain<void>();
-        request.response.write('{"boards":"incorrect"}');
+        request.response.write('{"boards":"incorrect","nextCursor":null}');
         await request.response.close();
       });
       final client = HttpCommonKernelClient(
@@ -142,7 +153,7 @@ void main() {
         token: 'development-token',
       );
       await expectLater(
-        client.listBoards(),
+        client.listBoardsPage(),
         throwsA(
           isA<CommonKernelException>().having(
             (e) => e.code,
@@ -158,5 +169,102 @@ void main() {
     final ids = List.generate(30, (_) => newKernelCommandId());
     expect(ids.toSet().length, 30);
     expect(ids.every((id) => RegExp(r'^[a-f0-9]{32}$').hasMatch(id)), isTrue);
+  });
+
+  test('summary page carries encoded cursor and validates its shape', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      expect(request.uri.path, '/v1/kernel/board-summaries');
+      expect(request.uri.queryParameters, {'limit': '3', 'cursor': 'a/b'});
+      await request.drain<void>();
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode({
+          'boards': [
+            {
+              'id': 'z',
+              'title': '마지막 활동',
+              'lifecycle': 'active',
+              'revision': 2,
+              'taskCount': 1,
+              'readyTaskCount': 1,
+              'pendingChangeCount': 0,
+              'pendingProposalCount': 0,
+            },
+          ],
+          'nextCursor': 'z',
+        }),
+      );
+      await request.response.close();
+    });
+    final client = HttpCommonKernelClient(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      token: 'development-token',
+    );
+    final page = await client.listBoardsPage(limit: 3, cursor: 'a/b');
+    expect(page.boards.single['taskCount'], 1);
+    expect(page.nextCursor, 'z');
+  });
+
+  test('non-JSON HTTP failure keeps its status instead of hiding it', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      await request.drain<void>();
+      request.response.statusCode = 503;
+      request.response.write('<html>unavailable</html>');
+      await request.response.close();
+    });
+    final client = HttpCommonKernelClient(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      token: 'development-token',
+    );
+    await expectLater(
+      client.contracts(),
+      throwsA(
+        isA<CommonKernelException>()
+            .having((error) => error.code, 'code', 'HTTP_ERROR')
+            .having((error) => error.statusCode, 'status', 503),
+      ),
+    );
+  });
+
+  test('deadline also covers a response that keeps streaming', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      await request.drain<void>();
+      request.response.headers.contentType = ContentType.json;
+      for (var i = 0; i < 12; i++) {
+        try {
+          request.response.write(' ');
+          await request.response.flush();
+        } catch (_) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      try {
+        await request.response.close();
+      } catch (_) {
+        // The client closes the connection when its deadline expires.
+      }
+    });
+    final client = HttpCommonKernelClient(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      token: 'development-token',
+      timeout: const Duration(milliseconds: 130),
+    );
+    await expectLater(
+      client.contracts(),
+      throwsA(
+        isA<CommonKernelException>().having(
+          (error) => error.code,
+          'code',
+          'NETWORK_TIMEOUT',
+        ),
+      ),
+    );
   });
 }

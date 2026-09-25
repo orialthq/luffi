@@ -64,6 +64,14 @@ test("candidate lookup preserves duplicate identities, owner isolation, and hone
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
 });
 
+test("retrieval rejects impossible query dates instead of normalizing them", () => {
+  const f = fixture();
+  for (const atTime of ["2026-02-30T12:00:00Z", "2026-09-25T12:00:00+15:00", "2026-09-25T12:00:00.1234Z"]) {
+    assert.throws(() => f.retrieve({ atTime }), { code: "INVALID_RETRIEVAL_QUERY" });
+  }
+  assert.equal(f.retrieve({ atTime: "2024-02-29T12:00:00+09:00" }).atTime, "2024-02-29T03:00:00.000Z");
+});
+
 test("two-hop traversal is bounded, preserves assertion directions, and can cross intermediate types", () => {
   const f = fixture(); recipeGraph(f);
   const outgoing = f.retrieve({ seedEntityIds: ["recipe"], direction: "outgoing" });

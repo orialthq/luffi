@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeIsoTimestamp } from "../common/iso_time.js";
 
 const KINDS = new Set(["observation", "decision", "action", "wait", "milestone"]);
 const TERMINAL = new Set(["completed", "skipped", "canceled"]);
@@ -42,7 +43,7 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 function timestamp(value, label) {
-  if (typeof value !== "string" || !/(Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value))) fail("INVALID_INPUT", `${label} must be an ISO timestamp with timezone`);
+  if (!normalizeIsoTimestamp(value)) fail("INVALID_INPUT", `${label} must be a real ISO timestamp with timezone and millisecond or coarser precision`);
   return value;
 }
 function zone(value) {
@@ -127,6 +128,11 @@ function validateGraph(plan, options = {}) {
   const edges = new Map(plan.tasks.map((task) => [task.id, new Set()]));
   for (const task of plan.tasks) {
     if (!KINDS.has(task.kind)) fail("INVALID_PLAN", `Unknown task kind: ${task.kind}`);
+    if (task.completionPolicy?.allowedTerminalStatuses !== undefined &&
+        (!Array.isArray(task.completionPolicy.allowedTerminalStatuses) || task.completionPolicy.allowedTerminalStatuses.length === 0 ||
+          task.completionPolicy.allowedTerminalStatuses.some((status) => !TERMINAL.has(status)))) {
+      fail("INVALID_PLAN", "allowedTerminalStatuses must contain terminal task statuses");
+    }
     registered(options.capabilities, task.capabilityId, task.capabilityVersion, "capability");
     if (task.rendererKey) registered(options.renderers, task.rendererKey, task.rendererVersion, "renderer");
     validateHook(options.validateTask, [clone(task)], "INVALID_PLAN", "Domain task validation failed");
@@ -152,6 +158,10 @@ function validateGraph(plan, options = {}) {
     bindingSlots.add(key);
     const source = tasks.get(binding.sourceTaskId);
     const target = tasks.get(binding.targetTaskId);
+    if (binding.outputKey && source.outputSchema?.type === "object" && source.outputSchema.properties &&
+        !own(source.outputSchema.properties, binding.outputKey)) fail("INVALID_PLAN", "Binding outputKey is not declared by its source task");
+    if (target.inputSchema?.type === "object" && target.inputSchema.properties &&
+        !own(target.inputSchema.properties, binding.inputKey)) fail("INVALID_PLAN", "Binding inputKey is not declared by its target task");
     const outputSchema = binding.outputKey ? source.outputSchema?.properties?.[binding.outputKey] : source.outputSchema;
     const inputSchema = target.inputSchema?.properties?.[binding.inputKey];
     if (outputSchema?.type && inputSchema?.type && outputSchema.type !== inputSchema.type) fail("INVALID_PLAN", "Binding input/output types are incompatible");
@@ -287,7 +297,7 @@ function applyPatch(activity, patch, options) {
   revision(activity.currentPlanRevision, patch.basePlanRevision, "Plan");
   for (const [taskId, expected] of Object.entries(patch.expectedTaskRevisions ?? {})) revision(lookup(activity.tasks, taskId, "Task").revision, expected, "Task");
   if (patch.expectedKnowledgeDependencies && Object.keys(patch.expectedKnowledgeDependencies).length && !options.validateKnowledgeDependencies) fail("INVALID_PLAN", "Knowledge dependency validator is required");
-  validateHook(options.validateKnowledgeDependencies, [clone(patch.expectedKnowledgeDependencies ?? [])], "REVISION_CONFLICT", "Knowledge dependencies changed");
+  validateHook(options.validateKnowledgeDependencies, [clone(patch.expectedKnowledgeDependencies ?? []), activity.id], "REVISION_CONFLICT", "Knowledge dependencies changed");
   for (const operation of array(patch.operations, "operations")) {
     const type = operation.type ?? operation.op;
     if (type === "addTask") {
@@ -391,6 +401,7 @@ export function applyActivityCommand(state, command, options = {}) {
       if (command.type === "task.recordResult") result = { resultId: recordResult(activity, task, payload, command.commandId, now, options).id };
       else {
         if (!TRANSITIONS[task.executionStatus]?.includes(payload.to)) fail("INVALID_TRANSITION", `Cannot move ${task.executionStatus} to ${payload.to}`);
+        if (own(payload, "output") && payload.to !== "completed") fail("INVALID_TRANSITION", "Inline output is only allowed when completing a task");
         if (["canceled", "skipped"].includes(payload.to) && ["running", "unknown", "succeeded"].includes(task.effectStatus)) fail("INVALID_TRANSITION", "External effects require reconciliation or a separate compensation");
         if (["in_progress", "completed"].includes(payload.to)) {
           const ready = readiness(activity, task);

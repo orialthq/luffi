@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { AppError } from "../errors.js";
+import { normalizeIsoTimestamp } from "../common/iso_time.js";
 import { buildKnowledgeContext, queryKnowledge, validateKnowledgeContext } from "../knowledge/index.js";
 
 const CANDIDATE_BUDGET = 200;
@@ -38,10 +39,9 @@ function strings(value, name, limit = 100) {
   return [...new Set(value.map((item) => text(item, name)))];
 }
 function timestamp(value, name) {
-  if (typeof value !== "string" || !/T.*(?:Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value))) {
-    fail(`${name} must be an ISO timestamp with an explicit timezone`);
-  }
-  return new Date(value).toISOString();
+  const normalized = normalizeIsoTimestamp(value);
+  if (!normalized) fail(`${name} must be a real ISO timestamp with timezone and millisecond or coarser precision`);
+  return normalized;
 }
 function normalizeQuery(query, now) {
   object(query, "query");

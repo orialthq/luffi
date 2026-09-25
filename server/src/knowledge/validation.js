@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { AppError } from "../errors.js";
+import { normalizeIsoTimestamp } from "../common/iso_time.js";
 
 export class KnowledgeError extends AppError {
   constructor(code, message) {
@@ -46,12 +47,9 @@ export function scope(value) {
 
 export function date(value, name, { nullable = false } = {}) {
   if (nullable && value == null) return null;
-  // An explicit timezone is required; machine-local parsing must not change a fact.
-  if (typeof value !== "string" || !/T.*(?:Z|[+-]\d\d:\d\d)$/.test(value) ||
-      !Number.isFinite(Date.parse(value))) {
-    fail("INVALID_KNOWLEDGE_INPUT", `${name} must be an ISO timestamp with timezone`);
-  }
-  return new Date(value).toISOString();
+  const normalized = normalizeIsoTimestamp(value);
+  if (!normalized) fail("INVALID_KNOWLEDGE_INPUT", `${name} must be a real ISO timestamp with timezone and millisecond or coarser precision`);
+  return normalized;
 }
 
 export function nowIso(now) {

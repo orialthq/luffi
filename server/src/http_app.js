@@ -18,6 +18,25 @@ import {
   validateTagSensesRequest,
 } from "./request_validation.js";
 
+const KERNEL_POST_ROUTES = Object.freeze({
+  "/activities/commands": "activityCommand",
+  "/activities/run-task": "runTask",
+  "/planning/proposals": "proposePlan",
+  "/planning/accept": "acceptProposal",
+  "/knowledge/commands": "knowledgeCommand",
+  "/knowledge/query": "queryKnowledge",
+  "/knowledge/resolve": "resolveKnowledge",
+  "/knowledge/search": "searchKnowledge",
+  "/knowledge/context": "createContext",
+  "/knowledge/watch": "watchContext",
+  "/ingestion/reviewed-capture": "importReviewedCapture",
+  "/domains/execute": "executeCapability",
+  "/resources/commands": "resourceCommand",
+  "/resources/availability": "resourceAvailability",
+});
+const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources", "getBoard"];
+const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
+
 export function createHttpServer({
   analysisService,
   batchAnalysisService = null,
@@ -60,10 +79,9 @@ export function createHttpServer({
   if (tagSenseService && typeof tagSenseService.describe !== "function") {
     throw new Error("A tagSenseService must expose describe()");
   }
-  if (kernelService && (typeof kernelService.activityCommand !== "function" ||
-      typeof kernelService.knowledgeCommand !== "function" ||
+  if (kernelService && (KERNEL_METHODS.some((method) => typeof kernelService[method] !== "function") ||
       typeof kernelToken !== "string" || kernelToken.length < 32)) {
-    throw new Error("A kernelService requires command methods and a token of at least 32 characters");
+    throw new Error("A kernelService requires every route method and a token of at least 32 characters");
   }
 
   return createServer(async (request, response) => {
@@ -107,6 +125,13 @@ export function createHttpServer({
           if (request.method !== "GET") throw methodNotAllowed("GET");
           return sendJson(response, 200, { boards: await kernelService.listBoards() });
         }
+        if (route === "/board-summaries") {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          return sendJson(response, 200, await kernelService.listBoardSummaries({
+            limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 20,
+            cursor: url.searchParams.get("cursor"),
+          }));
+        }
         if (route === "/resources") {
           if (request.method !== "GET") throw methodNotAllowed("GET");
           return sendJson(response, 200, { resources: await kernelService.listResources() });
@@ -123,26 +148,10 @@ export function createHttpServer({
         const body = await readJsonBody(request, {
           maxBodyBytes: Math.min(maxBodyBytes, 256 * 1024), timeoutMs: bodyTimeoutMs,
         });
-        const handlers = {
-          "/activities/commands": () => kernelService.activityCommand(body),
-          "/activities/run-task": () => kernelService.runTask(body),
-          "/planning/proposals": () => kernelService.proposePlan(body),
-          "/planning/accept": () => kernelService.acceptProposal(body),
-          "/knowledge/commands": () => kernelService.knowledgeCommand(body),
-          "/knowledge/query": () => kernelService.queryKnowledge(body),
-          "/knowledge/resolve": () => kernelService.resolveKnowledge(body),
-          "/knowledge/search": () => kernelService.searchKnowledge(body),
-          "/knowledge/context": () => kernelService.createContext(body),
-          "/knowledge/watch": () => kernelService.watchContext(body),
-          "/ingestion/reviewed-capture": () => kernelService.importReviewedCapture(body),
-          "/domains/execute": () => kernelService.executeCapability(body),
-          "/resources/commands": () => kernelService.resourceCommand(body),
-          "/resources/availability": () => kernelService.resourceAvailability(body),
-        };
-        if (!Object.hasOwn(handlers, route)) {
+        if (!Object.hasOwn(KERNEL_POST_ROUTES, route)) {
           throw new AppError("NOT_FOUND", "요청한 경로를 찾을 수 없어요.", { httpStatus: 404 });
         }
-        return sendJson(response, 200, await handlers[route]());
+        return sendJson(response, 200, await kernelService[KERNEL_POST_ROUTES[route]](body));
       }
 
       if (url.pathname === "/v1/analyze") {
@@ -418,7 +427,7 @@ function methodNotAllowed(allowedMethod) {
 function assertJsonContentType(contentType) {
   if (
     typeof contentType !== "string" ||
-    !contentType.toLowerCase().startsWith("application/json")
+    contentType.split(";", 1)[0].trim().toLowerCase() !== "application/json"
   ) {
     throw new AppError(
       "UNSUPPORTED_CONTENT_TYPE",
