@@ -1,8 +1,8 @@
-# Trun On iOS 팀원 실행 가이드
+# Luffi iOS 팀원 실행 가이드
 
-저장소: <https://github.com/orialthq/trun-on>
+저장소: <https://github.com/orialthq/luffi>
 
-Trun On은 Flutter로 화면과 도메인 로직을 공유합니다. iOS에서도 스크린샷을
+Luffi는 Flutter로 화면과 도메인 로직을 공유합니다. iOS에서도 스크린샷을
 앱 안에서 가져와 분석·정리까지 확인할 수 있습니다. 다만 iPhone 공유 시트에서
 Trun On으로 보내는 경로는 아직 없어서, 앱을 열고 `콘텐츠 추가` 시트의
 `스크린샷 가져오기`를 써야 합니다.
@@ -49,8 +49,8 @@ xcodebuild -version
 ## 가장 빠른 실행 방법
 
 ```bash
-git clone https://github.com/orialthq/trun-on.git
-cd trun-on
+git clone https://github.com/orialthq/luffi.git
+cd luffi
 git checkout main
 flutter pub get
 flutter analyze --fatal-infos

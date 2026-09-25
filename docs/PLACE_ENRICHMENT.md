@@ -1,6 +1,6 @@
 # 장소 보강 — 축 설계와 측정 기록
 
-저장소: <https://github.com/orialthq/trun-on>
+저장소: <https://github.com/orialthq/luffi>
 
 맛집·카페 캡처에 `예약·대기` 축을 붙이는 파이프라인의 설계와, 그렇게 만든
 근거가 된 측정치입니다. 여기 적힌 숫자는 모두 실제 호출로 재본 것이고, 다시

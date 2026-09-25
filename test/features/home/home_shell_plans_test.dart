@@ -87,6 +87,12 @@ void main() {
       expect(find.byKey(Key('drawer-item-$label')), findsOneWidget);
     }
     expect(find.text('개발 도구'), findsOneWidget);
+    expect(
+      find.byKey(const Key('drawer-item-공통 활동 보드')),
+      const String.fromEnvironment('LUFFI_KERNEL_TOKEN').trim().isEmpty
+          ? findsNothing
+          : findsOneWidget,
+    );
     expect(find.text('콘텐츠 전체 백업(ZIP)'), findsOneWidget);
     expect(find.text('백업 ZIP에서 복원'), findsOneWidget);
     expect(find.text('가져온 콘텐츠 전체 삭제'), findsOneWidget);

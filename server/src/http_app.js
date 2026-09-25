@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import {
   DEFAULT_BODY_TIMEOUT_MS,
@@ -26,6 +26,8 @@ export function createHttpServer({
   recommendationService = null,
   tagMergeService = null,
   tagSenseService = null,
+  kernelService = null,
+  kernelToken = null,
   // Reported by /health so a comparison run can confirm which provider answered
   // rather than inferring it from the labels.
   enrichmentModel = MODEL,
@@ -58,6 +60,11 @@ export function createHttpServer({
   if (tagSenseService && typeof tagSenseService.describe !== "function") {
     throw new Error("A tagSenseService must expose describe()");
   }
+  if (kernelService && (typeof kernelService.activityCommand !== "function" ||
+      typeof kernelService.knowledgeCommand !== "function" ||
+      typeof kernelToken !== "string" || kernelToken.length < 32)) {
+    throw new Error("A kernelService requires command methods and a token of at least 32 characters");
+  }
 
   return createServer(async (request, response) => {
     const requestId = randomUUID();
@@ -83,6 +90,59 @@ export function createHttpServer({
           enrichmentModel,
           ...(analysis === null ? {} : { analysis }),
         });
+      }
+
+      if (url.pathname === "/v1/kernel" || url.pathname.startsWith("/v1/kernel/")) {
+        if (!kernelService) {
+          throw new AppError("KERNEL_NOT_CONFIGURED", "공통 활동 서비스를 사용할 수 없어요.", { httpStatus: 503 });
+        }
+        assertKernelToken(request.headers.authorization, kernelToken);
+        const route = url.pathname.slice("/v1/kernel".length);
+        const boardMatch = /^\/boards\/([^/]+)$/.exec(route);
+        if (route === "/contracts") {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          return sendJson(response, 200, await kernelService.contracts());
+        }
+        if (route === "/boards") {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          return sendJson(response, 200, { boards: await kernelService.listBoards() });
+        }
+        if (route === "/resources") {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          return sendJson(response, 200, { resources: await kernelService.listResources() });
+        }
+        if (boardMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(boardMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.", { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getBoard(activityId));
+        }
+        if (request.method !== "POST") throw methodNotAllowed("POST");
+        assertJsonContentType(request.headers["content-type"]);
+        const body = await readJsonBody(request, {
+          maxBodyBytes: Math.min(maxBodyBytes, 256 * 1024), timeoutMs: bodyTimeoutMs,
+        });
+        const handlers = {
+          "/activities/commands": () => kernelService.activityCommand(body),
+          "/activities/run-task": () => kernelService.runTask(body),
+          "/planning/proposals": () => kernelService.proposePlan(body),
+          "/planning/accept": () => kernelService.acceptProposal(body),
+          "/knowledge/commands": () => kernelService.knowledgeCommand(body),
+          "/knowledge/query": () => kernelService.queryKnowledge(body),
+          "/knowledge/resolve": () => kernelService.resolveKnowledge(body),
+          "/knowledge/search": () => kernelService.searchKnowledge(body),
+          "/knowledge/context": () => kernelService.createContext(body),
+          "/knowledge/watch": () => kernelService.watchContext(body),
+          "/ingestion/reviewed-capture": () => kernelService.importReviewedCapture(body),
+          "/domains/execute": () => kernelService.executeCapability(body),
+          "/resources/commands": () => kernelService.resourceCommand(body),
+          "/resources/availability": () => kernelService.resourceAvailability(body),
+        };
+        if (!Object.hasOwn(handlers, route)) {
+          throw new AppError("NOT_FOUND", "요청한 경로를 찾을 수 없어요.", { httpStatus: 404 });
+        }
+        return sendJson(response, 200, await handlers[route]());
       }
 
       if (url.pathname === "/v1/analyze") {
@@ -321,6 +381,15 @@ export function createHttpServer({
       });
     }
   });
+}
+
+function assertKernelToken(header, expected) {
+  const actual = typeof header === "string" && header.startsWith("Bearer ")
+    ? header.slice("Bearer ".length) : "";
+  const digest = (value) => createHash("sha256").update(value).digest();
+  if (!actual || !timingSafeEqual(digest(actual), digest(expected))) {
+    throw new AppError("UNAUTHORIZED", "인증이 필요해요.", { httpStatus: 401 });
+  }
 }
 
 function setCommonHeaders(response, requestId) {

@@ -15,6 +15,10 @@ import { createPlaceResolutionService } from "./place_resolution_service.js";
 import { createRecommendationService } from "./recommendation_service.js";
 import { createTagMergeService } from "./tag_merge_service.js";
 import { createTagSenseService } from "./tag_sense_service.js";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createCommonKernelService, createCommonKernelState } from "./common/kernel_service.js";
+import { createJsonStateStore } from "./storage/json_state_store.js";
 
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) {
@@ -79,6 +83,20 @@ if (!apiKey) {
   const recommendationService = createRecommendationService({ transport });
   const tagMergeService = createTagMergeService({ transport });
   const tagSenseService = createTagSenseService({ transport });
+  const kernelToken = process.env.LUFFI_KERNEL_TOKEN ?? null;
+  if (kernelToken && (kernelToken.length < 32 || !process.env.LUFFI_KERNEL_OWNER_ID)) {
+    throw new Error("LUFFI_KERNEL_TOKEN(32자 이상)과 LUFFI_KERNEL_OWNER_ID를 함께 설정하세요.");
+  }
+  const kernelService = kernelToken
+    ? createCommonKernelService({
+        ownerId: process.env.LUFFI_KERNEL_OWNER_ID,
+        store: createJsonStateStore({
+          filePath: process.env.LUFFI_KERNEL_STATE_PATH ??
+            join(dirname(fileURLToPath(import.meta.url)), "../data/common-kernel.json"),
+          initialState: createCommonKernelState,
+        }),
+      })
+    : null;
 
   const server = createHttpServer({
     analysisService,
@@ -88,6 +106,8 @@ if (!apiKey) {
     recommendationService,
     tagMergeService,
     tagSenseService,
+    kernelService,
+    kernelToken,
     enrichmentModel,
     // Usage counters reveal activity patterns even though they contain no
     // capture content. Keep them off unless a local operator opts in.

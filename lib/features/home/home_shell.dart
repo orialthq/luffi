@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/app_theme.dart';
 import '../../core/luffi_brand.dart';
+import '../../data/common_kernel_client.dart';
 import '../../data/development_backup_service.dart';
 import '../../data/external_app_navigation_service.dart';
 import '../../data/incoming_share_service.dart';
@@ -21,6 +22,7 @@ import '../../state/app_controller.dart';
 import '../../state/plan_controller.dart';
 import '../analysis/analysis_review_screen.dart';
 import '../analysis/structured_review_screen.dart';
+import '../boards/common_boards_screen.dart';
 import '../inbox/inbox_screen.dart';
 import '../plans/past_plans_screen.dart';
 import '../plans/plan_detail_screen.dart';
@@ -265,6 +267,13 @@ final class _HomeShellState extends State<HomeShell>
       _openCapture(capture);
     }
     await _placeReminderOpenInbox.acknowledge([captureId]);
+  }
+
+  void _openCommonBoards() {
+    if (!commonKernelDebugEnabled) return;
+    Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute(builder: (_) => const CommonBoardsScreen()));
   }
 
   /// The 콘텐츠 list, pushed rather than switched to.
@@ -712,6 +721,9 @@ final class _HomeShellState extends State<HomeShell>
             onBackupContents: _shareDevelopmentBackup,
             onRestoreContents: _restoreDevelopmentBackup,
             onClearContents: _confirmAndClearUserCaptures,
+            onOpenCommonBoards: commonKernelDebugEnabled
+                ? _openCommonBoards
+                : null,
           ),
           body: Stack(
             children: [
@@ -1422,6 +1434,7 @@ final class _HomeDrawer extends StatelessWidget {
     required this.onBackupContents,
     required this.onRestoreContents,
     required this.onClearContents,
+    this.onOpenCommonBoards,
   });
 
   final List<_HomeTab> tabs;
@@ -1432,6 +1445,7 @@ final class _HomeDrawer extends StatelessWidget {
   final VoidCallback onBackupContents;
   final VoidCallback onRestoreContents;
   final VoidCallback onClearContents;
+  final VoidCallback? onOpenCommonBoards;
 
   /// Null when there are no plans at all, and then the drawer does not offer a
   /// door to what is behind them.
@@ -1533,6 +1547,15 @@ final class _HomeDrawer extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (onOpenCommonBoards case final openCommonBoards?)
+                      _DrawerItem(
+                        icon: Icons.account_tree_outlined,
+                        label: '공통 활동 보드',
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          openCommonBoards();
+                        },
+                      ),
                     _DrawerItem(
                       icon: Icons.archive_outlined,
                       label: '콘텐츠 전체 백업(ZIP)',
