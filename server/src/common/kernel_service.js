@@ -21,6 +21,7 @@ import { buildBeautyPlanDraft } from "../scenarios/beauty_plan.js";
 import { buildTravelPlanDraft } from "../scenarios/travel_plan.js";
 import { buildLifeTipPlanDraft } from "../scenarios/life_tip_plan.js";
 import { buildShoppingPlanDraft } from "../scenarios/shopping_plan.js";
+import { buildHealthPlanDraft } from "../scenarios/health_plan.js";
 import {
   applyResourceCommand, createResourceState,
   getResourceAvailability as projectResourceAvailability,
@@ -54,6 +55,8 @@ export function createCommonKernelState() {
     lifeTipCommandReceipts: {},
     shoppingScenarioReceipts: {},
     shoppingCommandReceipts: {},
+    healthScenarioReceipts: {},
+    healthCommandReceipts: {},
   };
 }
 
@@ -449,7 +452,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       delete state.resourceWatches[activityId];
       for (const receipts of [state.diningCommandReceipts, state.fashionCommandReceipts,
         state.beautyCommandReceipts, state.travelCommandReceipts,
-        state.lifeTipCommandReceipts, state.shoppingCommandReceipts]) {
+        state.lifeTipCommandReceipts, state.shoppingCommandReceipts,
+        state.healthCommandReceipts]) {
         for (const item of Object.values(receipts ?? {})) {
           if (item.activityId === activityId) {
             item.deleted = true;
@@ -508,6 +512,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         entry.result?.confirmationSourceId === sourceId ||
         entry.importIds?.some((id) => state.importReceipts[id]?.sourceId === sourceId))),
     sourceId);
+  }
+
+  function redactHealthScenario(state, sourceId, activityId = null) {
+    redactScenarioReceipts(state, Object.values(state.healthScenarioReceipts ?? {}).filter((entry) =>
+      !entry.deleted && (entry.result?.activityId === activityId ||
+        entry.result?.confirmationSourceId === sourceId ||
+        state.importReceipts[entry.importId]?.sourceId === sourceId)), sourceId);
   }
 
   function redactImportedCapture(state, sourceId) {
@@ -582,6 +593,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         .map((item) => item.result.activityId))
       : new Set(source?.provenance?.scenario === "shopping" && source.provenance.activityId
         ? [source.provenance.activityId] : []);
+    const healthActivityIds = source?.kind === "capture_analysis"
+      ? new Set(Object.values(state.healthScenarioReceipts ?? {}).filter((item) =>
+        !item.deleted && state.importReceipts[item.importId]?.sourceId === source.id)
+        .map((item) => item.result.activityId))
+      : new Set(source?.provenance?.scenario === "health" && source.provenance.activityId
+        ? [source.provenance.activityId] : []);
     const linkedConfirmations = source?.kind === "capture_analysis"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.kind === "user_confirmation" &&
@@ -596,7 +613,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "life_tip" &&
             lifeTipActivityIds.has(item.provenance.activityId)) ||
           (item.provenance?.scenario === "shopping" &&
-            shoppingActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
+            shoppingActivityIds.has(item.provenance.activityId)) ||
+          (item.provenance?.scenario === "health" &&
+            healthActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
     const linkedFashionSources = state.knowledge.sources.filter((item) =>
       item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
       item.provenance?.scenario === "fashion" &&
@@ -627,13 +646,20 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       shoppingActivityIds.has(item.provenance.activityId) &&
       (item.kind === "user_confirmation" || item.kind === "user_report"))
       .map((item) => item.id);
+    const linkedHealthSources = state.knowledge.sources.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
+      item.provenance?.scenario === "health" &&
+      healthActivityIds.has(item.provenance.activityId) &&
+      (item.kind === "user_confirmation" || item.kind === "user_report"))
+      .map((item) => item.id);
     return { source, linkedConfirmations, linkedFashionSources, linkedBeautySources,
-      linkedTravelSources, linkedLifeTipSources, linkedShoppingSources };
+      linkedTravelSources, linkedLifeTipSources, linkedShoppingSources,
+      linkedHealthSources };
   }
 
   function finishSourceDeletion(state, { source, linkedConfirmations, linkedFashionSources,
     linkedBeautySources, linkedTravelSources, linkedLifeTipSources,
-    linkedShoppingSources }) {
+    linkedShoppingSources, linkedHealthSources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
@@ -653,6 +679,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "shopping") {
       redactShoppingScenario(state, source.id, source.provenance.activityId);
     }
+    if (source?.kind === "user_confirmation" && source.provenance?.scenario === "health") {
+      redactHealthScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "user_report" && source.provenance?.scenario === "dining") {
       redactDiningScenario(state, source.id, source.provenance.activityId);
     }
@@ -671,6 +700,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (source?.kind === "user_report" && source.provenance?.scenario === "shopping") {
       redactShoppingScenario(state, source.id, source.provenance.activityId);
     }
+    if (source?.kind === "user_report" && source.provenance?.scenario === "health") {
+      redactHealthScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "capture_analysis") {
       redactImportedCapture(state, source.id);
       redactDiningScenario(state, source.id);
@@ -679,6 +711,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       redactTravelScenario(state, source.id);
       redactLifeTipScenario(state, source.id);
       redactShoppingScenario(state, source.id);
+      redactHealthScenario(state, source.id);
       for (const sourceId of linkedConfirmations) {
         state.knowledge = applyKnowledgeCommand(state.knowledge, {
           ownerId, commandId: `kernel:source-cascade:${sourceId}`,
@@ -691,6 +724,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         redactTravelScenario(state, sourceId);
         redactLifeTipScenario(state, sourceId);
         redactShoppingScenario(state, sourceId);
+        redactHealthScenario(state, sourceId);
       }
     }
     for (const sourceId of linkedFashionSources) {
@@ -742,6 +776,16 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       redactShoppingScenario(state, sourceId);
+    }
+    for (const sourceId of linkedHealthSources) {
+      const linked = state.knowledge.sources.find((item) => item.id === sourceId);
+      if (linked?.status !== "active") continue;
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      redactHealthScenario(state, sourceId);
     }
   }
 
@@ -1038,6 +1082,67 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       mentionId: mention.id, candidates }, contextQueries };
   }
 
+  function healthCandidate(state, importId) {
+    const receipt = state.importReceipts[importId];
+    if (receipt?.ownerId !== ownerId || receipt.deleted) {
+      throw new AppError("IMPORT_NOT_FOUND", "확인한 운동 캡처를 찾지 못했어요.",
+        { httpStatus: 404 });
+    }
+    const version = state.knowledge.sourceVersions.find((item) =>
+      item.ownerId === ownerId && item.id === receipt.sourceVersionId &&
+      item.status === "active");
+    const analysis = version?.content?.analysis;
+    if (!analysis || analysis.contentKind !== "unknown" ||
+        analysis.completeness !== "complete" ||
+        analysis.title?.status !== "observed" ||
+        !analysis.title.value?.trim() || !analysis.title.evidenceIds?.length ||
+        !analysis.tags?.some((tag) => tag.value === "건강·운동" &&
+          tag.facet === "field" && tag.evidenceIds?.length) ||
+        !analysis.tags?.some((tag) => tag.value === "운동" &&
+          tag.facet === "kind" && tag.evidenceIds?.length) ||
+        analysis.place?.name || !Array.isArray(analysis.facts) ||
+        analysis.facts.length < 1 || analysis.facts.length > 8 ||
+        analysis.facts.some((item, index) => item.label !== `${index + 1}단계` ||
+          !item.value?.trim() || !item.evidenceIds?.length)) {
+      throw new AppError("IMPORT_NOT_HEALTH",
+        "제목과 번호가 보이는 운동 계획 화면만 사용할 수 있어요.",
+        { httpStatus: 400 });
+    }
+    const mention = state.knowledge.entityMentions.find((item) =>
+      item.ownerId === ownerId && item.sourceVersionId === version.id &&
+      item.entityType === "health.workout" && item.status === "active");
+    if (!mention) throw new AppError("IMPORT_NOT_HEALTH",
+      "운동 제목 근거를 확인할 수 없어요.", { httpStatus: 400 });
+    const contextQueries = [];
+    for (const path of ["/title/value", ...analysis.facts.flatMap((_, index) =>
+      [`/facts/${index}/label`, `/facts/${index}/value`])]) {
+      const field = state.knowledge.assertions.find((item) =>
+        item.ownerId === ownerId && item.subjectId === receipt.result?.materialId &&
+        item.predicate === "ingestion.extracted_field" &&
+        item.typedValue?.value?.path === path && item.status === "active");
+      const pieces = path.split("/");
+      const expected = pieces[1] === "title" ? analysis.title.value :
+        analysis.facts[Number(pieces[2])][pieces[3]];
+      if (!field || field.typedValue?.value?.value !== expected) {
+        throw new AppError("CONTEXT_STALE", "운동 화면 근거가 변경됐어요.",
+          { httpStatus: 409 });
+      }
+      contextQueries.push({ subjectId: field.subjectId,
+        predicate: field.predicate, scope: field.scope });
+    }
+    const candidates = analysis.facts.map((fact, index) => {
+      const evidenceIds = fact.evidenceIds.map((legacyId) =>
+        state.knowledge.evidence.find((item) => item.ownerId === ownerId &&
+          item.sourceVersionId === version.id && item.status === "active" &&
+          item.locator?.legacyEvidenceId === legacyId)?.id);
+      if (evidenceIds.some((id) => !id)) throw new AppError("CONTEXT_STALE",
+        "운동 항목의 화면 근거가 변경됐어요.", { httpStatus: 409 });
+      return { factIndex: index + 1, text: fact.value.trim(), evidenceIds };
+    });
+    return { candidate: { importId, title: analysis.title.value.trim(),
+      mentionId: mention.id, candidates }, contextQueries };
+  }
+
   function shoppingCandidates(state, importIds) {
     const candidates = [];
     const contextQueries = [];
@@ -1190,7 +1295,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "beauty.confirm_routine", "beauty.record_routine_outcome",
               "travel.confirm_itinerary", "travel.record_stop_outcomes",
               "life_tip.confirm_actions", "life_tip.record_outcomes",
-              "shopping.confirm_choice", "shopping.record_purchase_outcome"].includes(spec.id) &&
+              "shopping.confirm_choice", "shopping.record_purchase_outcome",
+              "health.confirm_exercises", "health.record_exercise_outcomes"].includes(spec.id) &&
                 (command.type === "task.recordResult" || command.payload?.to === "completed" ||
                   Object.hasOwn(command.payload ?? {}, "output"))) {
               throw new AppError("TASK_EXECUTION_RESTRICTED", "확인·결과 작업은 전용 경로로 기록해 주세요.",
@@ -3290,6 +3396,392 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             doneActionIds: done.map((item) => item.actionId), executionIds,
             revision: applied.result.revision };
           state.lifeTipCommandReceipts[receiptKey] = { hash: requestHash,
+            result, activityId };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async createHealthScenario(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
+          "importId"].includes(key)) || input.confirmed !== true) {
+          throw new AppError("INVALID_REQUEST", "운동 캡처 입력을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const importId = safeId(input.importId, "importId");
+        const requestHash = requestFingerprint({ activityId, importId });
+        return await store.transact((state) => {
+          assertState(state);
+          state.healthScenarioReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.healthScenarioReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 운동 요청에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 운동 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const { candidate, contextQueries } = healthCandidate(state, importId);
+          const stem = `health:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const plan = buildHealthPlanDraft({ candidate }, { registry });
+          const created = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:activity`, type: "activity.create", activityId,
+            expectedRevision: 0, payload: { title: `운동 · ${candidate.title}`,
+              goal: { description: "캡처의 운동 항목을 확인하고 실제 수행량 기록하기" } } },
+          activityOptions(state));
+          state.activities = created.state;
+          state.resources = applyResourceCommand(state.resources, { ownerId,
+            commandId: `${stem}:resource-activity`, type: "activity.register",
+            expectedRevision: 0, payload: { activityId } }).state;
+          const issued = issueContext(state, { activityId, queries: contextQueries });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE", "운동 항목 근거를 확인할 수 없어요.",
+              { httpStatus: 409 });
+          }
+          const enriched = enrichPlan("draft", plan);
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:proposal-check`, type: "plan.applyDraft", activityId,
+            expectedRevision: created.result.revision, payload: { draft: enriched } },
+          activityOptions(state));
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId, activityId,
+            contextId: issued.contextId, kind: "draft", plan: structuredClone(enriched),
+            run: { scenario: "health", importId },
+            baseActivityRevision: created.result.revision, basePlanRevision: 0,
+            status: "pending", createdAt: new Date().toISOString() };
+          const result = { activityId, revision: created.result.revision, proposalId,
+            contextId: issued.contextId, candidateCount: candidate.candidates.length };
+          state.healthScenarioReceipts[receiptKey] = { hash: requestHash, importId, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async confirmHealthExercises(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedRevision", "factIndexes"].includes(key)) ||
+          !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 ||
+          !Array.isArray(input.factIndexes) || input.factIndexes.length < 1 ||
+          input.factIndexes.length > 8 || input.factIndexes.some((index) =>
+            !Number.isSafeInteger(index) || index < 1 || index > 8) ||
+          input.factIndexes.some((index, i) => i > 0 &&
+            index <= input.factIndexes[i - 1])) {
+          throw new AppError("INVALID_REQUEST", "이번에 할 운동 항목을 순서대로 선택해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const requestHash = requestFingerprint({ activityId,
+          expectedRevision: input.expectedRevision, factIndexes: input.factIndexes });
+        return await store.transact((state) => {
+          assertState(state);
+          state.healthCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.healthCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 운동 선택에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 운동 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.entries(state.healthScenarioReceipts ?? {}).find(([key, item]) =>
+            key.startsWith(`${ownerId}:`) && item.result?.activityId === activityId &&
+            !item.deleted)?.[1];
+          if (!scenario) throw new AppError("NOT_FOUND", "운동 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "confirm_exercises" &&
+            item.capabilityId === "health.confirm_exercises");
+          if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
+            "지금은 운동 항목을 확정할 수 없어요.", { httpStatus: 409 });
+          const candidate = task.readiness.inputs;
+          const trusted = healthCandidate(state, scenario.importId).candidate;
+          if (requestFingerprint(candidate) !== requestFingerprint(trusted) ||
+              candidate.importId !== scenario.importId ||
+              input.factIndexes.some((index) => !candidate.candidates.some((item) =>
+                item.factIndex === index))) {
+            throw new AppError("INVALID_REQUEST", "제안된 운동 항목만 선택할 수 있어요.",
+              { httpStatus: 400 });
+          }
+          const mention = state.knowledge.entityMentions.find((item) =>
+            item.ownerId === ownerId && item.id === candidate.mentionId &&
+            item.entityType === "health.workout" && item.status === "active");
+          if (!mention) throw new AppError("CONTEXT_STALE", "운동 캡처가 변경됐어요.",
+            { httpStatus: 409 });
+          const stem = `health:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const planId = `${stem}:plan`;
+          const confirmedAt = new Date().toISOString();
+          const sourceId = `${stem}:confirmation-source`;
+          const versionId = `${stem}:confirmation-version`;
+          const beforeSequence = state.knowledge.sequence;
+          const applyKnowledge = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:confirm:${role}`, type, payload }, { predicates }).state;
+          };
+          applyKnowledge("source", "source.create", { id: sourceId,
+            kind: "user_confirmation", title: "사용자가 고른 운동 항목",
+            provenance: { scenario: "health", activityId,
+              importedSourceId: state.importReceipts[scenario.importId].sourceId } });
+          applyKnowledge("version", "source.version.add", { id: versionId,
+            sourceId, contentHash: fingerprint(input.factIndexes),
+            content: { factIndexes: input.factIndexes }, capturedAt: confirmedAt });
+          const confirmationEvidenceId = `${stem}:confirmation-evidence`;
+          applyKnowledge("confirmation-evidence", "evidence.add", {
+            id: confirmationEvidenceId, sourceVersionId: versionId,
+            quote: `선택한 운동 항목: ${input.factIndexes.join(", ")}`,
+            locator: { kind: "user_confirmation", jsonPointer: "/factIndexes" } });
+          const accepted = state.knowledge.identityDecisions.find((item) =>
+            item.ownerId === ownerId && item.mentionId === mention.id &&
+            item.status === "accepted");
+          const workoutId = accepted?.entityId ?? `${stem}:workout`;
+          if (!accepted) {
+            applyKnowledge("workout", "entity.create", { id: workoutId,
+              type: "health.workout", label: "사용자가 확인한 운동 계획 화면" });
+            const decisionId = `${stem}:identity`;
+            applyKnowledge("identity-propose", "identity.propose", {
+              id: decisionId, mentionId: mention.id, entityId: workoutId,
+              evidenceIds: mention.evidenceIds,
+              reason: "사용자가 이 캡처의 운동 항목을 선택함" });
+            applyKnowledge("identity-accept", "identity.accept", {
+              decisionId, expectedRevision: 1 });
+          }
+          applyKnowledge("plan", "entity.create", { id: planId,
+            type: "health.workout_plan", label: "사용자가 확정한 운동 계획" });
+          const assertion = (role, subjectId, predicate, evidenceIds,
+            objectEntityId = null, typedValue = null) => applyKnowledge(`assertion:${role}`,
+            "assertion.add", { id: `${stem}:${role}`, subjectId, predicate,
+              scope: { type: "activity", id: activityId }, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId }, evidenceIds,
+              observedAt: confirmedAt,
+              ...(objectEntityId ? { objectEntityId } : { typedValue }) });
+          assertion("workout-title", workoutId, "health.workout_title",
+            [...mention.evidenceIds, confirmationEvidenceId], null,
+            { type: "core.text", value: candidate.title });
+          assertion("plan-uses-workout", planId, "health.plan_uses_workout",
+            [confirmationEvidenceId], workoutId);
+          const exercises = [];
+          for (const [index, factIndex] of input.factIndexes.entries()) {
+            const fact = candidate.candidates.find((item) => item.factIndex === factIndex);
+            const exerciseId = `${stem}:exercise:${index + 1}`;
+            applyKnowledge(`exercise:${index + 1}`, "entity.create", { id: exerciseId,
+              type: "health.planned_exercise", label: "사용자가 선택한 운동 항목" });
+            assertion(`plan-has-exercise:${index + 1}`, planId,
+              "health.plan_has_exercise", [confirmationEvidenceId], exerciseId);
+            assertion(`exercise-order:${index + 1}`, exerciseId,
+              "health.exercise_order", [confirmationEvidenceId], null,
+              { type: "core.revision", value: index + 1 });
+            assertion(`exercise-text:${index + 1}`, exerciseId,
+              "health.exercise_text", [...fact.evidenceIds, confirmationEvidenceId],
+              null, { type: "core.text", value: fact.text });
+            exercises.push({ id: exerciseId, factIndex, text: fact.text, order: index + 1 });
+          }
+          const plan = { id: planId, revision: 1, workoutId,
+            title: candidate.title, exercises };
+          registry.validate("health.workout_plan", plan);
+          recordAffectedConsumers(state, beforeSequence);
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:confirmed`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "confirm_exercises", expectedTaskRevision: task.revision,
+              to: "completed", output: { planId, plan, confirmedAt } } },
+          activityOptions(state));
+          state.activities = applied.state;
+          const result = { activityId, planId, revision: applied.result.revision };
+          state.healthCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          scenario.result.confirmationSourceId = sourceId;
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async recordHealthExerciseOutcomes(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedRevision", "exercises"].includes(key)) ||
+          !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 ||
+          !Array.isArray(input.exercises) || input.exercises.length < 1 ||
+          input.exercises.length > 8) {
+          throw new AppError("INVALID_REQUEST", "운동 결과를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const exercises = input.exercises.map((rawItem) => {
+          if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem) ||
+              Object.keys(rawItem).some((key) => !["exerciseId", "status",
+                "actualAmount", "actualUnit"].includes(key))) {
+            throw new AppError("INVALID_REQUEST", "운동 결과 형식이 올바르지 않아요.",
+              { httpStatus: 400 });
+          }
+          const exerciseId = safeId(rawItem.exerciseId, "exerciseId");
+          const status = rawItem.status;
+          if (!["done", "skipped", "unknown"].includes(status) ||
+              (status === "done" ?
+                !Number.isSafeInteger(rawItem.actualAmount) ||
+                  rawItem.actualAmount < 1 || rawItem.actualAmount > 10000 ||
+                  !["minutes", "repetitions"].includes(rawItem.actualUnit) ||
+                  (rawItem.actualUnit === "minutes" && rawItem.actualAmount > 1440) :
+                Object.hasOwn(rawItem, "actualAmount") ||
+                  Object.hasOwn(rawItem, "actualUnit"))) {
+            throw new AppError("INVALID_REQUEST", "실제로 한 운동의 수행량과 단위를 확인해 주세요.",
+              { httpStatus: 400 });
+          }
+          return { exerciseId, status,
+            ...(status === "done" ? { actualAmount: rawItem.actualAmount,
+              actualUnit: rawItem.actualUnit } : {}) };
+        });
+        if (new Set(exercises.map((item) => item.exerciseId)).size !== exercises.length) {
+          throw new AppError("INVALID_REQUEST", "같은 운동 항목을 중복 기록할 수 없어요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const requestHash = requestFingerprint({ activityId,
+          expectedRevision: input.expectedRevision, exercises });
+        return await store.transact((state) => {
+          assertState(state);
+          state.healthCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.healthCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 운동 결과에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 운동 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.entries(state.healthScenarioReceipts ?? {}).find(([key, item]) =>
+            key.startsWith(`${ownerId}:`) && item.result?.activityId === activityId &&
+            !item.deleted)?.[1];
+          if (!scenario) throw new AppError("NOT_FOUND", "운동 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "record_exercise_outcomes" &&
+            item.capabilityId === "health.record_exercise_outcomes");
+          if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
+            "지금은 운동 결과를 기록할 수 없어요.", { httpStatus: 409 });
+          const plan = task.readiness.inputs.plan;
+          const confirmTask = current.tasks.find((item) => item.id === "confirm_exercises" &&
+            item.capabilityId === "health.confirm_exercises" &&
+            item.executionStatus === "completed");
+          const confirmed = current.results.find((item) =>
+            item.id === confirmTask?.latestOutputRef)?.value;
+          const stem = `health:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          if (!plan || plan.id !== `${stem}:plan` ||
+              confirmed?.planId !== plan.id ||
+              requestFingerprint(plan) !== requestFingerprint(confirmed?.plan) ||
+              !state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+                item.id === plan.id && item.type === "health.workout_plan" &&
+                item.status === "active") ||
+              !state.knowledge.sources.some((item) => item.ownerId === ownerId &&
+                item.id === scenario.result.confirmationSourceId && item.status === "active")) {
+            throw new AppError("CONTEXT_STALE", "확정한 운동 계획을 찾지 못했어요.",
+              { httpStatus: 409 });
+          }
+          const planExercises = new Map(plan.exercises.map((item) => [item.id, item]));
+          if (exercises.length !== planExercises.size ||
+              exercises.some((item) => !planExercises.has(item.exerciseId))) {
+            throw new AppError("INVALID_REQUEST", "모든 운동 항목의 결과를 기록해 주세요.",
+              { httpStatus: 400 });
+          }
+          const reportedAt = new Date().toISOString();
+          const outcome = { planId: plan.id, exercises, reportedAt };
+          registry.validate("health.plan_outcome", outcome);
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:outcomes`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "record_exercise_outcomes",
+              expectedTaskRevision: task.revision, to: "completed", output: outcome } },
+          activityOptions(state));
+          state.activities = applied.state;
+          const done = exercises.filter((item) => item.status === "done");
+          const performanceIds = [];
+          let sessionId = null;
+          if (done.length) {
+            const beforeSequence = state.knowledge.sequence;
+            const sourceId = `${stem}:outcome-source`;
+            const versionId = `${stem}:outcome-version`;
+            sessionId = `${stem}:session`;
+            const applyKnowledge = (role, type, payload) => {
+              if (type === "assertion.add") validateAssertionRelation(state, payload);
+              state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+                commandId: `${stem}:outcome:${role}`, type, payload }, { predicates }).state;
+            };
+            applyKnowledge("source", "source.create", { id: sourceId,
+              kind: "user_report", title: "사용자가 보고한 운동 수행",
+              provenance: { scenario: "health", activityId } });
+            applyKnowledge("version", "source.version.add", { id: versionId,
+              sourceId, contentHash: fingerprint(outcome), content: outcome,
+              capturedAt: reportedAt });
+            const sessionEvidenceId = `${stem}:session-evidence`;
+            applyKnowledge("session-evidence", "evidence.add", {
+              id: sessionEvidenceId, sourceVersionId: versionId,
+              quote: "운동 수행을 보고함",
+              locator: { kind: "user_report", jsonPointer: "/exercises" } });
+            applyKnowledge("session", "entity.create", { id: sessionId,
+              type: "health.workout_session", label: "사용자가 보고한 운동 회차" });
+            applyKnowledge("session-for-plan", "assertion.add", {
+              id: `${stem}:session-for-plan`, subjectId: sessionId,
+              predicate: "health.session_for_plan", objectEntityId: plan.id,
+              scope: { type: "activity", id: activityId }, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [sessionEvidenceId], observedAt: reportedAt });
+            for (const item of done) {
+              const exercise = planExercises.get(item.exerciseId);
+              if (!state.knowledge.entities.some((entry) => entry.ownerId === ownerId &&
+                  entry.id === exercise.id && entry.type === "health.planned_exercise" &&
+                  entry.status === "active") ||
+                  !state.knowledge.assertions.some((entry) => entry.ownerId === ownerId &&
+                    entry.subjectId === plan.id &&
+                    entry.predicate === "health.plan_has_exercise" &&
+                    entry.objectEntityId === exercise.id && entry.status === "active")) {
+                throw new AppError("CONTEXT_STALE", "확정한 운동 항목을 찾지 못했어요.",
+                  { httpStatus: 409 });
+              }
+              const role = fingerprint(exercise.id).slice(0, 16);
+              const evidenceId = `${stem}:outcome-evidence:${role}`;
+              const performanceId = `${stem}:performance:${role}`;
+              applyKnowledge(`evidence:${role}`, "evidence.add", { id: evidenceId,
+                sourceVersionId: versionId,
+                quote: `${exercise.text} · ${item.actualAmount} ${item.actualUnit}`,
+                locator: { kind: "user_report",
+                  jsonPointer: `/exercises/${exercises.findIndex((entry) =>
+                    entry.exerciseId === item.exerciseId)}` } });
+              applyKnowledge(`performance:${role}`, "entity.create", { id: performanceId,
+                type: "health.performance", label: "사용자가 보고한 운동 수행" });
+              const assertion = (name, predicate, objectEntityId = null,
+                typedValue = null) => applyKnowledge(`${name}:${role}`, "assertion.add", {
+                  id: `${stem}:${name}:${role}`, subjectId: performanceId,
+                  predicate, scope: { type: "activity", id: activityId },
+                  origin: "user_reported", assertedBy: { type: "user", id: ownerId },
+                  evidenceIds: [evidenceId], observedAt: reportedAt,
+                  ...(objectEntityId ? { objectEntityId } : { typedValue }),
+                });
+              assertion("performance-in-session", "health.performance_in_session", sessionId);
+              assertion("performance-of-exercise", "health.performance_of_exercise", exercise.id);
+              assertion("actual-amount", "health.actual_amount", null,
+                { type: "health.actual_amount", value: item.actualAmount });
+              assertion("actual-unit", "health.actual_unit", null,
+                { type: "health.actual_unit", value: item.actualUnit });
+              performanceIds.push(performanceId);
+            }
+            recordAffectedConsumers(state, beforeSequence);
+          }
+          const result = { activityId, planId: plan.id, sessionId,
+            doneExerciseIds: done.map((item) => item.exerciseId),
+            performanceIds, revision: applied.result.revision };
+          state.healthCommandReceipts[receiptKey] = { hash: requestHash,
             result, activityId };
           return { state, result: { ...result, replayed: false } };
         });

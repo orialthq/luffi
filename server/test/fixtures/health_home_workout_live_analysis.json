@@ -1,0 +1,118 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "unknown",
+  "tags": [
+    {
+      "value": "건강·운동",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 1,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "\"건강·운동\""
+      ],
+      "citations": []
+    },
+    {
+      "value": "운동",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 1,
+      "evidenceIds": [
+        "e2",
+        "e3",
+        "e4"
+      ],
+      "quotes": [
+        "\"제자리 걷기 5분\"",
+        "\"스쿼트 10회\"",
+        "\"어깨 돌리기 10회\""
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "집에서 하는 3단계 홈트",
+    "status": "observed",
+    "confidence": 1,
+    "evidenceIds": [
+      "e5"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "집에서 제자리 걷기와 스쿼트, 어깨 돌리기를 하는 3단계 운동",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "건강·운동",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e2",
+      "text": "제자리 걷기 5분",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e3",
+      "text": "스쿼트 10회",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e4",
+      "text": "어깨 돌리기 10회",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e5",
+      "text": "집에서 하는 3단계 홈트",
+      "region": "image_text",
+      "confidence": 1
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "1단계",
+      "value": "제자리 걷기 5분",
+      "confidence": 1,
+      "evidenceIds": [
+        "e2"
+      ]
+    },
+    {
+      "label": "2단계",
+      "value": "스쿼트 10회",
+      "confidence": 1,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "3단계",
+      "value": "어깨 돌리기 10회",
+      "confidence": 1,
+      "evidenceIds": [
+        "e4"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

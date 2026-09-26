@@ -9,6 +9,7 @@ import '../../data/place_map_links.dart';
 import 'travel_scenario_dialogs.dart';
 import 'life_tip_scenario_dialogs.dart';
 import 'shopping_scenario_dialogs.dart';
+import 'health_scenario_dialogs.dart';
 
 KernelJson _object(Object? value) =>
     value is Map ? Map<String, Object?>.from(value) : {};
@@ -88,6 +89,7 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.travelIntentStore,
     this.lifeTipIntentStore,
     this.shoppingIntentStore,
+    this.healthIntentStore,
     this.importOptions = const [],
     this.diningImportOptions = const [],
     this.fashionImportOptions = const [],
@@ -95,12 +97,14 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.travelImportOptions = const [],
     this.lifeTipImportOptions = const [],
     this.shoppingImportOptions = const [],
+    this.healthImportOptions = const [],
     this.onOpenDiningImport,
     this.onOpenFashionImport,
     this.onOpenBeautyImport,
     this.onOpenTravelImport,
     this.onOpenLifeTipImport,
     this.onOpenShoppingImport,
+    this.onOpenHealthImport,
     super.key,
   });
   final CommonKernelClient? client;
@@ -111,6 +115,7 @@ final class CommonBoardsScreen extends StatefulWidget {
   final TravelScenarioIntentStore? travelIntentStore;
   final LifeTipScenarioIntentStore? lifeTipIntentStore;
   final ShoppingScenarioIntentStore? shoppingIntentStore;
+  final HealthScenarioIntentStore? healthIntentStore;
   final List<RecipeImportOption> importOptions;
   final List<DiningImportOption> diningImportOptions;
   final List<FashionImportOption> fashionImportOptions;
@@ -118,12 +123,14 @@ final class CommonBoardsScreen extends StatefulWidget {
   final List<TravelImportOption> travelImportOptions;
   final List<LifeTipImportOption> lifeTipImportOptions;
   final List<ShoppingImportOption> shoppingImportOptions;
+  final List<HealthImportOption> healthImportOptions;
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
   final void Function(String importId)? onOpenBeautyImport;
   final void Function(String importId)? onOpenTravelImport;
   final void Function(String importId)? onOpenLifeTipImport;
   final void Function(String importId)? onOpenShoppingImport;
+  final void Function(String importId)? onOpenHealthImport;
 
   @override
   State<CommonBoardsScreen> createState() => _CommonBoardsScreenState();
@@ -183,6 +190,8 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       widget.lifeTipIntentStore ?? const FileLifeTipScenarioIntentStore();
   late final ShoppingScenarioIntentStore _shoppingIntentStore =
       widget.shoppingIntentStore ?? const FileShoppingScenarioIntentStore();
+  late final HealthScenarioIntentStore _healthIntentStore =
+      widget.healthIntentStore ?? const FileHealthScenarioIntentStore();
   List<KernelJson> _boards = [];
   KernelJson _contracts = {};
   bool _contractsUnavailable = false;
@@ -199,6 +208,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _creatingTravel = false;
   bool _creatingLifeTip = false;
   bool _creatingShopping = false;
+  bool _creatingHealth = false;
   bool _intentLoading = true;
   bool _diningIntentLoading = true;
   bool _fashionIntentLoading = true;
@@ -206,6 +216,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _travelIntentLoading = true;
   bool _lifeTipIntentLoading = true;
   bool _shoppingIntentLoading = true;
+  bool _healthIntentLoading = true;
   KernelJson? _pendingRecipeIntent;
   KernelJson? _pendingDiningIntent;
   KernelJson? _pendingFashionIntent;
@@ -213,6 +224,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   KernelJson? _pendingTravelIntent;
   KernelJson? _pendingLifeTipIntent;
   KernelJson? _pendingShoppingIntent;
+  KernelJson? _pendingHealthIntent;
   Object? _intentError;
   Object? _diningIntentError;
   Object? _fashionIntentError;
@@ -220,6 +232,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   Object? _travelIntentError;
   Object? _lifeTipIntentError;
   Object? _shoppingIntentError;
+  Object? _healthIntentError;
   int _loadGeneration = 0;
 
   @override
@@ -233,6 +246,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     unawaited(_loadTravelIntent());
     unawaited(_loadLifeTipIntent());
     unawaited(_loadShoppingIntent());
+    unawaited(_loadHealthIntent());
+  }
+
+  Future<void> _loadHealthIntent() async {
+    setState(() {
+      _healthIntentLoading = true;
+      _healthIntentError = null;
+    });
+    try {
+      final pending = await _healthIntentStore.load();
+      if (mounted) setState(() => _pendingHealthIntent = pending);
+    } catch (error) {
+      if (mounted) setState(() => _healthIntentError = error);
+    } finally {
+      if (mounted) setState(() => _healthIntentLoading = false);
+    }
   }
 
   Future<void> _loadShoppingIntent() async {
@@ -418,6 +447,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
           onOpenTravelImport: widget.onOpenTravelImport,
           onOpenLifeTipImport: widget.onOpenLifeTipImport,
           onOpenShoppingImport: widget.onOpenShoppingImport,
+          onOpenHealthImport: widget.onOpenHealthImport,
         ),
       ),
     );
@@ -954,6 +984,124 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
         setState(() {
           _pendingTravelIntent = null;
           _travelIntentError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    }
+  }
+
+  Future<void> _createReviewedHealth() async {
+    final importId = await showDialog<String>(
+      context: context,
+      builder: (_) => HealthScenarioDialog(options: widget.healthImportOptions),
+    );
+    if (importId == null ||
+        !mounted ||
+        _pendingHealthIntent != null ||
+        _healthIntentLoading ||
+        _healthIntentError != null) {
+      return;
+    }
+    setState(() => _creatingHealth = true);
+    try {
+      final request = <String, Object?>{
+        'commandId': newKernelCommandId(),
+        'activityId': 'health-${newKernelCommandId()}',
+        'confirmed': true,
+        'importId': importId,
+      };
+      await _healthIntentStore.save(request);
+      if (mounted) setState(() => _pendingHealthIntent = request);
+      await _sendHealthIntent(request);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingHealth = false);
+    }
+  }
+
+  Future<void> _retryHealthIntent() async {
+    final pending = _pendingHealthIntent;
+    if (pending == null || _creatingHealth) return;
+    setState(() => _creatingHealth = true);
+    try {
+      await _sendHealthIntent(pending);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingHealth = false);
+    }
+  }
+
+  Future<void> _sendHealthIntent(KernelJson request) async {
+    KernelJson result;
+    try {
+      result = await _client.createHealthScenario(request);
+    } on CommonKernelException catch (error) {
+      if (const {
+        'INVALID_REQUEST',
+        'INVALID_DOMAIN_VALUE',
+        'IMPORT_NOT_FOUND',
+        'IMPORT_NOT_HEALTH',
+        'SCENARIO_DELETED',
+      }.contains(error.code)) {
+        await _healthIntentStore.clear();
+        if (mounted) setState(() => _pendingHealthIntent = null);
+      }
+      rethrow;
+    }
+    final activityId = result['activityId'];
+    if (activityId is! String || activityId != request['activityId']) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '만든 운동 활동의 ID를 확인할 수 없어요. 같은 요청으로 다시 확인해 주세요.',
+      );
+    }
+    await _healthIntentStore.clear();
+    if (mounted) {
+      setState(() => _pendingHealthIntent = null);
+      await _open(activityId);
+    }
+  }
+
+  Future<void> _discardHealthIntent() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이전 운동 활동 요청 지우기'),
+        content: const Text('서버에 활동이 이미 만들어졌을 수 있어요. 목록을 확인한 뒤 지워 주세요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('요청 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _healthIntentStore.clear();
+      if (mounted) {
+        setState(() {
+          _pendingHealthIntent = null;
+          _healthIntentError = null;
         });
       }
     } catch (error) {
@@ -1773,6 +1921,72 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
                     message: '저장된 꿀팁 활동 요청을 읽지 못했어요.',
                     onRefresh: _loadLifeTipIntent,
                   ),
+                if (widget.healthImportOptions.isNotEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '첫 건강·운동 시나리오',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '저장한 운동 화면에서 이번 항목을 고르고 실제 수행 여부와 수행량을 기록해요.',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            key: const Key('kernel-create-health'),
+                            onPressed:
+                                _creatingHealth ||
+                                    _healthIntentLoading ||
+                                    _healthIntentError != null ||
+                                    _pendingHealthIntent != null
+                                ? null
+                                : _createReviewedHealth,
+                            icon: const Icon(Icons.fitness_center_outlined),
+                            label: Text(
+                              _creatingHealth ? '만드는 중' : '저장한 운동으로 시작',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_pendingHealthIntent != null)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('완료 여부를 확인할 운동 활동 요청이 있어요.'),
+                          const Text('같은 요청 ID로 재전송하면 중복 생성되지 않아요.'),
+                          FilledButton(
+                            key: const Key('kernel-retry-health-create'),
+                            onPressed: _creatingHealth
+                                ? null
+                                : _retryHealthIntent,
+                            child: const Text('이전 생성 이어하기'),
+                          ),
+                          TextButton(
+                            key: const Key('kernel-discard-health-create'),
+                            onPressed: _creatingHealth
+                                ? null
+                                : _discardHealthIntent,
+                            child: const Text('이전 요청 지우기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_healthIntentError != null)
+                  _ErrorPanel(
+                    message: '저장된 운동 활동 요청을 읽지 못했어요.',
+                    onRefresh: _loadHealthIntent,
+                  ),
                 if (widget.shoppingImportOptions.isNotEmpty)
                   Card(
                     child: Padding(
@@ -1943,6 +2157,7 @@ final class CommonBoardScreen extends StatefulWidget {
     this.onOpenTravelImport,
     this.onOpenLifeTipImport,
     this.onOpenShoppingImport,
+    this.onOpenHealthImport,
     super.key,
   });
   final CommonKernelClient client;
@@ -1954,6 +2169,7 @@ final class CommonBoardScreen extends StatefulWidget {
   final void Function(String importId)? onOpenTravelImport;
   final void Function(String importId)? onOpenLifeTipImport;
   final void Function(String importId)? onOpenShoppingImport;
+  final void Function(String importId)? onOpenHealthImport;
 
   @override
   State<CommonBoardScreen> createState() => _CommonBoardScreenState();
@@ -2151,6 +2367,46 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
 
   Future<void> _complete(KernelJson task) async {
     final capabilityId = _text(task['capabilityId']);
+    if (capabilityId == 'health.confirm_exercises') {
+      final inputs = _object(_taskInputs(task));
+      final factIndexes = await showDialog<List<int>>(
+        context: context,
+        builder: (_) => HealthConfirmDialog(
+          title: _text(inputs['title']),
+          importId: _text(inputs['importId']),
+          candidates: _objects(inputs['candidates']),
+          onOpenImport: widget.onOpenHealthImport,
+        ),
+      );
+      if (factIndexes == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.confirmHealthExercises({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'factIndexes': factIndexes,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'health.record_exercise_outcomes') {
+      final plan = _object(_object(_taskInputs(task))['plan']);
+      final exercises = await showDialog<List<KernelJson>>(
+        context: context,
+        builder: (_) =>
+            HealthOutcomeDialog(exercises: _objects(plan['exercises'])),
+      );
+      if (exercises == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordHealthExerciseOutcomes({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'exercises': exercises,
+        });
+      });
+      return;
+    }
     if (capabilityId == 'shopping.confirm_choice') {
       final selection = await showDialog<KernelJson>(
         context: context,
@@ -2454,6 +2710,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final isTravel = _text(task['capabilityId']).startsWith('travel.');
     final isLifeTip = _text(task['capabilityId']).startsWith('life_tip.');
     final isShopping = _text(task['capabilityId']).startsWith('shopping.');
+    final isHealth = _text(task['capabilityId']).startsWith('health.');
     final selectedDiningCandidate = isDining
         ? _selectedDiningCandidate()
         : null;
@@ -2631,6 +2888,31 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                   const Text('실제 구매 여부와 지불액을 직접 기록해 주세요.'),
                 ],
               )
+            else if (isHealth && task['id'] == 'confirm_exercises')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_text(_object(_taskInputs(task))['title'])),
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    Text(
+                      '• ${candidate['factIndex']}. ${_text(candidate['text'])}',
+                    ),
+                  const Text('화면에 적힌 목표 문구입니다. 실제 수행은 다음 단계에서 직접 기록해요.'),
+                ],
+              )
+            else if (isHealth && task['id'] == 'record_exercise_outcomes')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final exercise in _objects(
+                    _object(_object(_taskInputs(task))['plan'])['exercises'],
+                  ))
+                    Text('• ${_text(exercise['text'])}'),
+                  const Text('수행 여부와 실제 수행량을 직접 기록해 주세요.'),
+                ],
+              )
             else
               _JsonDetails(title: '입력과 연결 정보', value: _taskInputs(task)),
             if (task['latestOutputRef'] != null)
@@ -2653,6 +2935,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 _lifeTipResult(task)
               else if (isShopping)
                 _shoppingResult(task)
+              else if (isHealth)
+                _healthResult(task)
               else
                 _JsonDetails(
                   title: '최근 결과',
@@ -2934,6 +3218,42 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       );
     }
     return _JsonDetails(title: '최근 결과', value: result);
+  }
+
+  Widget _healthResult(KernelJson task) {
+    final result = _objects(
+      _board?['results'],
+    ).where((item) => item['id'] == task['latestOutputRef']).firstOrNull;
+    final value = _object(result?['value']);
+    if (task['id'] == 'confirm_exercises') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('확정한 운동 항목'),
+          for (final exercise in _objects(_object(value['plan'])['exercises']))
+            Text('${exercise['order']}. ${_text(exercise['text'])}'),
+        ],
+      );
+    }
+    final plan = _object(_object(_taskInputs(task))['plan']);
+    final titles = {
+      for (final exercise in _objects(plan['exercises']))
+        _text(exercise['id']): _text(exercise['text']),
+    };
+    const statuses = {'done': '했어요', 'skipped': '하지 않았어요', 'unknown': '아직 몰라요'};
+    const units = {'minutes': '분', 'repetitions': '회'};
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('사용자가 보고한 실제 운동'),
+        for (final exercise in _objects(value['exercises']))
+          Text(
+            '• ${titles[_text(exercise['exerciseId'])] ?? '운동'} · '
+            '${statuses[_text(exercise['status'])] ?? '상태 미확인'}'
+            '${exercise['actualAmount'] is int ? ' · ${exercise['actualAmount']}${units[_text(exercise['actualUnit'])] ?? ''}' : ''}',
+          ),
+      ],
+    );
   }
 
   Widget _shoppingResult(KernelJson task) {

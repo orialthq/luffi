@@ -26,6 +26,7 @@ import '../boards/common_boards_screen.dart';
 import '../boards/travel_scenario_dialogs.dart';
 import '../boards/life_tip_scenario_dialogs.dart';
 import '../boards/shopping_scenario_dialogs.dart';
+import '../boards/health_scenario_dialogs.dart';
 import '../inbox/inbox_screen.dart';
 import '../plans/past_plans_screen.dart';
 import '../plans/plan_detail_screen.dart';
@@ -415,6 +416,44 @@ final class _HomeShellState extends State<HomeShell>
                 .trim(),
           ),
     ];
+    final healthImportOptions = [
+      for (final imported in widget.controller.syncedReviewedCaptureImports)
+        if (widget.controller
+                .captureById(imported.captureId)
+                ?.analysis
+                ?.structuredContent
+            case final structured?
+            when structured.contentKind == ContentKind.unknown &&
+                structured.completeness == StructuredCompleteness.complete &&
+                structured.title.status == ObservedStatus.observed &&
+                structured.title.value?.trim().isNotEmpty == true &&
+                structured.title.evidenceIds.isNotEmpty &&
+                structured.place?.name == null &&
+                structured.tags.any(
+                  (tag) =>
+                      tag.facet == TagFacet.field &&
+                      tag.value == '건강·운동' &&
+                      tag.evidenceIds.isNotEmpty,
+                ) &&
+                structured.tags.any(
+                  (tag) =>
+                      tag.facet == TagFacet.kind &&
+                      tag.value == '운동' &&
+                      tag.evidenceIds.isNotEmpty,
+                ) &&
+                structured.facts.isNotEmpty &&
+                structured.facts.length <= 8 &&
+                structured.facts.asMap().entries.every(
+                  (entry) =>
+                      entry.value.label == '${entry.key + 1}단계' &&
+                      entry.value.value.trim().isNotEmpty &&
+                      entry.value.evidenceIds.isNotEmpty,
+                ))
+          HealthImportOption(
+            importId: imported.importId,
+            title: structured.title.value!.trim(),
+          ),
+    ];
     Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => CommonBoardsScreen(
@@ -425,6 +464,7 @@ final class _HomeShellState extends State<HomeShell>
           travelImportOptions: travelImportOptions,
           lifeTipImportOptions: lifeTipImportOptions,
           shoppingImportOptions: shoppingImportOptions,
+          healthImportOptions: healthImportOptions,
           onOpenDiningImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
@@ -471,6 +511,15 @@ final class _HomeShellState extends State<HomeShell>
             }
           },
           onOpenShoppingImport: (importId) {
+            for (final imported
+                in widget.controller.syncedReviewedCaptureImports) {
+              if (imported.importId != importId) continue;
+              final capture = widget.controller.captureById(imported.captureId);
+              if (capture != null) _openCapture(capture);
+              return;
+            }
+          },
+          onOpenHealthImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;

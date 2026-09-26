@@ -54,6 +54,57 @@ abstract interface class LifeTipScenarioIntentStore {
   Future<void> clear();
 }
 
+abstract interface class HealthScenarioIntentStore {
+  Future<KernelJson?> load();
+  Future<void> save(KernelJson request);
+  Future<void> clear();
+}
+
+final class FileHealthScenarioIntentStore implements HealthScenarioIntentStore {
+  const FileHealthScenarioIntentStore({this.directoryPath});
+  final String? directoryPath;
+
+  Future<File> _file() async {
+    final directory = directoryPath == null
+        ? await getApplicationSupportDirectory()
+        : Directory(directoryPath!);
+    await directory.create(recursive: true);
+    return File('${directory.path}/luffi_health_scenario_intent.json');
+  }
+
+  @override
+  Future<KernelJson?> load() async {
+    final file = await _file();
+    if (!await file.exists()) return null;
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, dynamic> ||
+        !_nonEmptyText(decoded['commandId']) ||
+        !_nonEmptyText(decoded['activityId']) ||
+        decoded['confirmed'] != true ||
+        !_nonEmptyText(decoded['importId'])) {
+      throw const FormatException('저장된 운동 생성 요청 형식이 올바르지 않아요.');
+    }
+    return Map<String, Object?>.from(decoded);
+  }
+
+  @override
+  Future<void> save(KernelJson request) async {
+    final file = await _file();
+    if (await file.exists()) {
+      throw StateError('An unconfirmed health creation intent already exists');
+    }
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(request), flush: true);
+    await temporary.rename(file.path);
+  }
+
+  @override
+  Future<void> clear() async {
+    final file = await _file();
+    if (await file.exists()) await file.delete();
+  }
+}
+
 abstract interface class ShoppingScenarioIntentStore {
   Future<KernelJson?> load();
   Future<void> save(KernelJson request);
@@ -449,6 +500,9 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> createShoppingScenario(KernelJson request);
   Future<KernelJson> confirmShoppingChoice(KernelJson request);
   Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request);
+  Future<KernelJson> createHealthScenario(KernelJson request);
+  Future<KernelJson> confirmHealthExercises(KernelJson request);
+  Future<KernelJson> recordHealthExerciseOutcomes(KernelJson request);
   Future<KernelJson> acceptProposal({
     required String proposalId,
     required String commandId,
@@ -629,6 +683,18 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request) =>
       _request('POST', '/v1/kernel/shopping/purchase-outcome', request);
+
+  @override
+  Future<KernelJson> createHealthScenario(KernelJson request) =>
+      _request('POST', '/v1/kernel/health/scenarios', request);
+
+  @override
+  Future<KernelJson> confirmHealthExercises(KernelJson request) =>
+      _request('POST', '/v1/kernel/health/confirm-exercises', request);
+
+  @override
+  Future<KernelJson> recordHealthExerciseOutcomes(KernelJson request) =>
+      _request('POST', '/v1/kernel/health/exercise-outcomes', request);
 
   @override
   Future<KernelJson> acceptProposal({

@@ -7,6 +7,7 @@ import 'package:ori_beauty/features/boards/common_boards_screen.dart';
 import 'package:ori_beauty/features/boards/travel_scenario_dialogs.dart';
 import 'package:ori_beauty/features/boards/life_tip_scenario_dialogs.dart';
 import 'package:ori_beauty/features/boards/shopping_scenario_dialogs.dart';
+import 'package:ori_beauty/features/boards/health_scenario_dialogs.dart';
 
 KernelJson _board() => {
   'id': 'activity-1',
@@ -161,6 +162,20 @@ final class FakeShoppingIntentStore implements ShoppingScenarioIntentStore {
   @override
   Future<void> save(KernelJson request) async {
     if (pending != null) throw StateError('pending shopping intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async => pending = null;
+}
+
+final class FakeHealthIntentStore implements HealthScenarioIntentStore {
+  KernelJson? pending;
+  @override
+  Future<KernelJson?> load() async => pending;
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending health intent exists');
     pending = Map<String, Object?>.from(request);
   }
 
@@ -806,6 +821,79 @@ final class FakeKernelClient implements CommonKernelClient {
     commands.add(request);
     board['revision'] = (board['revision'] as int) + 1;
     return {'activityId': request['activityId'], 'revision': board['revision']};
+  }
+
+  @override
+  Future<KernelJson> createHealthScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    if (scenarioFailure case final error?) throw error;
+    board = {
+      'id': request['activityId'],
+      'title': '운동 활동',
+      'goal': {'description': '운동 항목을 확인하고 기록하기'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'health-proposal',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'confirm_exercises',
+                'title': '이번에 할 운동 항목 확인',
+                'capabilityId': 'health.confirm_exercises',
+                'inputBindings': {
+                  'importId': request['importId'],
+                  'title': '집에서 하는 3단계 홈트',
+                  'mentionId': 'mention-health',
+                  'candidates': [
+                    {
+                      'factIndex': 1,
+                      'text': '제자리 걷기 5분',
+                      'evidenceIds': ['e1'],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    return {
+      'activityId': request['activityId'],
+      'proposalId': 'health-proposal',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> confirmHealthExercises(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'planId': 'health-plan',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> recordHealthExerciseOutcomes(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'planId': 'health-plan',
+      'revision': board['revision'],
+    };
   }
 
   @override
@@ -1482,6 +1570,193 @@ void main() {
           'ownership': 'unknown',
         },
       ]);
+    },
+  );
+
+  testWidgets(
+    'reviewed exercise capture creates an approval-gated health plan',
+    (tester) async {
+      final client = FakeKernelClient();
+      final intentStore = FakeHealthIntentStore();
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardsScreen(
+            client: client,
+            intentStore: FakeRecipeIntentStore(),
+            diningIntentStore: FakeDiningIntentStore(),
+            fashionIntentStore: FakeFashionIntentStore(),
+            beautyIntentStore: FakeBeautyIntentStore(),
+            travelIntentStore: FakeTravelIntentStore(),
+            lifeTipIntentStore: FakeLifeTipIntentStore(),
+            shoppingIntentStore: FakeShoppingIntentStore(),
+            healthIntentStore: intentStore,
+            healthImportOptions: const [
+              HealthImportOption(importId: 'home', title: '집에서 하는 3단계 홈트'),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('kernel-create-health')));
+      await tester.tap(find.byKey(const Key('kernel-create-health')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('health-import-home')));
+      await tester.tap(find.byKey(const Key('health-create-submit')));
+      await tester.pumpAndSettle();
+      expect(client.scenarioRequests.single['importId'], 'home');
+      expect(client.scenarioRequests.single['confirmed'], true);
+      expect(intentStore.pending, isNull);
+      expect(client.board['tasks'], isEmpty);
+      expect(find.text('계획 제안'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'health board dispatches selected steps and actual exercise amounts',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.contract = {
+        'capabilities': [
+          {'id': 'health.confirm_exercises', 'actor': 'user', 'effect': 'none'},
+          {
+            'id': 'health.record_exercise_outcomes',
+            'actor': 'user',
+            'effect': 'none',
+          },
+        ],
+      };
+      client.board = {
+        'id': 'health-test',
+        'title': '홈트',
+        'goal': {'description': '운동 기록'},
+        'revision': 2,
+        'lifecycle': 'active',
+        'nextActions': ['confirm_exercises'],
+        'tasks': [
+          {
+            'id': 'confirm_exercises',
+            'title': '운동 항목 확인',
+            'revision': 1,
+            'capabilityId': 'health.confirm_exercises',
+            'executionStatus': 'not_started',
+            'readiness': {
+              'status': 'ready',
+              'inputs': {
+                'importId': 'home',
+                'title': '집에서 하는 3단계 홈트',
+                'mentionId': 'mention-health',
+                'candidates': [
+                  {
+                    'factIndex': 1,
+                    'text': '제자리 걷기 5분',
+                    'evidenceIds': ['e1'],
+                  },
+                  {
+                    'factIndex': 2,
+                    'text': '스쿼트 10회',
+                    'evidenceIds': ['e2'],
+                  },
+                ],
+              },
+              'reasons': <Object?>[],
+            },
+          },
+        ],
+        'pendingChanges': <Object?>[],
+        'pendingProposals': <Object?>[],
+        'results': <Object?>[],
+        'artifacts': <Object?>[],
+        'reminders': <Object?>[],
+      };
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardScreen(
+            client: client,
+            activityId: 'health-test',
+            contracts: client.contract,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('kernel-complete-confirm_exercises')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('health-fact-2')));
+      await tester.tap(find.byKey(const Key('health-confirm-submit')));
+      await tester.pumpAndSettle();
+      expect(client.commands.single['factIndexes'], [1]);
+
+      client.board['tasks'] = [
+        {
+          'id': 'record_exercise_outcomes',
+          'title': '실제 수행 기록',
+          'revision': 1,
+          'capabilityId': 'health.record_exercise_outcomes',
+          'executionStatus': 'not_started',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {
+              'plan': {
+                'id': 'health-plan',
+                'revision': 1,
+                'workoutId': 'workout-source',
+                'title': '집에서 하는 3단계 홈트',
+                'exercises': [
+                  {
+                    'id': 'step-1',
+                    'factIndex': 1,
+                    'text': '제자리 걷기 5분',
+                    'order': 1,
+                  },
+                ],
+              },
+            },
+            'reasons': <Object?>[],
+          },
+        },
+      ];
+      client.board['nextActions'] = ['record_exercise_outcomes'];
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardScreen(
+            client: client,
+            activityId: 'health-test',
+            contracts: client.contract,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('kernel-complete-record_exercise_outcomes')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('health-status-step-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('했어요').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('health-amount-step-1')),
+        '4',
+      );
+      await tester.tap(find.byKey(const Key('health-outcome-submit')));
+      await tester.pumpAndSettle();
+      final recorded = client.commands.last['exercises'] as List;
+      expect(recorded.single, {
+        'exerciseId': 'step-1',
+        'status': 'done',
+        'actualAmount': 4,
+        'actualUnit': 'minutes',
+      });
     },
   );
 

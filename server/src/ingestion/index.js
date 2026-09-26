@@ -163,6 +163,12 @@ export function buildReviewedCaptureImport(input, options = {}) {
         analysis.facts?.some((fact) => fact.value?.trim() && fact.evidenceIds?.length)) {
       mention("/title/value", analysis.title.value, "life_tip.tip", analysis.title);
     }
+    if (analysis.contentKind === "unknown" &&
+        analysis.tags?.some((tag) => tag.value === "건강·운동" && tag.facet === "field") &&
+        analysis.tags?.some((tag) => tag.value === "운동" && tag.facet === "kind") &&
+        analysis.facts?.some((fact) => fact.value?.trim() && fact.evidenceIds?.length)) {
+      mention("/title/value", analysis.title.value, "health.workout", analysis.title);
+    }
   } else if (analysis.title.status === "inferred") omissions.push({ path: "/title/value", reason: "inferred_title_not_source_fact", preservedInSource: true });
   if (analysis.place) {
     for (const key of ["name", "address", "searchArea", "category"]) field(`/place/${key}`, analysis.place[key], analysis.place);

@@ -209,6 +209,6 @@ test("kernel HTTP routes require a bearer token and do not change legacy analysi
   });
   assert.equal(accepted.status, 200);
   assert.deepEqual((await accepted.json()).packs.map((item) => item.id),
-    ["recipe", "dining", "fashion", "beauty", "travel", "life_tip", "shopping"]);
+    ["recipe", "dining", "fashion", "beauty", "travel", "life_tip", "shopping", "health"]);
   assert.equal((await fetch(`${base}/health`)).status, 200);
 });
