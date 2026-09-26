@@ -54,6 +54,66 @@ abstract interface class LifeTipScenarioIntentStore {
   Future<void> clear();
 }
 
+abstract interface class ShoppingScenarioIntentStore {
+  Future<KernelJson?> load();
+  Future<void> save(KernelJson request);
+  Future<void> clear();
+}
+
+final class FileShoppingScenarioIntentStore
+    implements ShoppingScenarioIntentStore {
+  const FileShoppingScenarioIntentStore({this.directoryPath});
+  final String? directoryPath;
+
+  Future<File> _file() async {
+    final directory = directoryPath == null
+        ? await getApplicationSupportDirectory()
+        : Directory(directoryPath!);
+    await directory.create(recursive: true);
+    return File('${directory.path}/luffi_shopping_scenario_intent.json');
+  }
+
+  @override
+  Future<KernelJson?> load() async {
+    final file = await _file();
+    if (!await file.exists()) return null;
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, dynamic> ||
+        !_nonEmptyText(decoded['commandId']) ||
+        !_nonEmptyText(decoded['activityId']) ||
+        decoded['confirmed'] != true ||
+        decoded['importIds'] is! List ||
+        (decoded['importIds'] as List).isEmpty ||
+        (decoded['importIds'] as List).length > 8 ||
+        !(decoded['importIds'] as List).every(_nonEmptyText) ||
+        (decoded['importIds'] as List).toSet().length !=
+            (decoded['importIds'] as List).length ||
+        !_nonEmptyText(decoded['purpose'])) {
+      throw const FormatException('저장된 쇼핑 생성 요청 형식이 올바르지 않아요.');
+    }
+    return Map<String, Object?>.from(decoded);
+  }
+
+  @override
+  Future<void> save(KernelJson request) async {
+    final file = await _file();
+    if (await file.exists()) {
+      throw StateError(
+        'An unconfirmed shopping creation intent already exists',
+      );
+    }
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(request), flush: true);
+    await temporary.rename(file.path);
+  }
+
+  @override
+  Future<void> clear() async {
+    final file = await _file();
+    if (await file.exists()) await file.delete();
+  }
+}
+
 final class FileLifeTipScenarioIntentStore
     implements LifeTipScenarioIntentStore {
   const FileLifeTipScenarioIntentStore({this.directoryPath});
@@ -386,6 +446,9 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> createLifeTipScenario(KernelJson request);
   Future<KernelJson> confirmLifeTipActions(KernelJson request);
   Future<KernelJson> recordLifeTipOutcomes(KernelJson request);
+  Future<KernelJson> createShoppingScenario(KernelJson request);
+  Future<KernelJson> confirmShoppingChoice(KernelJson request);
+  Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request);
   Future<KernelJson> acceptProposal({
     required String proposalId,
     required String commandId,
@@ -554,6 +617,18 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> recordLifeTipOutcomes(KernelJson request) =>
       _request('POST', '/v1/kernel/life-tip/outcomes', request);
+
+  @override
+  Future<KernelJson> createShoppingScenario(KernelJson request) =>
+      _request('POST', '/v1/kernel/shopping/scenarios', request);
+
+  @override
+  Future<KernelJson> confirmShoppingChoice(KernelJson request) =>
+      _request('POST', '/v1/kernel/shopping/confirm-choice', request);
+
+  @override
+  Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request) =>
+      _request('POST', '/v1/kernel/shopping/purchase-outcome', request);
 
   @override
   Future<KernelJson> acceptProposal({

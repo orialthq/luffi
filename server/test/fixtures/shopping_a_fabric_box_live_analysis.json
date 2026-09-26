@@ -1,0 +1,103 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "commerce_product",
+  "tags": [
+    {
+      "value": "생활용품",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "\"생활용품\"",
+        "\"접이식 패브릭 수납함\""
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "접이식 패브릭 수납함",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e2"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "베이지색 접이식 패브릭 수납함으로 가격과 크기가 표시되어 있다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "생활용품",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "접이식 패브릭 수납함",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "12,900원",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "베이지",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e5",
+      "text": "38 × 28 × 24 cm",
+      "region": "product_panel",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "가격",
+      "value": "12,900원",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "색상",
+      "value": "베이지",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "label": "크기",
+      "value": "38 × 28 × 24 cm",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e5"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

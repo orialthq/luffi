@@ -6,6 +6,7 @@ import 'package:ori_beauty/data/common_kernel_client.dart';
 import 'package:ori_beauty/features/boards/common_boards_screen.dart';
 import 'package:ori_beauty/features/boards/travel_scenario_dialogs.dart';
 import 'package:ori_beauty/features/boards/life_tip_scenario_dialogs.dart';
+import 'package:ori_beauty/features/boards/shopping_scenario_dialogs.dart';
 
 KernelJson _board() => {
   'id': 'activity-1',
@@ -146,6 +147,20 @@ final class FakeLifeTipIntentStore implements LifeTipScenarioIntentStore {
   @override
   Future<void> save(KernelJson request) async {
     if (pending != null) throw StateError('pending life-tip intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async => pending = null;
+}
+
+final class FakeShoppingIntentStore implements ShoppingScenarioIntentStore {
+  KernelJson? pending;
+  @override
+  Future<KernelJson?> load() async => pending;
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending shopping intent exists');
     pending = Map<String, Object?>.from(request);
   }
 
@@ -723,6 +738,74 @@ final class FakeKernelClient implements CommonKernelClient {
       'planId': 'plan-tip',
       'revision': board['revision'],
     };
+  }
+
+  @override
+  Future<KernelJson> createShoppingScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    if (scenarioFailure case final error?) throw error;
+    board = {
+      'id': request['activityId'],
+      'title': '수납함 쇼핑',
+      'goal': {'description': '상품 선택과 구매 결과 기록'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'shopping-proposal',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'confirm_choice',
+                'title': '상품과 수량 선택',
+                'capabilityId': 'shopping.confirm_choice',
+                'inputBindings': {
+                  'purpose': request['purpose'],
+                  'candidates': [
+                    {
+                      'importId': 'a',
+                      'title': '패브릭 수납함',
+                      'displayedPriceText': '12,900원',
+                      'details': <Object?>[],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    return {
+      'activityId': request['activityId'],
+      'proposalId': 'shopping-proposal',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> confirmShoppingChoice(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'choiceId': 'shopping-choice',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {'activityId': request['activityId'], 'revision': board['revision']};
   }
 
   @override
@@ -1399,6 +1482,57 @@ void main() {
           'ownership': 'unknown',
         },
       ]);
+    },
+  );
+
+  testWidgets(
+    'reviewed shopping captures create an approval-gated comparison plan',
+    (tester) async {
+      final client = FakeKernelClient();
+      final intentStore = FakeShoppingIntentStore();
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardsScreen(
+            client: client,
+            intentStore: FakeRecipeIntentStore(),
+            diningIntentStore: FakeDiningIntentStore(),
+            fashionIntentStore: FakeFashionIntentStore(),
+            beautyIntentStore: FakeBeautyIntentStore(),
+            travelIntentStore: FakeTravelIntentStore(),
+            lifeTipIntentStore: FakeLifeTipIntentStore(),
+            shoppingIntentStore: intentStore,
+            shoppingImportOptions: const [
+              ShoppingImportOption(
+                importId: 'a',
+                title: '패브릭 수납함',
+                displayedPriceText: '12,900원',
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const Key('kernel-create-shopping')),
+      );
+      await tester.tap(find.byKey(const Key('kernel-create-shopping')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('shopping-purpose')),
+        '수납함 고르기',
+      );
+      await tester.tap(find.byKey(const Key('shopping-import-a')));
+      await tester.tap(find.byKey(const Key('shopping-create-submit')));
+      await tester.pumpAndSettle();
+      expect(client.scenarioRequests.single['importIds'], ['a']);
+      expect(client.scenarioRequests.single['purpose'], '수납함 고르기');
+      expect(intentStore.pending, isNull);
+      expect(client.board['tasks'], isEmpty);
+      expect(find.text('계획 제안'), findsOneWidget);
     },
   );
 

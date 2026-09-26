@@ -61,6 +61,9 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/life-tip/scenarios` | 확인한 단계형 생활 꿀팁 캡처 하나로 승인 대기 실천 계획 제안 |
 | `POST /v1/kernel/life-tip/confirm-actions` | 사용자가 실천할 원본 단계를 고르고 출처 있는 ActionPlan 구성 |
 | `POST /v1/kernel/life-tip/outcomes` | 단계별 실제 실행을 직접 보고. `done`에만 실행 관계 생성 |
+| `POST /v1/kernel/shopping/scenarios` | 확인한 상품 캡처 1~8개로 비교·선택 계획 제안 |
+| `POST /v1/kernel/shopping/confirm-choice` | 상품 하나와 수량을 직접 확정. 캡처 가격은 시점 한정 표시값으로 저장 |
+| `POST /v1/kernel/shopping/purchase-outcome` | 실제 구매 여부를 직접 보고. `purchased`에만 실제 지불액과 구매 관계 생성 |
 | `POST /v1/kernel/domains/execute` | 부수 효과가 없는 등록된 분야 계산만 실행 |
 
 AI가 만든 PlanDraft/PlanPatch를 적용할 때는 `/knowledge/context`가 돌려준 `contextId`를 사용한다. 서버는 이 ID에 연결된 readSet, 없던 사실을 감시하는 queryWatches, 검색의 발견 의존성, 자원 조건, 정책·시간 조건과 Activity revision을 다시 검사한다. API가 전달한 임의 `context` 객체는 신뢰하지 않는다. 발급 맥락은 서버 상태에 저장되며 사용 기한은 1시간이다. `/planning/proposals`는 실제 상태를 바꾸지 않는 컴파일 검사를 먼저 하고, `/planning/accept`에서 기준 버전과 맥락을 다시 검사한다. 같은 명령 ID·같은 요청은 재전송해도 한 번만 처리하고, 같은 ID에 다른 내용은 충돌이다.
@@ -190,6 +193,10 @@ Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 �
 `POST /v1/kernel/life-tip/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importId` 하나를 받는다. 서버는 `unknown` 분석 전체가 아니라 화면 근거가 있는 `생활·팁` 제목과 연속된 단계 fact만 후보로 삼고, `confirm_actions → record_outcomes` 계획을 승인 대기로 만든다. 제목이나 단계 근거가 바뀌면 기존 계획은 승인할 수 없다.
 
 사용자는 `confirm-actions`의 `factIndexes`로 실천할 단계를 원본 순서대로 고른다. 각 Action의 텍스트는 캡처 fact와 사용자 확인 출처에 연결한다. `outcomes`는 모든 Action에 `done/skipped/unknown`을 명시하며, `done`에만 사용자 보고 출처와 `life_tip.execution_for_action` 관계를 만든다. 자세한 범위와 검증 이미지는 [첫 생활 꿀팁 시나리오](LIFE_TIP_FIRST_SCENARIO.md)를 참조한다.
+
+### 첫 쇼핑 시나리오
+
+`POST /v1/kernel/shopping/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importIds`(1~8개), `purpose`를 받는다. 화면 근거가 있는 상품명과 원화 `가격` fact를 후보로 사용하고 `confirm_choice → record_purchase_outcome` 계획을 승인 대기로 만든다. 사용자는 `confirm-choice`에서 상품 하나와 수량을 확정한다. `purchase-outcome`의 `purchased/not_purchased/unknown`은 별도 사용자 보고이며, `purchased`일 때만 `actualPaidKrw`가 필요하다. 캡처 표시 가격을 결제액으로 추론하지 않는다. 자세한 그래프 경계와 검증 이미지는 [첫 쇼핑 시나리오](SHOPPING_FIRST_SCENARIO.md)를 참조한다.
 
 ## 일관성과 현재 경계
 

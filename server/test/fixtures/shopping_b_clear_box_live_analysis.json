@@ -1,0 +1,103 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "commerce_product",
+  "tags": [
+    {
+      "value": "생활용품",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "\"생활용품\"",
+        "\"투명 적층 수납함\""
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "투명 적층 수납함",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e2"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "투명 수납함으로 가격과 색상, 크기가 함께 표시되어 있다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "생활용품",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "투명 적층 수납함",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "가격 15,900원",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "색상 투명",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e5",
+      "text": "크기 35 × 25 × 20 cm",
+      "region": "product_panel",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "가격",
+      "value": "15,900원",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "색상",
+      "value": "투명",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "label": "크기",
+      "value": "35 × 25 × 20 cm",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e5"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

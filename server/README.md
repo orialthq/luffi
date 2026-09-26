@@ -575,3 +575,22 @@ npm run test:life-tip-image-live
 
 검증에 성공한 새 응답으로 fixture를 교체할 때만 `--record`를 전달합니다.
 첫 흐름의 계약과 확장 경계는 `docs/LIFE_TIP_FIRST_SCENARIO.md`에 적었습니다.
+
+### 이미지 기반 쇼핑 시나리오 검증
+
+`test/fixtures/shopping_a_fabric_box.png`와 `shopping_b_clear_box.png`는
+가상 수납용품의 합성 상품 화면입니다. 두 이미지를 실제 `POST /v1/analyze`에
+전송한 응답을 각각 `*_live_analysis.json`에 보관했습니다. `npm test`는
+이미지 해시·분석 응답, 승인 대기 비교 계획, 상품·수량 선택, 실제 구매 보고,
+가격 근거 변경 및 출처 삭제를 외부 호출 없이 확인합니다. 캡처 표시 가격은
+실시간 가격이나 실제 지불액이 아닙니다.
+
+```sh
+cd server
+npm run dev
+# 다른 터미널에서; 모델 호출 비용이 발생할 수 있음
+npm run test:shopping-image-live
+```
+
+검증에 성공한 새 응답으로 fixture를 교체할 때만 `--record`를 전달합니다.
+첫 흐름의 계약과 지식 그래프 경계는 `docs/SHOPPING_FIRST_SCENARIO.md`에 적었습니다.

@@ -8,6 +8,7 @@ import '../../data/common_kernel_client.dart';
 import '../../data/place_map_links.dart';
 import 'travel_scenario_dialogs.dart';
 import 'life_tip_scenario_dialogs.dart';
+import 'shopping_scenario_dialogs.dart';
 
 KernelJson _object(Object? value) =>
     value is Map ? Map<String, Object?>.from(value) : {};
@@ -86,17 +87,20 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.beautyIntentStore,
     this.travelIntentStore,
     this.lifeTipIntentStore,
+    this.shoppingIntentStore,
     this.importOptions = const [],
     this.diningImportOptions = const [],
     this.fashionImportOptions = const [],
     this.beautyImportOptions = const [],
     this.travelImportOptions = const [],
     this.lifeTipImportOptions = const [],
+    this.shoppingImportOptions = const [],
     this.onOpenDiningImport,
     this.onOpenFashionImport,
     this.onOpenBeautyImport,
     this.onOpenTravelImport,
     this.onOpenLifeTipImport,
+    this.onOpenShoppingImport,
     super.key,
   });
   final CommonKernelClient? client;
@@ -106,17 +110,20 @@ final class CommonBoardsScreen extends StatefulWidget {
   final BeautyScenarioIntentStore? beautyIntentStore;
   final TravelScenarioIntentStore? travelIntentStore;
   final LifeTipScenarioIntentStore? lifeTipIntentStore;
+  final ShoppingScenarioIntentStore? shoppingIntentStore;
   final List<RecipeImportOption> importOptions;
   final List<DiningImportOption> diningImportOptions;
   final List<FashionImportOption> fashionImportOptions;
   final List<BeautyImportOption> beautyImportOptions;
   final List<TravelImportOption> travelImportOptions;
   final List<LifeTipImportOption> lifeTipImportOptions;
+  final List<ShoppingImportOption> shoppingImportOptions;
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
   final void Function(String importId)? onOpenBeautyImport;
   final void Function(String importId)? onOpenTravelImport;
   final void Function(String importId)? onOpenLifeTipImport;
+  final void Function(String importId)? onOpenShoppingImport;
 
   @override
   State<CommonBoardsScreen> createState() => _CommonBoardsScreenState();
@@ -174,6 +181,8 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       widget.travelIntentStore ?? const FileTravelScenarioIntentStore();
   late final LifeTipScenarioIntentStore _lifeTipIntentStore =
       widget.lifeTipIntentStore ?? const FileLifeTipScenarioIntentStore();
+  late final ShoppingScenarioIntentStore _shoppingIntentStore =
+      widget.shoppingIntentStore ?? const FileShoppingScenarioIntentStore();
   List<KernelJson> _boards = [];
   KernelJson _contracts = {};
   bool _contractsUnavailable = false;
@@ -189,24 +198,28 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _creatingBeauty = false;
   bool _creatingTravel = false;
   bool _creatingLifeTip = false;
+  bool _creatingShopping = false;
   bool _intentLoading = true;
   bool _diningIntentLoading = true;
   bool _fashionIntentLoading = true;
   bool _beautyIntentLoading = true;
   bool _travelIntentLoading = true;
   bool _lifeTipIntentLoading = true;
+  bool _shoppingIntentLoading = true;
   KernelJson? _pendingRecipeIntent;
   KernelJson? _pendingDiningIntent;
   KernelJson? _pendingFashionIntent;
   KernelJson? _pendingBeautyIntent;
   KernelJson? _pendingTravelIntent;
   KernelJson? _pendingLifeTipIntent;
+  KernelJson? _pendingShoppingIntent;
   Object? _intentError;
   Object? _diningIntentError;
   Object? _fashionIntentError;
   Object? _beautyIntentError;
   Object? _travelIntentError;
   Object? _lifeTipIntentError;
+  Object? _shoppingIntentError;
   int _loadGeneration = 0;
 
   @override
@@ -219,6 +232,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     unawaited(_loadBeautyIntent());
     unawaited(_loadTravelIntent());
     unawaited(_loadLifeTipIntent());
+    unawaited(_loadShoppingIntent());
+  }
+
+  Future<void> _loadShoppingIntent() async {
+    setState(() {
+      _shoppingIntentLoading = true;
+      _shoppingIntentError = null;
+    });
+    try {
+      final pending = await _shoppingIntentStore.load();
+      if (mounted) setState(() => _pendingShoppingIntent = pending);
+    } catch (error) {
+      if (mounted) setState(() => _shoppingIntentError = error);
+    } finally {
+      if (mounted) setState(() => _shoppingIntentLoading = false);
+    }
   }
 
   Future<void> _loadLifeTipIntent() async {
@@ -388,6 +417,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
           onOpenBeautyImport: widget.onOpenBeautyImport,
           onOpenTravelImport: widget.onOpenTravelImport,
           onOpenLifeTipImport: widget.onOpenLifeTipImport,
+          onOpenShoppingImport: widget.onOpenShoppingImport,
         ),
       ),
     );
@@ -924,6 +954,125 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
         setState(() {
           _pendingTravelIntent = null;
           _travelIntentError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    }
+  }
+
+  Future<void> _createReviewedShopping() async {
+    final selection = await showDialog<KernelJson>(
+      context: context,
+      builder: (_) =>
+          ShoppingScenarioDialog(options: widget.shoppingImportOptions),
+    );
+    if (selection == null ||
+        !mounted ||
+        _pendingShoppingIntent != null ||
+        _shoppingIntentLoading ||
+        _shoppingIntentError != null) {
+      return;
+    }
+    setState(() => _creatingShopping = true);
+    try {
+      final request = <String, Object?>{
+        'commandId': newKernelCommandId(),
+        'activityId': 'shopping-${newKernelCommandId()}',
+        'confirmed': true,
+        ...selection,
+      };
+      await _shoppingIntentStore.save(request);
+      if (mounted) setState(() => _pendingShoppingIntent = request);
+      await _sendShoppingIntent(request);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingShopping = false);
+    }
+  }
+
+  Future<void> _retryShoppingIntent() async {
+    final pending = _pendingShoppingIntent;
+    if (pending == null || _creatingShopping) return;
+    setState(() => _creatingShopping = true);
+    try {
+      await _sendShoppingIntent(pending);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingShopping = false);
+    }
+  }
+
+  Future<void> _sendShoppingIntent(KernelJson request) async {
+    KernelJson result;
+    try {
+      result = await _client.createShoppingScenario(request);
+    } on CommonKernelException catch (error) {
+      if (const {
+        'INVALID_REQUEST',
+        'INVALID_DOMAIN_VALUE',
+        'IMPORT_NOT_FOUND',
+        'IMPORT_NOT_SHOPPING',
+        'SCENARIO_DELETED',
+      }.contains(error.code)) {
+        await _shoppingIntentStore.clear();
+        if (mounted) setState(() => _pendingShoppingIntent = null);
+      }
+      rethrow;
+    }
+    final activityId = result['activityId'];
+    if (activityId is! String || activityId != request['activityId']) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '만든 쇼핑 활동의 ID를 확인할 수 없어요. 같은 요청으로 다시 확인해 주세요.',
+      );
+    }
+    await _shoppingIntentStore.clear();
+    if (mounted) {
+      setState(() => _pendingShoppingIntent = null);
+      await _open(activityId);
+    }
+  }
+
+  Future<void> _discardShoppingIntent() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이전 쇼핑 활동 요청 지우기'),
+        content: const Text('서버에 활동이 이미 만들어졌을 수 있어요. 목록을 확인한 뒤 지워 주세요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('요청 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _shoppingIntentStore.clear();
+      if (mounted) {
+        setState(() {
+          _pendingShoppingIntent = null;
+          _shoppingIntentError = null;
         });
       }
     } catch (error) {
@@ -1624,6 +1773,72 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
                     message: '저장된 꿀팁 활동 요청을 읽지 못했어요.',
                     onRefresh: _loadLifeTipIntent,
                   ),
+                if (widget.shoppingImportOptions.isNotEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '첫 쇼핑 시나리오',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '저장한 상품 화면을 비교하고 하나를 고른 뒤 실제 구매 여부를 기록해요.',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            key: const Key('kernel-create-shopping'),
+                            onPressed:
+                                _creatingShopping ||
+                                    _shoppingIntentLoading ||
+                                    _shoppingIntentError != null ||
+                                    _pendingShoppingIntent != null
+                                ? null
+                                : _createReviewedShopping,
+                            icon: const Icon(Icons.shopping_bag_outlined),
+                            label: Text(
+                              _creatingShopping ? '만드는 중' : '저장한 상품으로 시작',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_pendingShoppingIntent != null)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('완료 여부를 확인할 쇼핑 활동 요청이 있어요.'),
+                          const Text('같은 요청 ID로 재전송하면 중복 생성되지 않아요.'),
+                          FilledButton(
+                            key: const Key('kernel-retry-shopping-create'),
+                            onPressed: _creatingShopping
+                                ? null
+                                : _retryShoppingIntent,
+                            child: const Text('이전 생성 이어하기'),
+                          ),
+                          TextButton(
+                            key: const Key('kernel-discard-shopping-create'),
+                            onPressed: _creatingShopping
+                                ? null
+                                : _discardShoppingIntent,
+                            child: const Text('이전 요청 지우기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_shoppingIntentError != null)
+                  _ErrorPanel(
+                    message: '저장된 쇼핑 활동 요청을 읽지 못했어요.',
+                    onRefresh: _loadShoppingIntent,
+                  ),
                 if (_pendingRecipeIntent != null)
                   Card(
                     child: Padding(
@@ -1727,6 +1942,7 @@ final class CommonBoardScreen extends StatefulWidget {
     this.onOpenBeautyImport,
     this.onOpenTravelImport,
     this.onOpenLifeTipImport,
+    this.onOpenShoppingImport,
     super.key,
   });
   final CommonKernelClient client;
@@ -1737,6 +1953,7 @@ final class CommonBoardScreen extends StatefulWidget {
   final void Function(String importId)? onOpenBeautyImport;
   final void Function(String importId)? onOpenTravelImport;
   final void Function(String importId)? onOpenLifeTipImport;
+  final void Function(String importId)? onOpenShoppingImport;
 
   @override
   State<CommonBoardScreen> createState() => _CommonBoardScreenState();
@@ -1934,6 +2151,43 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
 
   Future<void> _complete(KernelJson task) async {
     final capabilityId = _text(task['capabilityId']);
+    if (capabilityId == 'shopping.confirm_choice') {
+      final selection = await showDialog<KernelJson>(
+        context: context,
+        builder: (_) => ShoppingChoiceDialog(
+          candidates: _objects(_object(_taskInputs(task))['candidates']),
+          onOpenImport: widget.onOpenShoppingImport,
+        ),
+      );
+      if (selection == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.confirmShoppingChoice({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          ...selection,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'shopping.record_purchase_outcome') {
+      final selection = await showDialog<KernelJson>(
+        context: context,
+        builder: (_) => ShoppingOutcomeDialog(
+          choice: _object(_object(_taskInputs(task))['choice']),
+        ),
+      );
+      if (selection == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordShoppingPurchaseOutcome({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          ...selection,
+        });
+      });
+      return;
+    }
     if (capabilityId == 'life_tip.confirm_actions') {
       final inputs = _object(_taskInputs(task));
       final factIndexes = await showDialog<List<int>>(
@@ -2199,6 +2453,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final isBeauty = _text(task['capabilityId']).startsWith('beauty.');
     final isTravel = _text(task['capabilityId']).startsWith('travel.');
     final isLifeTip = _text(task['capabilityId']).startsWith('life_tip.');
+    final isShopping = _text(task['capabilityId']).startsWith('shopping.');
     final selectedDiningCandidate = isDining
         ? _selectedDiningCandidate()
         : null;
@@ -2353,6 +2608,29 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                   const Text('계획과 실제 실행은 별개입니다. 각 단계의 결과를 직접 기록해 주세요.'),
                 ],
               )
+            else if (isShopping && task['id'] == 'confirm_choice')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    Text(
+                      '• ${_text(candidate['title'])} · 캡처 표시 ${_text(candidate['displayedPriceText'])}',
+                    ),
+                  const Text('가격은 캡처 당시 표시값입니다. 구매 여부는 다음 단계에서 기록해요.'),
+                ],
+              )
+            else if (isShopping && task['id'] == 'record_purchase_outcome')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '선택: ${_text(_object(_object(_taskInputs(task))['choice'])['title'])}',
+                  ),
+                  const Text('실제 구매 여부와 지불액을 직접 기록해 주세요.'),
+                ],
+              )
             else
               _JsonDetails(title: '입력과 연결 정보', value: _taskInputs(task)),
             if (task['latestOutputRef'] != null)
@@ -2373,6 +2651,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 _travelResult(task)
               else if (isLifeTip)
                 _lifeTipResult(task)
+              else if (isShopping)
+                _shoppingResult(task)
               else
                 _JsonDetails(
                   title: '최근 결과',
@@ -2654,6 +2934,39 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       );
     }
     return _JsonDetails(title: '최근 결과', value: result);
+  }
+
+  Widget _shoppingResult(KernelJson task) {
+    final result = _objects(
+      _board?['results'],
+    ).where((item) => item['id'] == task['latestOutputRef']).firstOrNull;
+    final value = _object(result?['value']);
+    if (task['id'] == 'confirm_choice') {
+      final choice = _object(value['choice']);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('확정한 상품'),
+          Text(
+            '${_text(choice['title'])} · ${choice['quantity']}개 · 캡처 표시 ${_text(choice['displayedPriceText'])}',
+          ),
+        ],
+      );
+    }
+    const statuses = {
+      'purchased': '구매했어요',
+      'not_purchased': '구매하지 않았어요',
+      'unknown': '아직 몰라요',
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('실제 구매 기록'),
+        Text(statuses[_text(value['status'])] ?? '상태 미확인'),
+        if (value['actualPaidKrw'] case final int amount)
+          Text('실제 지불액: $amount원'),
+      ],
+    );
   }
 
   Widget _lifeTipResult(KernelJson task) {

@@ -25,6 +25,7 @@ import '../analysis/structured_review_screen.dart';
 import '../boards/common_boards_screen.dart';
 import '../boards/travel_scenario_dialogs.dart';
 import '../boards/life_tip_scenario_dialogs.dart';
+import '../boards/shopping_scenario_dialogs.dart';
 import '../inbox/inbox_screen.dart';
 import '../plans/past_plans_screen.dart';
 import '../plans/plan_detail_screen.dart';
@@ -374,6 +375,46 @@ final class _HomeShellState extends State<HomeShell>
             title: structured.title.value!.trim(),
           ),
     ];
+    final shoppingImportOptions = [
+      for (final imported in widget.controller.syncedReviewedCaptureImports)
+        if (widget.controller
+                .captureById(imported.captureId)
+                ?.analysis
+                ?.structuredContent
+            case final structured?
+            when structured.contentKind == ContentKind.commerceProduct &&
+                structured.completeness == StructuredCompleteness.complete &&
+                structured.title.status == ObservedStatus.observed &&
+                structured.title.value?.trim().isNotEmpty == true &&
+                structured.title.evidenceIds.isNotEmpty &&
+                structured.place?.name == null &&
+                structured.facts.length <= 9 &&
+                structured.facts
+                        .where(
+                          (fact) =>
+                              fact.label == '가격' &&
+                              RegExp(
+                                r'^\d{1,3}(,\d{3})*원$',
+                              ).hasMatch(fact.value.trim()) &&
+                              fact.evidenceIds.isNotEmpty,
+                        )
+                        .length ==
+                    1 &&
+                structured.facts.every(
+                  (fact) =>
+                      fact.label.trim().isNotEmpty &&
+                      fact.value.trim().isNotEmpty &&
+                      fact.evidenceIds.isNotEmpty,
+                ))
+          ShoppingImportOption(
+            importId: imported.importId,
+            title: structured.title.value!.trim(),
+            displayedPriceText: structured.facts
+                .firstWhere((fact) => fact.label == '가격')
+                .value
+                .trim(),
+          ),
+    ];
     Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => CommonBoardsScreen(
@@ -383,6 +424,7 @@ final class _HomeShellState extends State<HomeShell>
           beautyImportOptions: beautyImportOptions,
           travelImportOptions: travelImportOptions,
           lifeTipImportOptions: lifeTipImportOptions,
+          shoppingImportOptions: shoppingImportOptions,
           onOpenDiningImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
@@ -420,6 +462,15 @@ final class _HomeShellState extends State<HomeShell>
             }
           },
           onOpenLifeTipImport: (importId) {
+            for (final imported
+                in widget.controller.syncedReviewedCaptureImports) {
+              if (imported.importId != importId) continue;
+              final capture = widget.controller.captureById(imported.captureId);
+              if (capture != null) _openCapture(capture);
+              return;
+            }
+          },
+          onOpenShoppingImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
