@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../data/common_kernel_client.dart';
 import '../../domain/models.dart';
@@ -79,6 +80,9 @@ final class _ImportedFieldCorrectionScreenState
                 key: const Key('field-correction-input'),
                 initialValue: current,
                 onChanged: (text) => entered = text,
+                inputFormatters: [
+                  FilteringTextInputFormatter.deny(RegExp(r'[\x00-\x1f\x7f]')),
+                ],
                 maxLength: 512,
                 maxLines:
                     path.contains('/value') || path.contains('/instruction')
@@ -135,12 +139,12 @@ final class _ImportedFieldCorrectionScreenState
       setState(() => _data = data);
     } catch (error) {
       if (!mounted) return;
-      if (error is CommonKernelException &&
-          [
-            'FIELD_REVISION_CONFLICT',
-            'FIELD_NOT_EDITABLE',
-            'IMPORT_NOT_FOUND',
-          ].contains(error.code)) {
+      final retryable =
+          error is CommonKernelException &&
+          (['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'].contains(error.code) ||
+              error.statusCode == 429 ||
+              (error.statusCode != null && error.statusCode! >= 500));
+      if (!retryable) {
         _pendingRequest = null;
       }
       setState(() => _error = error);

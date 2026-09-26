@@ -7,6 +7,7 @@ final class _CorrectionClient implements CommonKernelClient {
   String value = '모퉁이식당 성수점';
   int revision = 1;
   bool timeOutOnce = true;
+  bool rejectOnce = false;
   final requests = <KernelJson>[];
 
   @override
@@ -28,6 +29,14 @@ final class _CorrectionClient implements CommonKernelClient {
   @override
   Future<KernelJson> correctImportedField(KernelJson request) async {
     requests.add(Map<String, Object?>.from(request));
+    if (rejectOnce) {
+      rejectOnce = false;
+      throw const CommonKernelException(
+        'INVALID_REQUEST',
+        '내용을 확인해 주세요',
+        statusCode: 400,
+      );
+    }
     if (value != request['value']) {
       value = request['value'] as String;
       revision += 1;
@@ -77,4 +86,40 @@ void main() {
       expect(find.text('현재 사용: 모퉁이식당 성수 본점'), findsOneWidget);
     },
   );
+
+  testWidgets('a rejected value can be edited again', (tester) async {
+    final client = _CorrectionClient()
+      ..timeOutOnce = false
+      ..rejectOnce = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ImportedFieldCorrectionScreen(
+          importId: 'capture-1',
+          attachments: const [],
+          client: client,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('correct-field-/place/name')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('field-correction-input')),
+      '첫 입력',
+    );
+    await tester.tap(find.byKey(const Key('field-correction-confirm')));
+    await tester.pumpAndSettle();
+    expect(find.text('새로고침'), findsOneWidget);
+    expect(find.byKey(const Key('correct-field-/place/name')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('correct-field-/place/name')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('field-correction-input')),
+      '새 이름',
+    );
+    await tester.tap(find.byKey(const Key('field-correction-confirm')));
+    await tester.pumpAndSettle();
+    expect(client.requests, hasLength(2));
+    expect(client.requests[1]['value'], '새 이름');
+  });
 }
