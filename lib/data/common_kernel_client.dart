@@ -496,6 +496,8 @@ abstract interface class CommonKernelClient {
   Future<List<KernelJson>> listScenarioConnections(String activityId);
   Future<KernelJson> createScenarioConnection(KernelJson request);
   Future<KernelJson> deleteScenarioConnection(KernelJson request);
+  Future<KernelJson> getRecipeShoppingTransferReview(String connectionId);
+  Future<KernelJson> transferRecipeShoppingConnection(KernelJson request);
   Future<KernelJson> getRecipeShoppingPlanReview(
     String shoppingActivityId,
     String connectionId,
@@ -677,6 +679,18 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> deleteScenarioConnection(KernelJson request) =>
       _request('POST', '/v1/kernel/scenario-connections/delete', request);
+
+  @override
+  Future<KernelJson> getRecipeShoppingTransferReview(
+    String connectionId,
+  ) => _request(
+    'GET',
+    '/v1/kernel/scenario-connections/transfer-review/${Uri.encodeComponent(connectionId)}',
+  );
+
+  @override
+  Future<KernelJson> transferRecipeShoppingConnection(KernelJson request) =>
+      _request('POST', '/v1/kernel/scenario-connections/transfer', request);
 
   @override
   Future<KernelJson> getRecipeShoppingPlanReview(

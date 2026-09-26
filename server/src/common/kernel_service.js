@@ -429,7 +429,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return entity ? { entityId: entity.id, type: entity.type, label: entity.label } : null;
   }
 
-  function syncConnectionSubjects(state, activityId) {
+  function syncConnectionSubjects(state, activityId, { recordChanges = true } = {}) {
     const before = state.knowledge.sequence;
     const subject = confirmedScenarioSubject(state, activityId);
     if (!subject) return;
@@ -462,7 +462,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         commandId: `${connection.id}:${side}-subject`, type: "assertion.add", payload },
       { predicates }).state;
     }
-    if (state.knowledge.sequence !== before) recordAffectedConsumers(state, before);
+    if (recordChanges && state.knowledge.sequence !== before) {
+      recordAffectedConsumers(state, before);
+    }
   }
 
   function linkedScenarioSubject(state, connection, activityId) {
@@ -476,10 +478,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           evidence.id === id && evidence.status === "active"))) ? subject : null;
   }
 
-  function recipeShoppingNeeds(state, connection) {
-    if (connection.kind !== "recipe_shopping" ||
-        !linkedScenarioSubject(state, connection, connection.fromActivityId)) return null;
-    const activityId = connection.fromActivityId;
+  function freshRecipeNeeds(state, activityId) {
     const activity = state.activities.activities[activityId];
     if (!activity || activity.ownerId !== ownerId) return null;
     const current = board(state, activityId);
@@ -509,6 +508,104 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       recipeId: recipe.id, recipeRevision: recipe.revision,
       targetServings: result.value.targetServings,
       items: structuredClone(result.value.items) };
+  }
+
+  function recipeShoppingNeeds(state, connection) {
+    if (connection.kind !== "recipe_shopping" ||
+        !linkedScenarioSubject(state, connection, connection.fromActivityId)) return null;
+    return freshRecipeNeeds(state, connection.fromActivityId);
+  }
+
+  function recipeShoppingTransferReview(state, connectionId) {
+    const connection = state.scenarioConnections?.[connectionId];
+    if (!connection || connection.ownerId !== ownerId ||
+        !connectionLive(state, connection) || connection.kind !== "recipe_shopping") {
+      throw new AppError("CONNECTION_NOT_FOUND", "레시피 쇼핑 연결을 찾지 못했어요.",
+        { httpStatus: 404 });
+    }
+    const shopping = board(state, connection.toActivityId);
+    const source = board(state, connection.fromActivityId);
+    if (shopping.lifecycle !== "active" || shopping.currentPlanRevision === 0) {
+      throw new AppError("SHOPPING_PLAN_UNAVAILABLE", "승인된 쇼핑 보드를 확인해 주세요.",
+        { httpStatus: 409 });
+    }
+    const task = shopping.tasks.find((item) => item.id === "confirm_choice" &&
+      item.capabilityId === "shopping.confirm_choice");
+    if (!task || task.executionStatus !== "not_started" || task.inputsPinned) {
+      throw new AppError("STARTED_TASK_PROTECTED",
+        "상품 선택이 이미 시작됐어요. 새 쇼핑 활동에서 확인해 주세요.",
+        { httpStatus: 409 });
+    }
+    const successors = Object.entries(state.reviewContinuations ?? {})
+      .filter(([, entry]) => entry.ownerId === ownerId &&
+        entry.fromActivityId === connection.fromActivityId)
+      .map(([activityId]) => {
+        const activity = state.activities.activities[activityId];
+        if (!activity || activity.ownerId !== ownerId) return null;
+        const candidate = board(state, activityId);
+        if (candidate.scenario !== "recipe" || candidate.lifecycle !== "active" ||
+            !candidate.currentPlanRevision) return null;
+        return { activityId, title: candidate.title, revision: candidate.revision,
+          recipeNeeds: freshRecipeNeeds(state, activityId) };
+      }).filter(Boolean);
+    return { connectionId, sourceActivityId: source.id,
+      expectedSourceRevision: source.revision,
+      shoppingActivityId: shopping.id, expectedShoppingRevision: shopping.revision,
+      successors };
+  }
+
+  function createConnectionGraph(state, { commandId, from, to, kind, note,
+    recordChanges = true }) {
+    const fromActivityId = from.id;
+    const toActivityId = to.id;
+    const stem = `scenario:connection:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+    const sourceId = `${stem}:source`;
+    const versionId = `${stem}:version`;
+    const evidenceId = `${stem}:evidence`;
+    const at = new Date().toISOString();
+    const content = { fromActivityId, toActivityId, kind, note, confirmedAt: at };
+    const before = state.knowledge.sequence;
+    const apply = (suffix, type, payload) => {
+      if (type === "assertion.add") validateAssertionRelation(state, payload);
+      state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+        commandId: `${stem}:${suffix}`, type, payload }, { predicates }).state;
+    };
+    apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+      title: "활동 간 연결", provenance: { scenario: "scenario_connection",
+        fromActivityId, toActivityId } });
+    apply("version", "source.version.add", { id: versionId, sourceId,
+      contentHash: fingerprint(content), content, capturedAt: at });
+    apply("evidence", "evidence.add", { id: evidenceId, sourceVersionId: versionId,
+      quote: `${from.title} ↔ ${to.title}`, locator: { kind: "user_confirmation",
+        jsonPointer: "/kind" } });
+    const anchor = (activity) => {
+      const id = `scenario:activity:${fingerprint([ownerId, activity.id]).slice(0, 32)}`;
+      if (!state.knowledge.entities.some((entity) => entity.ownerId === ownerId &&
+          entity.id === id && entity.status === "active")) {
+        apply(`anchor:${id}`, "entity.create", { id, type: "scenario.activity",
+          label: activity.title, externalIds: { activityId: activity.id } });
+      }
+      return id;
+    };
+    const fromAnchorId = anchor(from);
+    const toAnchorId = anchor(to);
+    apply("connection", "entity.create", { id: stem, type: "scenario.connection",
+      label: "사용자가 확인한 활동 연결" });
+    const assertion = (name, predicate, objectEntityId, typedValue) =>
+      apply(name, "assertion.add", { id: `${stem}:${name}`, subjectId: stem,
+        predicate, scope: { type: "connection", id: stem }, origin: "user_reported",
+        assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+        observedAt: at, ...(objectEntityId ? { objectEntityId } : { typedValue }) });
+    assertion("from", "scenario.connection_from", fromAnchorId);
+    assertion("to", "scenario.connection_to", toAnchorId);
+    assertion("kind", "scenario.connection_kind", null,
+      { type: "scenario.connection_kind", value: kind });
+    state.scenarioConnections[stem] = { id: stem, ownerId, sourceId,
+      fromActivityId, toActivityId, kind, note, createdAt: at, deleted: false };
+    syncConnectionSubjects(state, fromActivityId, { recordChanges });
+    syncConnectionSubjects(state, toActivityId, { recordChanges });
+    if (recordChanges) recordAffectedConsumers(state, before);
+    return stem;
   }
 
   function linkedRecipeNeedsCurrent(state, reference, shoppingActivityId = null) {
@@ -3008,6 +3105,100 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         });
       } catch (error) { throw toHttpError(error); }
     },
+    async getRecipeShoppingTransferReview(connectionId) {
+      try {
+        safeId(connectionId, "connectionId");
+        return await read((state) => recipeShoppingTransferReview(state, connectionId));
+      } catch (error) { throw toHttpError(error); }
+    },
+    async transferRecipeShoppingConnection(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "connectionId",
+          "successorActivityId", "expectedSourceRevision", "expectedShoppingRevision",
+          "expectedSuccessorRevision", "expectedSourceResultId", "confirmed"].includes(key)) ||
+          input.confirmed !== true ||
+          !Number.isSafeInteger(input.expectedSourceRevision) ||
+          !Number.isSafeInteger(input.expectedShoppingRevision) ||
+          !Number.isSafeInteger(input.expectedSuccessorRevision)) {
+          throw new AppError("INVALID_REQUEST", "레시피 연결 변경 요청을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const connectionId = safeId(input.connectionId, "connectionId");
+        const successorActivityId = safeId(input.successorActivityId, "successorActivityId");
+        const expectedSourceResultId = safeId(input.expectedSourceResultId,
+          "expectedSourceResultId");
+        const hash = requestFingerprint({ connectionId, successorActivityId,
+          expectedSourceRevision: input.expectedSourceRevision,
+          expectedShoppingRevision: input.expectedShoppingRevision,
+          expectedSuccessorRevision: input.expectedSuccessorRevision,
+          expectedSourceResultId });
+        return await store.transact((state) => {
+          assertState(state);
+          state.scenarioConnectionReceipts ??= {};
+          const receiptKey = requestFingerprint([ownerId, commandId]);
+          const prior = state.scenarioConnectionReceipts[receiptKey];
+          if (prior) {
+            if (prior.kind !== "transfer" || prior.hash !== hash) {
+              throw new AppError("COMMAND_ID_CONFLICT", "이미 사용한 명령 ID예요.",
+                { httpStatus: 409 });
+            }
+            return { state, result: { oldConnectionId: prior.oldId,
+              connectionId: prior.newId, replayed: true } };
+          }
+          const review = recipeShoppingTransferReview(state, connectionId);
+          const source = board(state, review.sourceActivityId);
+          const candidate = review.successors.find((item) =>
+            item.activityId === successorActivityId);
+          if (!candidate) throw new AppError("INVALID_SUCCESSOR",
+            "이 레시피 활동의 승인된 후속 활동을 선택해 주세요.", { httpStatus: 422 });
+          if (source.revision !== input.expectedSourceRevision ||
+              review.expectedShoppingRevision !== input.expectedShoppingRevision ||
+              candidate.revision !== input.expectedSuccessorRevision) {
+            throw new AppError("REVISION_CONFLICT", "활동이 변경됐어요. 연결을 다시 검토해 주세요.",
+              { httpStatus: 409 });
+          }
+          if (candidate.recipeNeeds?.status !== "ready" ||
+              candidate.recipeNeeds.sourceResultId !== expectedSourceResultId) {
+            throw new AppError("RECIPE_NEEDS_STALE",
+              "후속 레시피의 계산 결과가 바뀌었어요. 다시 검토해 주세요.",
+              { httpStatus: 409 });
+          }
+          const old = state.scenarioConnections[connectionId];
+          if (Object.values(state.scenarioConnections).some((entry) =>
+              entry.ownerId === ownerId && connectionLive(state, entry) &&
+              entry.fromActivityId === successorActivityId &&
+              entry.toActivityId === review.shoppingActivityId &&
+              entry.kind === "recipe_shopping")) {
+            throw new AppError("CONNECTION_EXISTS", "후속 레시피가 이미 연결됐어요.",
+              { httpStatus: 409 });
+          }
+          const before = state.knowledge.sequence;
+          const newId = createConnectionGraph(state, { commandId,
+            from: board(state, successorActivityId),
+            to: board(state, review.shoppingActivityId), kind: "recipe_shopping",
+            note: old.note, recordChanges: false });
+          state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+            commandId: `kernel:connection-transfer:${commandId}`, type: "source.delete",
+            payload: { sourceId: old.sourceId } }, { predicates }).state;
+          old.deleted = true;
+          old.note = null;
+          for (const proposal of Object.values(state.proposals)) {
+            if (proposal.ownerId === ownerId && proposal.status === "pending" &&
+                proposal.activityId === review.shoppingActivityId &&
+                proposal.run?.recipeNeedsReview?.reference?.connectionId === connectionId) {
+              proposal.status = "superseded";
+            }
+          }
+          recordAffectedConsumers(state, before);
+          state.scenarioConnectionReceipts[receiptKey] = { kind: "transfer", hash,
+            oldId: connectionId, newId };
+          return { state, result: { oldConnectionId: connectionId,
+            connectionId: newId, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
     async getRecipeShoppingPlanReview(shoppingActivityId, connectionId) {
       try {
         safeId(shoppingActivityId, "shoppingActivityId");
@@ -3175,55 +3366,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               entry.toActivityId === toActivityId && entry.kind === kind)) {
             throw new AppError("CONNECTION_EXISTS", "이미 연결된 활동이에요.", { httpStatus: 409 });
           }
-          const stem = `scenario:connection:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
-          const sourceId = `${stem}:source`;
-          const versionId = `${stem}:version`;
-          const evidenceId = `${stem}:evidence`;
-          const at = new Date().toISOString();
-          const content = { fromActivityId, toActivityId, kind, note: normalized.note,
-            confirmedAt: at };
-          const before = state.knowledge.sequence;
-          const apply = (suffix, type, payload) => {
-            if (type === "assertion.add") validateAssertionRelation(state, payload);
-            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
-              commandId: `${stem}:${suffix}`, type, payload }, { predicates }).state;
-          };
-          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
-            title: "활동 간 연결", provenance: { scenario: "scenario_connection",
-              fromActivityId, toActivityId } });
-          apply("version", "source.version.add", { id: versionId, sourceId,
-            contentHash: fingerprint(content), content, capturedAt: at });
-          apply("evidence", "evidence.add", { id: evidenceId, sourceVersionId: versionId,
-            quote: `${from.title} ↔ ${to.title}`, locator: { kind: "user_confirmation",
-              jsonPointer: "/kind" } });
-          const anchor = (activity) => {
-            const id = `scenario:activity:${fingerprint([ownerId, activity.id]).slice(0, 32)}`;
-            if (!state.knowledge.entities.some((entity) => entity.ownerId === ownerId &&
-                entity.id === id && entity.status === "active")) {
-              apply(`anchor:${id}`, "entity.create", { id, type: "scenario.activity",
-                label: activity.title, externalIds: { activityId: activity.id } });
-            }
-            return id;
-          };
-          const fromAnchorId = anchor(from);
-          const toAnchorId = anchor(to);
-          apply("connection", "entity.create", { id: stem, type: "scenario.connection",
-            label: "사용자가 확인한 활동 연결" });
-          const assertion = (name, predicate, objectEntityId, typedValue) =>
-            apply(name, "assertion.add", { id: `${stem}:${name}`, subjectId: stem,
-              predicate, scope: { type: "connection", id: stem }, origin: "user_reported",
-              assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
-              observedAt: at, ...(objectEntityId ? { objectEntityId } : { typedValue }) });
-          assertion("from", "scenario.connection_from", fromAnchorId);
-          assertion("to", "scenario.connection_to", toAnchorId);
-          assertion("kind", "scenario.connection_kind", null,
-            { type: "scenario.connection_kind", value: kind });
-          state.scenarioConnections[stem] = { id: stem, ownerId, sourceId,
-            fromActivityId, toActivityId, kind, note: normalized.note, createdAt: at, deleted: false };
+          const stem = createConnectionGraph(state, { commandId, from, to, kind,
+            note: normalized.note });
           state.scenarioConnectionReceipts[receiptKey] = { kind: "create", hash, id: stem };
-          syncConnectionSubjects(state, fromActivityId);
-          syncConnectionSubjects(state, toActivityId);
-          recordAffectedConsumers(state, before);
           return { state, result: { id: stem, deleted: false, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

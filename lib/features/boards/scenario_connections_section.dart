@@ -30,6 +30,7 @@ final class ScenarioConnectionsSection extends StatefulWidget {
     required this.board,
     required this.onOpenBoard,
     this.onPlanProposed,
+    this.onConnectionTransferred,
     super.key,
   });
 
@@ -37,6 +38,7 @@ final class ScenarioConnectionsSection extends StatefulWidget {
   final KernelJson board;
   final void Function(String activityId) onOpenBoard;
   final VoidCallback? onPlanProposed;
+  final VoidCallback? onConnectionTransferred;
 
   @override
   State<ScenarioConnectionsSection> createState() =>
@@ -50,6 +52,7 @@ final class _ScenarioConnectionsSectionState
   bool _busy = false;
   Object? _error;
   KernelJson? _pendingNeedsRequest;
+  KernelJson? _pendingTransferRequest;
 
   String get _activityId => widget.board['id'] as String;
   String get _scenario => (widget.board['scenario'] as String?) ?? '';
@@ -327,6 +330,141 @@ final class _ScenarioConnectionsSectionState
     }
   }
 
+  Future<void> _reviewTransfer(KernelJson connection) async {
+    if (_busy || _pendingTransferRequest != null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final review = await widget.client.getRecipeShoppingTransferReview(
+        connection['id'] as String,
+      );
+      if (!mounted) return;
+      final successors =
+          (review['successors'] as List?)
+              ?.whereType<Map>()
+              .map((entry) => Map<String, Object?>.from(entry))
+              .toList() ??
+          <KernelJson>[];
+      if (successors.isEmpty) {
+        setState(() => _error = '승인된 후속 레시피 활동이 아직 없어요.');
+        return;
+      }
+      final selected = await showDialog<KernelJson>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('후속 레시피 선택'),
+          content: SizedBox(
+            width: 440,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final candidate in successors)
+                  ListTile(
+                    title: Text(candidate['title']?.toString() ?? '후속 레시피'),
+                    subtitle: Text(
+                      (candidate['recipeNeeds'] as Map?)?['status'] == 'ready'
+                          ? '계산 완료 · ${(candidate['recipeNeeds'] as Map)['targetServings']}인분'
+                          : '필요량 계산을 마쳐야 연결을 옮길 수 있어요.',
+                    ),
+                    onTap:
+                        (candidate['recipeNeeds'] as Map?)?['status'] == 'ready'
+                        ? () => Navigator.pop(context, candidate)
+                        : null,
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('취소'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || selected == null) return;
+      final needs = selected['recipeNeeds'] as Map;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('레시피 쇼핑 연결 옮기기'),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${connection['otherTitle']} → ${selected['title']}'),
+                  Text('새 계산 결과 · ${needs['targetServings']}인분'),
+                  for (final item in (needs['items'] as List).whereType<Map>())
+                    Text(_needSummary(item)),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '이전 연결을 해제하고 후속 레시피로 바꿉니다. 쇼핑 계획은 별도로 검토하고 승인해야 바뀌어요.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('연결 옮기기'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true) return;
+      _pendingTransferRequest = {
+        'commandId': newKernelCommandId(),
+        'connectionId': connection['id'],
+        'successorActivityId': selected['activityId'],
+        'expectedSourceRevision': review['expectedSourceRevision'],
+        'expectedShoppingRevision': review['expectedShoppingRevision'],
+        'expectedSuccessorRevision': selected['revision'],
+        'expectedSourceResultId': needs['sourceResultId'],
+        'confirmed': true,
+      };
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (_pendingTransferRequest != null) await _sendPendingTransfer();
+  }
+
+  Future<void> _sendPendingTransfer() async {
+    final request = _pendingTransferRequest;
+    if (_busy || request == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.client.transferRecipeShoppingConnection(request);
+      _pendingTransferRequest = null;
+      await _load();
+      if (mounted) widget.onConnectionTransferred?.call();
+    } catch (error) {
+      final retryable =
+          error is CommonKernelException &&
+          (['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'].contains(error.code) ||
+              error.statusCode == 429 ||
+              (error.statusCode != null && error.statusCode! >= 500));
+      if (!retryable) _pendingTransferRequest = null;
+      if (mounted) setState(() => _error = error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   String _quantity(Object? raw) {
     if (raw is! Map) return '미확인';
     if (raw['status'] == 'as_needed') return '필요한 만큼';
@@ -448,6 +586,11 @@ final class _ScenarioConnectionsSectionState
               onPressed: _busy ? null : _sendPendingNeedsProposal,
               child: const Text('같은 장보기 변경안 다시 보내기'),
             ),
+          if (_pendingTransferRequest != null)
+            TextButton(
+              onPressed: _busy ? null : _sendPendingTransfer,
+              child: const Text('같은 연결 변경 다시 보내기'),
+            ),
           if (!_loading && _connections.isEmpty)
             const Padding(
               padding: EdgeInsets.only(top: 8),
@@ -482,6 +625,18 @@ final class _ScenarioConnectionsSectionState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _recipeNeeds(connection),
+                        if (_scenario == 'shopping' &&
+                            connection['kind'] == 'recipe_shopping')
+                          TextButton.icon(
+                            key: Key(
+                              'transfer-recipe-connection-${connection['id']}',
+                            ),
+                            onPressed: _busy || _pendingTransferRequest != null
+                                ? null
+                                : () => _reviewTransfer(connection),
+                            icon: const Icon(Icons.swap_horiz),
+                            label: const Text('후속 레시피로 연결 옮기기'),
+                          ),
                         if (_scenario == 'shopping' &&
                             (connection['recipeNeeds'] as Map)['status'] ==
                                 'ready' &&

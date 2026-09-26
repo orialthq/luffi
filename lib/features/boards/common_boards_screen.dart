@@ -3749,6 +3749,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                           onOpenBoard: (id) =>
                               unawaited(_openConnectedBoard(id)),
                           onPlanProposed: () => unawaited(_load()),
+                          onConnectionTransferred: () => unawaited(_load()),
                         ),
                       ),
                     ),

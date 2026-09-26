@@ -51,6 +51,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/health/exercise-outcomes": "recordHealthExerciseOutcomes",
   "/scenario-connections": "createScenarioConnection",
   "/scenario-connections/delete": "deleteScenarioConnection",
+  "/scenario-connections/transfer": "transferRecipeShoppingConnection",
   "/knowledge/commands": "knowledgeCommand",
   "/knowledge/query": "queryKnowledge",
   "/knowledge/resolve": "resolveKnowledge",
@@ -67,7 +68,8 @@ const KERNEL_POST_ROUTES = Object.freeze({
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
-  "getEditableCaptureFields", "getEditableRecipe", "getRecipeShoppingPlanReview"];
+  "getEditableCaptureFields", "getEditableRecipe", "getRecipeShoppingPlanReview",
+  "getRecipeShoppingTransferReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -192,6 +194,17 @@ export function createHttpServer({
           try { activityId = decodeURIComponent(connectionsMatch[1]); }
           catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.", { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.listScenarioConnections(activityId));
+        }
+        const transferReviewMatch =
+          /^\/scenario-connections\/transfer-review\/([^/]+)$/.exec(route);
+        if (transferReviewMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let connectionId;
+          try { connectionId = decodeURIComponent(transferReviewMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "연결 ID 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200,
+            await kernelService.getRecipeShoppingTransferReview(connectionId));
         }
         const recipeShoppingReviewMatch =
           /^\/shopping\/recipe-needs\/review\/([^/]+)\/([^/]+)$/.exec(route);

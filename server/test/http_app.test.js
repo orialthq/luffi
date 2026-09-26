@@ -432,6 +432,7 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/health/exercise-outcomes", "recordHealthExerciseOutcomes"],
     ["/scenario-connections", "createScenarioConnection"],
     ["/scenario-connections/delete", "deleteScenarioConnection"],
+    ["/scenario-connections/transfer", "transferRecipeShoppingConnection"],
     ["/knowledge/commands", "knowledgeCommand"],
     ["/knowledge/query", "queryKnowledge"],
     ["/knowledge/resolve", "resolveKnowledge"],
@@ -462,6 +463,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "getBoardReview", activityId });
   kernelService.listScenarioConnections = async (activityId) =>
     ({ method: "listScenarioConnections", activityId });
+  kernelService.getRecipeShoppingTransferReview = async (connectionId) =>
+    ({ method: "getRecipeShoppingTransferReview", connectionId });
   kernelService.getImportedFieldReview = async (importId, fieldKey) =>
     ({ method: "getImportedFieldReview", importId, fieldKey });
   kernelService.getEditableCaptureFields = async (importId) =>
@@ -495,6 +498,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/boards/summaries", { method: "getBoard", activityId: "summaries" }],
     ["/scenario-connections/activity-1", { method: "listScenarioConnections",
       activityId: "activity-1" }],
+    ["/scenario-connections/transfer-review/link%20one",
+      { method: "getRecipeShoppingTransferReview", connectionId: "link one" }],
     ["/ingestion/field-reviews/item-1?fieldKey=shopping.displayed_price",
       { method: "getImportedFieldReview", importId: "item-1",
         fieldKey: "shopping.displayed_price" }],

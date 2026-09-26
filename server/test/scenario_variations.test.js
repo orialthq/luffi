@@ -250,9 +250,34 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     confirmed: true });
   await service.acceptProposal({ proposalId: successor.proposalId,
     commandId: "approve-corrected-successor" });
-  const nextLink = await connect(successor.activityId, "link-corrected-successor");
-  assert.equal((await needsFor(nextLink.id)).status, "not_ready");
+  const transferPreview = await service.getRecipeShoppingTransferReview(oldLink.id);
+  assert.equal(transferPreview.successors.find((item) =>
+    item.activityId === successor.activityId).recipeNeeds.status, "not_ready");
   await calculate(successor.activityId, "new");
+  const transferReview = await service.getRecipeShoppingTransferReview(oldLink.id);
+  const candidate = transferReview.successors.find((item) =>
+    item.activityId === successor.activityId);
+  assert.equal(candidate.recipeNeeds.status, "ready");
+  const transferRequest = { commandId: "move-corrected-recipe", confirmed: true,
+    connectionId: oldLink.id, successorActivityId: successor.activityId,
+    expectedSourceRevision: transferReview.expectedSourceRevision,
+    expectedShoppingRevision: transferReview.expectedShoppingRevision,
+    expectedSuccessorRevision: candidate.revision,
+    expectedSourceResultId: candidate.recipeNeeds.sourceResultId };
+  await assert.rejects(service.transferRecipeShoppingConnection({ ...transferRequest,
+    commandId: "move-unreviewed-result", expectedSourceResultId: "wrong-result" }),
+  (error) => error.code === "RECIPE_NEEDS_STALE");
+  await assert.rejects(service.transferRecipeShoppingConnection({ ...transferRequest,
+    commandId: "move-unrelated-recipe", successorActivityId: "correctable-recipe" }),
+  (error) => error.code === "INVALID_SUCCESSOR");
+  const moved = await service.transferRecipeShoppingConnection(transferRequest);
+  assert.equal((await service.transferRecipeShoppingConnection(transferRequest)).replayed, true);
+  await assert.rejects(service.transferRecipeShoppingConnection({ ...transferRequest,
+    successorActivityId: "correctable-recipe" }),
+  (error) => error.code === "COMMAND_ID_CONFLICT");
+  const nextLink = { id: moved.connectionId };
+  assert.equal((await service.listScenarioConnections("linked-shopping")).connections
+    .some((entry) => entry.id === oldLink.id), false);
   const current = await needsFor(nextLink.id);
   assert.equal(current.status, "ready");
   assert.equal(current.recipeRevision, 1);
@@ -260,7 +285,7 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
   assert.notEqual(current.sourceResultId, oldReady.sourceResultId);
   assert.equal(current.items.find((item) => item.ingredientId === "tofu")
     .requiredQuantity.amount, 700);
-  assert.deepEqual(await needsFor(oldLink.id), { status: "stale" });
+  assert.equal(await needsFor(oldLink.id), undefined);
   const newReview = await service.getRecipeShoppingPlanReview("linked-shopping", nextLink.id);
   assert.equal(newReview.before, null);
   assert.equal(newReview.changes.length, 2);
@@ -298,8 +323,19 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     expectedRevision: successorBoard.revision, confirmed: true });
   await service.acceptProposal({ proposalId: secondSuccessor.proposalId,
     commandId: "approve-second-successor" });
-  const secondLink = await connect(secondSuccessor.activityId, "link-second-successor");
   await calculate(secondSuccessor.activityId, "second");
+  const secondTransferReview = await service.getRecipeShoppingTransferReview(nextLink.id);
+  const secondCandidate = secondTransferReview.successors.find((item) =>
+    item.activityId === secondSuccessor.activityId);
+  const secondTransfer = await service.transferRecipeShoppingConnection({
+    commandId: "move-second-successor", confirmed: true,
+    connectionId: nextLink.id, successorActivityId: secondSuccessor.activityId,
+    expectedSourceRevision: secondTransferReview.expectedSourceRevision,
+    expectedShoppingRevision: secondTransferReview.expectedShoppingRevision,
+    expectedSuccessorRevision: secondCandidate.revision,
+    expectedSourceResultId: secondCandidate.recipeNeeds.sourceResultId });
+  const secondLink = { id: secondTransfer.connectionId };
+  assert.equal((await service.listScenarioConnections("linked-shopping")).connections.length, 1);
   const secondReview = await service.getRecipeShoppingPlanReview(
     "linked-shopping", secondLink.id);
   assert.equal(secondReview.before.items.find((item) => item.ingredientId === "tofu")
@@ -324,6 +360,8 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     selectedImportId: "tofu", quantity: 1 });
   assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice").length, 0);
   await assert.rejects(service.getRecipeShoppingPlanReview("linked-shopping", secondLink.id),
+    (error) => error.code === "STARTED_TASK_PROTECTED");
+  await assert.rejects(service.getRecipeShoppingTransferReview(secondLink.id),
     (error) => error.code === "STARTED_TASK_PROTECTED");
   await service.deleteReviewedCapture({ importId: "recipe",
     commandId: "delete-linked-recipe-image" });

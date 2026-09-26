@@ -5,6 +5,65 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/data/common_kernel_client.dart';
 
 void main() {
+  test(
+    'recipe shopping transfer reviews encoded link and sends stable request',
+    () async {
+      final paths = <String>[];
+      final bodies = <Map<String, dynamic>>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        paths.add('${request.method} ${request.uri}');
+        if (request.method == 'POST') {
+          bodies.add(
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>,
+          );
+        } else {
+          await request.drain<void>();
+        }
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          request.method == 'GET'
+              ? '{"connectionId":"link/a","successors":[]}'
+              : '{"connectionId":"link/b","replayed":false}',
+        );
+        await request.response.close();
+      });
+      final client = HttpCommonKernelClient(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        token: 'development-token',
+      );
+      expect(
+        (await client.getRecipeShoppingTransferReview(
+          'link/a',
+        ))['connectionId'],
+        'link/a',
+      );
+      final request = <String, Object?>{
+        'commandId': 'move-1',
+        'connectionId': 'link/a',
+        'successorActivityId': 'meal/b',
+        'expectedSourceRevision': 4,
+        'expectedShoppingRevision': 3,
+        'expectedSuccessorRevision': 5,
+        'expectedSourceResultId': 'result-2',
+        'confirmed': true,
+      };
+      expect(
+        (await client.transferRecipeShoppingConnection(
+          request,
+        ))['connectionId'],
+        'link/b',
+      );
+      expect(paths, [
+        'GET /v1/kernel/scenario-connections/transfer-review/link%2Fa',
+        'POST /v1/kernel/scenario-connections/transfer',
+      ]);
+      expect(bodies.single, request);
+    },
+  );
+
   test('recipe shopping review and proposal use stable encoded ids', () async {
     final requests = <String>[];
     final bodies = <Map<String, dynamic>>[];

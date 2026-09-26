@@ -231,6 +231,9 @@ final class FakeKernelClient implements CommonKernelClient {
   final fieldReviewStates = <String, KernelJson>{};
   final connectionRequests = <KernelJson>[];
   final connectionDeletions = <KernelJson>[];
+  KernelJson? transferReview;
+  final transferRequests = <KernelJson>[];
+  bool timeoutTransferOnce = false;
   KernelJson? recipeShoppingReview;
   final recipeShoppingPlanRequests = <KernelJson>[];
   bool timeoutRecipeShoppingProposalOnce = false;
@@ -392,6 +395,42 @@ final class FakeKernelClient implements CommonKernelClient {
     connectionDeletions.add(request);
     connections = [];
     return {'id': request['connectionId'], 'deleted': true};
+  }
+
+  @override
+  Future<KernelJson> getRecipeShoppingTransferReview(
+    String connectionId,
+  ) async => transferReview ?? {'connectionId': connectionId, 'successors': []};
+
+  @override
+  Future<KernelJson> transferRecipeShoppingConnection(
+    KernelJson request,
+  ) async {
+    transferRequests.add(Map<String, Object?>.from(request));
+    if (timeoutTransferOnce) {
+      timeoutTransferOnce = false;
+      throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간 초과');
+    }
+    connections = [
+      {
+        'id': 'new-link',
+        'kind': 'recipe_shopping',
+        'direction': 'to',
+        'otherActivityId': request['successorActivityId'],
+        'otherTitle': '수정한 레시피',
+        'otherReadyTaskCount': 0,
+        'recipeNeeds': {
+          'status': 'ready',
+          'sourceResultId': request['expectedSourceResultId'],
+          'targetServings': 4,
+          'items': <Object?>[],
+        },
+      },
+    ];
+    return {
+      'oldConnectionId': request['connectionId'],
+      'connectionId': 'new-link',
+    };
   }
 
   @override
@@ -3593,6 +3632,95 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('두부 · 필요한 양 600 g · 재고 미확인'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'shopping connection moves to reviewed successor with stable retry',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.connections = [
+        {
+          'id': 'old-link',
+          'kind': 'recipe_shopping',
+          'direction': 'to',
+          'otherActivityId': 'old-recipe',
+          'otherTitle': '이전 레시피',
+          'otherReadyTaskCount': 0,
+          'recipeNeeds': {'status': 'stale'},
+        },
+      ];
+      client.transferReview = {
+        'connectionId': 'old-link',
+        'sourceActivityId': 'old-recipe',
+        'shoppingActivityId': 'shopping-1',
+        'expectedSourceRevision': 5,
+        'expectedShoppingRevision': 3,
+        'successors': [
+          {
+            'activityId': 'new-recipe',
+            'title': '수정한 레시피',
+            'revision': 6,
+            'recipeNeeds': {
+              'status': 'ready',
+              'sourceResultId': 'new-result',
+              'targetServings': 4,
+              'items': [
+                {
+                  'name': '두부',
+                  'status': 'needed',
+                  'requiredQuantity': {
+                    'status': 'known',
+                    'amount': 700,
+                    'unit': 'g',
+                  },
+                  'missingQuantity': {
+                    'status': 'known',
+                    'amount': 700,
+                    'unit': 'g',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      };
+      client.timeoutTransferOnce = true;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ScenarioConnectionsSection(
+              client: client,
+              board: {
+                'id': 'shopping-1',
+                'scenario': 'shopping',
+                'revision': 3,
+              },
+              onOpenBoard: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('후속 레시피로 연결 옮기기'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('수정한 레시피'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('700 g'), findsWidgets);
+      await tester.tap(find.text('연결 옮기기'));
+      await tester.pumpAndSettle();
+      expect(client.transferRequests, hasLength(1));
+      expect(
+        client.transferRequests.single['expectedSourceResultId'],
+        'new-result',
+      );
+      expect(find.text('이전 레시피'), findsOneWidget);
+      await tester.tap(find.text('같은 연결 변경 다시 보내기'));
+      await tester.pumpAndSettle();
+      expect(client.transferRequests, hasLength(2));
+      expect(client.transferRequests[1], client.transferRequests[0]);
+      expect(find.text('이전 레시피'), findsNothing);
+      expect(find.text('수정한 레시피'), findsOneWidget);
     },
   );
   testWidgets(
