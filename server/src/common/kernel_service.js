@@ -485,14 +485,18 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (!result) return { status: "stale" };
     try { registry.validate("recipe.shopping_list", result.value); }
     catch { return { status: "stale" }; }
-    const recipe = confirmedScenarioSubject(state, activityId);
-    const confirmed = state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
-      item.status === "active" && item.subjectId === recipe?.entityId &&
-      item.predicate === "recipe.confirmed_recipe" && item.evidenceIds.every((id) =>
-        state.knowledge.evidence.some((evidence) => evidence.ownerId === ownerId &&
-          evidence.id === id && evidence.status === "active")));
-    if (!confirmed) return { status: "stale" };
+    let recipe;
+    try { recipe = editableRecipeGraph(state, activityId).recipe; }
+    catch { return { status: "stale" }; }
+    const inputRecipe = task.inputBindings?.recipe;
+    if (result.value.recipeId !== recipe.id ||
+        result.value.recipeRevision !== recipe.revision ||
+        result.value.targetServings !== task.inputBindings?.targetServings ||
+        !inputRecipe || requestFingerprint(inputRecipe) !== requestFingerprint(recipe)) {
+      return { status: "stale" };
+    }
     return { status: "ready", sourceActivityId: activityId, sourceResultId: result.id,
+      recipeRevision: recipe.revision,
       targetServings: result.value.targetServings,
       items: structuredClone(result.value.items) };
   }

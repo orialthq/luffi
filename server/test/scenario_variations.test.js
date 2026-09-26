@@ -153,6 +153,100 @@ test("recipe amount 'as needed' stays nonnumeric and an actual tofu offer links 
   assert.equal((await service.getBoard("shopping-board")).id, "shopping-board");
 });
 
+test("a corrected image-backed recipe hides old shopping amounts until a successor recalculates", async (t) => {
+  const { service, store } = await setup(t);
+  await importCapture(service, "recipe");
+  await importCapture(service, "tofu");
+  const createdRecipe = await service.createRecipeScenario({ commandId: "create-correctable-recipe",
+    activityId: "correctable-recipe", confirmed: true, importId: "recipe",
+    targetServings: 4, inventory: [], recipe: { id: "tofu-egg-correction", revision: 1,
+      title: "두부 달걀 볶음", baseServings: 2, ingredients: [
+        { id: "tofu", ingredientId: "tofu", name: "두부",
+          quantity: { status: "known", amount: 300, unit: "g" }, scaling: "linear" },
+        { id: "egg", ingredientId: "egg", name: "달걀",
+          quantity: { status: "known", amount: 2, unit: "count" }, scaling: "linear" },
+      ] } });
+  await approve(service, createdRecipe, "approve-correctable-recipe");
+  const createdShopping = await service.createShoppingScenario({ commandId: "create-linked-shopping",
+    activityId: "linked-shopping", confirmed: true, importIds: ["tofu"],
+    purpose: "두부 달걀 볶음 재료 고르기" });
+  await approve(service, createdShopping, "approve-linked-shopping");
+  const connect = async (fromActivityId, commandId) => {
+    const from = await service.getBoard(fromActivityId);
+    const to = await service.getBoard("linked-shopping");
+    return service.createScenarioConnection({ commandId, confirmed: true,
+      kind: "recipe_shopping", fromActivityId, toActivityId: "linked-shopping",
+      expectedFromRevision: from.revision, expectedToRevision: to.revision });
+  };
+  const oldLink = await connect("correctable-recipe", "link-old-recipe");
+  const calculate = async (activityId, stem) => {
+    let current = await service.getBoard(activityId);
+    await service.runTask({ commandId: `${stem}-scale`, activityId,
+      taskId: "scale_servings", expectedRevision: current.revision });
+    current = await service.getBoard(activityId);
+    await service.activityCommand({ commandId: `${stem}-stock`, type: "task.recordResult",
+      activityId, expectedRevision: current.revision,
+      payload: { taskId: "check_inventory", value: [] } });
+    current = await service.getBoard(activityId);
+    await service.activityCommand({ commandId: `${stem}-finish-stock`, type: "task.transition",
+      activityId, expectedRevision: current.revision,
+      payload: { taskId: "check_inventory", to: "completed" } });
+    current = await service.getBoard(activityId);
+    await service.runTask({ commandId: `${stem}-needs`, activityId,
+      taskId: "calculate_requirements", expectedRevision: current.revision });
+  };
+  await calculate("correctable-recipe", "old");
+  const needsFor = async (id) => (await service.listScenarioConnections("linked-shopping"))
+    .connections.find((item) => item.id === id)?.recipeNeeds;
+  const oldReady = await needsFor(oldLink.id);
+  assert.equal(oldReady.status, "ready");
+  assert.equal(oldReady.recipeRevision, 1);
+  assert.equal(oldReady.items.find((item) => item.ingredientId === "tofu")
+    .requiredQuantity.amount, 600);
+  const setStoredOutputRevision = async (revision) => store.transact((state) => {
+    const activity = state.activities.activities["correctable-recipe"];
+    const task = activity.tasks.find((item) => item.id === "calculate_requirements");
+    activity.results.find((item) => item.id === task.latestOutputRef)
+      .value.recipeRevision = revision;
+    return { state, result: null };
+  });
+  await setStoredOutputRevision(9);
+  assert.deepEqual(await needsFor(oldLink.id), { status: "stale" });
+  await setStoredOutputRevision(1);
+  assert.equal((await needsFor(oldLink.id)).status, "ready");
+
+  const editable = await service.getEditableRecipe("correctable-recipe");
+  await service.correctRecipe({ commandId: "change-tofu-amount",
+    activityId: "correctable-recipe", expectedAssertionId: editable.assertionId,
+    confirmed: true, recipe: { title: editable.recipe.title,
+      baseServings: editable.recipe.baseServings,
+      ingredients: editable.recipe.ingredients.map((item) => item.id === "tofu"
+        ? { ...item, quantity: { status: "known", amount: 350, unit: "g" } } : item),
+      steps: editable.recipe.steps ?? [] } });
+  const stale = await needsFor(oldLink.id);
+  assert.deepEqual(stale, { status: "stale" });
+  assert.equal((await service.getBoardReview("correctable-recipe")).reasonCode,
+    "STARTED_TASK_PROTECTED");
+
+  const oldBoard = await service.getBoard("correctable-recipe");
+  const successor = await service.createReviewSuccessor({ commandId: "continue-corrected-recipe",
+    activityId: "correctable-recipe", expectedRevision: oldBoard.revision,
+    confirmed: true });
+  await service.acceptProposal({ proposalId: successor.proposalId,
+    commandId: "approve-corrected-successor" });
+  const nextLink = await connect(successor.activityId, "link-corrected-successor");
+  assert.equal((await needsFor(nextLink.id)).status, "not_ready");
+  await calculate(successor.activityId, "new");
+  const current = await needsFor(nextLink.id);
+  assert.equal(current.status, "ready");
+  assert.equal(current.recipeRevision, 1);
+  assert.equal(current.sourceActivityId, successor.activityId);
+  assert.notEqual(current.sourceResultId, oldReady.sourceResultId);
+  assert.equal(current.items.find((item) => item.ingredientId === "tofu")
+    .requiredQuantity.amount, 700);
+  assert.deepEqual(await needsFor(oldLink.id), { status: "stale" });
+});
+
 test("old and current displayed prices require review instead of silently choosing one", async (t) => {
   const { service, store } = await setup(t);
   const captured = await importCapture(service, "price");

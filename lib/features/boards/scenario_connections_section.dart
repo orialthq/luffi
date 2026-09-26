@@ -58,6 +58,22 @@ final class _ScenarioConnectionsSectionState
   }
 
   Future<void> _load() async {
+    if (!_loading || _connections.isNotEmpty) {
+      setState(() {
+        _loading = true;
+        _connections = [
+          for (final connection in _connections)
+            if (connection['recipeNeeds'] is Map &&
+                (connection['recipeNeeds'] as Map)['status'] == 'ready')
+              {
+                ...connection,
+                'recipeNeeds': {'status': 'unverified'},
+              }
+            else
+              connection,
+        ];
+      });
+    }
     try {
       final connections = await widget.client.listScenarioConnections(
         _activityId,
@@ -223,8 +239,13 @@ final class _ScenarioConnectionsSectionState
     if (status == 'not_ready') {
       return const Text('레시피의 재고 확인과 필요량 계산이 끝나면 준비 목록이 보여요.');
     }
+    if (status == 'unverified') {
+      return const Text('최신 수량을 확인하지 못해 준비 목록을 숨겼어요. 연결을 새로고침해 주세요.');
+    }
     if (status != 'ready' || items is! List) {
-      return const Text('레시피 근거가 바뀌어 준비 목록을 다시 확인해야 해요.');
+      return const Text(
+        '레시피가 바뀌어 이전 수량을 숨겼어요. 변경을 검토하고, 완료된 계산이라면 새 활동에서 다시 계산해 주세요.',
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

@@ -3732,7 +3732,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                       sliver: SliverToBoxAdapter(
                         child: ScenarioConnectionsSection(
                           key: ValueKey(
-                            'connections-${board['id']}-${board['revision']}',
+                            'connections-${board['id']}-${board['revision']}-$_loadGeneration',
                           ),
                           client: widget.client,
                           board: board,

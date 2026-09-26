@@ -221,6 +221,7 @@ final class FakeKernelClient implements CommonKernelClient {
   bool commitThenTimeout = false;
   bool failContracts = false;
   bool failRead = false;
+  bool failConnections = false;
   bool failNextPage = false;
   CommonKernelException? scenarioFailure;
   int reads = 0;
@@ -351,8 +352,15 @@ final class FakeKernelClient implements CommonKernelClient {
   }
 
   @override
-  Future<List<KernelJson>> listScenarioConnections(String activityId) async =>
-      connections;
+  Future<List<KernelJson>> listScenarioConnections(String activityId) async {
+    if (failConnections) {
+      throw const CommonKernelException(
+        'NETWORK_UNAVAILABLE',
+        '연결 상태를 읽지 못했어요',
+      );
+    }
+    return connections;
+  }
 
   @override
   Future<KernelJson> createScenarioConnection(KernelJson request) async {
@@ -3506,6 +3514,15 @@ void main() {
       expect(find.text('레시피 준비 목록 · 4인분'), findsOneWidget);
       expect(find.text('두부 · 필요한 양 600 g · 재고 미확인'), findsOneWidget);
       expect(find.text('소금 · 필요한 양 필요한 만큼'), findsOneWidget);
+      client.failConnections = true;
+      await tester.tap(find.byTooltip('연결 새로고침'));
+      await tester.pumpAndSettle();
+      expect(find.text('두부 · 필요한 양 600 g · 재고 미확인'), findsNothing);
+      expect(
+        find.text('최신 수량을 확인하지 못해 준비 목록을 숨겼어요. 연결을 새로고침해 주세요.'),
+        findsOneWidget,
+      );
+      client.failConnections = false;
       client.connections = [
         {
           ...client.connections.single,
@@ -3514,7 +3531,10 @@ void main() {
       ];
       await tester.tap(find.byTooltip('연결 새로고침'));
       await tester.pumpAndSettle();
-      expect(find.text('레시피 근거가 바뀌어 준비 목록을 다시 확인해야 해요.'), findsOneWidget);
+      expect(
+        find.text('레시피가 바뀌어 이전 수량을 숨겼어요. 변경을 검토하고, 완료된 계산이라면 새 활동에서 다시 계산해 주세요.'),
+        findsOneWidget,
+      );
       expect(find.text('두부 · 필요한 양 600 g · 재고 미확인'), findsNothing);
     },
   );
