@@ -71,6 +71,8 @@ test("reviewed restaurant images form branch-safe candidates and a user-confirme
   assert.equal(linked.otherSubject?.entityId, selected.placeId);
   assert.equal((await store.snapshot()).knowledge.assertions.find((item) =>
     item.predicate === "scenario.connection_to_subject")?.objectEntityId, selected.placeId);
+  assert.equal((await store.snapshot()).knowledge.assertions.find((item) =>
+    item.predicate === "scenario.connection_to_subject")?.evidenceIds.length, 2);
   board = await service.getBoard("dinner-one");
   const details = board.tasks.find((item) => item.id === "review_visit_details");
   assert.equal(details.readiness.inputs.placeId, selected.placeId);

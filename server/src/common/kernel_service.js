@@ -368,10 +368,22 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       if (!side || state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
           item.id === `${connection.id}:${side}-subject`)) continue;
       const evidenceId = `${connection.id}:evidence`;
+      const subjectEvidenceId = state.knowledge.assertions.find((item) =>
+        item.ownerId === ownerId && item.status === "active" &&
+        (item.subjectId === subject.entityId || item.objectEntityId === subject.entityId) &&
+        item.evidenceIds.some((id) => state.knowledge.evidence.some((evidence) =>
+          evidence.ownerId === ownerId && evidence.id === id && evidence.status === "active")))
+        ?.evidenceIds.find((id) => state.knowledge.evidence.some((evidence) =>
+          evidence.ownerId === ownerId && evidence.id === id && evidence.status === "active")) ??
+        state.knowledge.identityDecisions.find((item) => item.ownerId === ownerId &&
+          item.entityId === subject.entityId && item.status === "accepted")?.evidenceIds.find((id) =>
+          state.knowledge.evidence.some((evidence) => evidence.ownerId === ownerId &&
+            evidence.id === id && evidence.status === "active"));
+      if (!subjectEvidenceId) continue;
       const payload = { id: `${connection.id}:${side}-subject`, subjectId: connection.id,
         predicate: `scenario.connection_${side}_subject`, objectEntityId: subject.entityId,
         scope: { type: "connection", id: connection.id }, origin: "user_reported",
-        assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+        assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId, subjectEvidenceId],
         observedAt: new Date().toISOString() };
       validateAssertionRelation(state, payload);
       state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
@@ -387,7 +399,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const side = connection.fromActivityId === activityId ? "from" : "to";
     return state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
       item.id === `${connection.id}:${side}-subject` && item.status === "active" &&
-      item.objectEntityId === subject.entityId) ? subject : null;
+      item.objectEntityId === subject.entityId && item.evidenceIds.every((id) =>
+        state.knowledge.evidence.some((evidence) => evidence.ownerId === ownerId &&
+          evidence.id === id && evidence.status === "active"))) ? subject : null;
   }
 
   function issuedContext(state, contextId) {

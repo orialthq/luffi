@@ -99,15 +99,38 @@ test("a confirmed scenario result already present when linking becomes a typed s
   const { service, store } = await fixture(t);
   await service.knowledgeCommand({ commandId: "recipe-entity", type: "entity.create",
     payload: { id: "recipe-result", type: "recipe.recipe", label: "토마토 달걀 볶음" } });
+  await service.knowledgeCommand({ commandId: "ingredient-entity", type: "entity.create",
+    payload: { id: "ingredient-result", type: "recipe.ingredient_requirement",
+      label: "토마토" } });
+  await service.knowledgeCommand({ commandId: "recipe-proof-source", type: "source.create",
+    payload: { id: "recipe-proof", kind: "user_confirmation", title: "확인한 레시피" } });
+  await service.knowledgeCommand({ commandId: "recipe-proof-version", type: "source.version.add",
+    payload: { id: "recipe-proof-v1", sourceId: "recipe-proof", contentHash: "fixture",
+      content: { title: "토마토 달걀 볶음" }, capturedAt: "2026-09-26T09:00:00Z" } });
+  await service.knowledgeCommand({ commandId: "recipe-proof-evidence", type: "evidence.add",
+    payload: { id: "recipe-proof-e1", sourceVersionId: "recipe-proof-v1",
+      quote: "토마토", locator: { kind: "user_confirmation", jsonPointer: "/title" } } });
+  await service.knowledgeCommand({ commandId: "recipe-proof-assertion", type: "assertion.add",
+    payload: { id: "recipe-has-ingredient", subjectId: "recipe-result",
+      predicate: "recipe.has_requirement", objectEntityId: "ingredient-result",
+      scope: { type: "activity", id: "recipe" }, origin: "user_reported",
+      assertedBy: { type: "user", id: "owner-a" }, evidenceIds: ["recipe-proof-e1"],
+      observedAt: "2026-09-26T09:00:00Z" } });
   await store.transact((state) => {
     state.recipeScenarioReceipts.recipe.result.recipeEntityId = "recipe-result";
     return { state, result: null };
   });
   const created = await service.createScenarioConnection(link("recipe_shopping"));
-  assert.equal((await store.snapshot()).knowledge.assertions.find((item) =>
-    item.id === `${created.id}:from-subject`)?.objectEntityId, "recipe-result");
+  const subjectEdge = (await store.snapshot()).knowledge.assertions.find((item) =>
+    item.id === `${created.id}:from-subject`);
+  assert.equal(subjectEdge?.objectEntityId, "recipe-result");
+  assert.equal(subjectEdge?.evidenceIds.length, 2);
   assert.equal((await service.listScenarioConnections("shopping")).connections[0]
     .otherSubject?.entityId, "recipe-result");
+  await service.knowledgeCommand({ commandId: "erase-recipe-proof", type: "source.delete",
+    payload: { sourceId: "recipe-proof" } });
+  assert.equal((await service.listScenarioConnections("shopping")).connections[0]
+    .otherSubject, null);
 });
 
 test("unlinking and source deletion remove graph support and board navigation", async (t) => {
