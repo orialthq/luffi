@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "unknown",
+  "tags": [
+    {
+      "value": "건강·운동",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "운동 준비 체크리스트"
+      ],
+      "citations": []
+    },
+    {
+      "value": "생활·팁",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.91,
+      "evidenceIds": [
+        "e2",
+        "e1"
+      ],
+      "quotes": [
+        "생활 꿀팁",
+        "준비 체크리스트"
+      ],
+      "citations": []
+    },
+    {
+      "value": "운동",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e3",
+        "e1"
+      ],
+      "quotes": [
+        "집에서 운동할 때",
+        "운동 준비 체크리스트"
+      ],
+      "citations": []
+    },
+    {
+      "value": "정리·수납",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.82,
+      "evidenceIds": [
+        "e6"
+      ],
+      "quotes": [
+        "공간 정리하기"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "집에서 운동할 때 준비 꿀팁",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e3"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "집에서 운동하기 전 매트, 물병, 공간을 준비하는 체크리스트입니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "운동 준비 체크리스트",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "생활 꿀팁",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "집에서 운동할 때",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "바닥에 미끄럽지 않은 매트 깔기",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e5",
+      "text": "물병을 손 닿는 곳에 두기",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e6",
+      "text": "시작 전 공간 정리하기",
+      "region": "image_text",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [
+    {
+      "order": 1,
+      "instruction": "바닥에 미끄럽지 않은 매트 깔기",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "order": 2,
+      "instruction": "물병을 손 닿는 곳에 두기",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e5"
+      ]
+    },
+    {
+      "order": 3,
+      "instruction": "시작 전 공간 정리하기",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e6"
+      ]
+    }
+  ],
+  "facts": [],
+  "conflicts": [],
+  "warnings": []
+}

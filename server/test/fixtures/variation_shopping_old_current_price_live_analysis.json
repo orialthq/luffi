@@ -1,0 +1,137 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "commerce_product",
+  "tags": [
+    {
+      "value": "생활용품",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "접이식 패브릭 수납함",
+        "수납함"
+      ],
+      "citations": []
+    },
+    {
+      "value": "정리·수납",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "접이식 패브릭 수납함"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "접이식 패브릭 수납함",
+    "status": "observed",
+    "confidence": 1,
+    "evidenceIds": [
+      "e2"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "베이지색 접이식 패브릭 수납함으로 크기는 38×28×24cm이다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "합성 자료",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e2",
+      "text": "접이식 패브릭 수납함",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e3",
+      "text": "색상 베이지",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e4",
+      "text": "크기 38 × 28 × 24 cm",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e5",
+      "text": "이전 표시가 19,900원",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e6",
+      "text": "화면 표시가 12,900원",
+      "region": "product_panel",
+      "confidence": 1
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "소재",
+      "value": "합성 자료",
+      "confidence": 1,
+      "evidenceIds": [
+        "e1"
+      ]
+    },
+    {
+      "label": "색상",
+      "value": "베이지",
+      "confidence": 1,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "크기",
+      "value": "38 × 28 × 24 cm",
+      "confidence": 1,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "label": "이전 표시가",
+      "value": "19,900원",
+      "confidence": 1,
+      "evidenceIds": [
+        "e5"
+      ]
+    },
+    {
+      "label": "화면 표시가",
+      "value": "12,900원",
+      "confidence": 1,
+      "evidenceIds": [
+        "e6"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

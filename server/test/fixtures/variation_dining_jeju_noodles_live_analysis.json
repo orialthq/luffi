@@ -1,0 +1,144 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "place",
+  "tags": [
+    {
+      "value": "맛집·카페",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "대표 메뉴 ‘고기국수’와 제주 향토 음식 표기"
+      ],
+      "citations": []
+    },
+    {
+      "value": "성산읍",
+      "facet": "area",
+      "source": "ai",
+      "confidence": 0.96,
+      "evidenceIds": [
+        "e3"
+      ],
+      "quotes": [
+        "‘제주 서귀포시 성산읍’"
+      ],
+      "citations": []
+    },
+    {
+      "value": "한식",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.9,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "‘제주 향토 음식’"
+      ],
+      "citations": []
+    },
+    {
+      "value": "국수",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.95,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "대표 메뉴 ‘고기국수’"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "제주 바다국수",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e4"
+    ]
+  },
+  "place": {
+    "name": "제주 바다국수",
+    "address": "제주 서귀포시 성산읍",
+    "searchArea": "성산읍",
+    "category": "restaurant",
+    "confidence": 0.98,
+    "evidenceIds": [
+      "e4",
+      "e3"
+    ]
+  },
+  "summary": "제주 성산읍에 위치한 고기국수 전문 음식점으로 영업시간은 11시부터 20시까지입니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "고기국수 9,000원",
+      "region": "menu",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "제주 향토 음식",
+      "region": "image_text",
+      "confidence": 0.98
+    },
+    {
+      "id": "e3",
+      "text": "제주 서귀포시 성산읍",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "제주 바다국수",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e5",
+      "text": "영업시간 11:00 - 20:00",
+      "region": "image_text",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "대표 메뉴",
+      "value": "고기국수",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1"
+      ]
+    },
+    {
+      "label": "대표 메뉴 가격",
+      "value": "9,000원",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1"
+      ]
+    },
+    {
+      "label": "영업시간",
+      "value": "11:00 - 20:00",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e5"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

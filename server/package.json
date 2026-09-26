@@ -18,6 +18,7 @@
     "test:life-tip-image-live": "node scripts/verify-life-tip-image.mjs",
     "test:shopping-image-live": "node scripts/verify-shopping-images.mjs",
     "test:health-image-live": "node scripts/verify-health-image.mjs",
+    "test:scenario-variations-live": "node scripts/verify-scenario-variations.mjs",
     "test:watch": "node --test --watch test/*.test.js"
   }
 }

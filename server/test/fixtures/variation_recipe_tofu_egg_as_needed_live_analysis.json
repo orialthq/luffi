@@ -1,0 +1,187 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "recipe",
+  "tags": [
+    {
+      "value": "레시피",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e5"
+      ],
+      "quotes": [
+        "\"재료\"와 조리 단계가 함께 표시됨"
+      ],
+      "citations": []
+    },
+    {
+      "value": "밑반찬",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.82,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "제목에 \"두부 달걀 볶음\"이 표시됨"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "두부 달걀 볶음",
+    "status": "observed",
+    "confidence": 1,
+    "evidenceIds": [
+      "e2"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "두부와 달걀을 함께 볶아 만드는 2인분 레시피다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "재료 (2인분)",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e2",
+      "text": "두부 달걀 볶음",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e3",
+      "text": "두부 300g",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e4",
+      "text": "달걀 2개",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e5",
+      "text": "소금 약간",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e6",
+      "text": "1. 두부를 깍둑썰기한다.",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e7",
+      "text": "2. 달걀을 푼다.",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e8",
+      "text": "3. 함께 볶는다.",
+      "region": "image_text",
+      "confidence": 1
+    }
+  ],
+  "ingredientGroups": [
+    {
+      "name": "재료",
+      "ingredients": [
+        {
+          "name": "두부",
+          "amount": "300",
+          "unit": "g",
+          "preparation": null,
+          "optional": false,
+          "originalText": "두부 300g",
+          "confidence": 1,
+          "evidenceIds": [
+            "e3"
+          ]
+        },
+        {
+          "name": "달걀",
+          "amount": "2",
+          "unit": "개",
+          "preparation": null,
+          "optional": false,
+          "originalText": "달걀 2개",
+          "confidence": 1,
+          "evidenceIds": [
+            "e4"
+          ]
+        },
+        {
+          "name": "소금",
+          "amount": "약간",
+          "unit": null,
+          "preparation": null,
+          "optional": false,
+          "originalText": "소금 약간",
+          "confidence": 1,
+          "evidenceIds": [
+            "e5"
+          ]
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "order": 1,
+      "instruction": "두부를 깍둑썰기한다.",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e6"
+      ]
+    },
+    {
+      "order": 2,
+      "instruction": "달걀을 푼다.",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e7"
+      ]
+    },
+    {
+      "order": 3,
+      "instruction": "두부와 달걀을 함께 볶는다.",
+      "durationSeconds": null,
+      "temperature": null,
+      "evidenceIds": [
+        "e8"
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "label": "분량",
+      "value": "2인분",
+      "confidence": 1,
+      "evidenceIds": [
+        "e1"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

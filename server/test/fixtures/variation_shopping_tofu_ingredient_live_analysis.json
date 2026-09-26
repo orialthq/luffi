@@ -1,0 +1,111 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "commerce_product",
+  "tags": [
+    {
+      "value": "식재료",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "\"부침용 두부 300g\"",
+        "두부 제품이 보임"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "부침용 두부 300g",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e1"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "부침용 두부 300g 한 팩의 가격과 냉장 보관 정보가 표시되어 있습니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "부침용 두부 300g",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "합성 자료",
+      "region": "product_panel",
+      "confidence": 0.98
+    },
+    {
+      "id": "e3",
+      "text": "가격 2,400원",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "수량 1팩",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e5",
+      "text": "보관 냉장",
+      "region": "product_panel",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "제품 유형",
+      "value": "합성 자료",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e2"
+      ]
+    },
+    {
+      "label": "가격",
+      "value": "2,400원",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "수량",
+      "value": "1팩",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "label": "보관",
+      "value": "냉장",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e5"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

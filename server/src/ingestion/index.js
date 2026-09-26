@@ -160,7 +160,8 @@ export function buildReviewedCaptureImport(input, options = {}) {
     if (titleType) mention("/title/value", analysis.title.value, titleType, analysis.title);
     if (analysis.contentKind === "unknown" &&
         analysis.tags?.some((tag) => tag.value === "생활·팁" && tag.facet === "field") &&
-        analysis.facts?.some((fact) => fact.value?.trim() && fact.evidenceIds?.length)) {
+        (analysis.facts?.some((fact) => fact.value?.trim() && fact.evidenceIds?.length) ||
+          analysis.steps?.some((step) => step.instruction?.trim() && step.evidenceIds?.length))) {
       mention("/title/value", analysis.title.value, "life_tip.tip", analysis.title);
     }
     if (analysis.contentKind === "unknown" &&

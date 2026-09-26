@@ -1164,15 +1164,24 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       item.ownerId === ownerId && item.id === receipt.sourceVersionId &&
       item.status === "active");
     const analysis = version?.content?.analysis;
+    const numberedFacts = Array.isArray(analysis?.facts) && analysis.facts.length > 0 &&
+      analysis.facts.every((item, index) => item.label === `${index + 1}단계` &&
+        item.value?.trim() && item.evidenceIds?.length);
+    const orderedSteps = !numberedFacts && Array.isArray(analysis?.steps) &&
+      analysis.steps.length > 0 && analysis.steps.every((item, index) =>
+        item.order === index + 1 && item.instruction?.trim() && item.evidenceIds?.length);
+    const entries = numberedFacts ? analysis.facts.map((item, index) => ({
+      text: item.value, evidenceIds: item.evidenceIds, path: `/facts/${index}/value`,
+    })) : orderedSteps ? analysis.steps.map((item, index) => ({
+      text: item.instruction, evidenceIds: item.evidenceIds,
+      path: `/steps/${index}/instruction`,
+    })) : [];
     if (!analysis || analysis.contentKind !== "unknown" ||
         analysis.completeness !== "complete" ||
         analysis.title?.status !== "observed" || !analysis.title.value?.trim() ||
         !analysis.tags?.some((item) => item.value === "생활·팁" &&
           item.facet === "field" && item.evidenceIds?.length) ||
-        !Array.isArray(analysis.facts) || analysis.facts.length < 1 ||
-        analysis.facts.length > 8 || analysis.facts.some((item, index) =>
-          item.label !== `${index + 1}단계` || !item.value?.trim() ||
-          !item.evidenceIds?.length)) {
+        entries.length < 1 || entries.length > 8) {
       throw new AppError("IMPORT_NOT_LIFE_TIP",
         "화면에 제목과 순서가 보이는 생활 꿀팁만 사용할 수 있어요.",
         { httpStatus: 400 });
@@ -1183,14 +1192,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (!mention) throw new AppError("IMPORT_NOT_LIFE_TIP",
       "꿀팁 제목 근거를 확인할 수 없어요.", { httpStatus: 400 });
     const contextQueries = [];
-    for (const path of ["/title/value", ...analysis.facts.map((_, index) =>
-      `/facts/${index}/value`)]) {
+    for (const path of ["/title/value", ...entries.map((item) => item.path)]) {
       const field = state.knowledge.assertions.find((item) =>
         item.ownerId === ownerId && item.subjectId === receipt.result?.materialId &&
         item.predicate === "ingestion.extracted_field" &&
         item.typedValue?.value?.path === path && item.status === "active");
       const expectedValue = path === "/title/value" ? analysis.title.value :
-        analysis.facts[Number(path.split("/")[2])].value;
+        entries.find((item) => item.path === path).text;
       if (!field || field.typedValue?.value?.value !== expectedValue) {
         throw new AppError("CONTEXT_STALE", "꿀팁 근거가 변경됐어요.",
           { httpStatus: 409 });
@@ -1198,14 +1206,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
         scope: field.scope });
     }
-    const candidates = analysis.facts.map((fact, index) => {
-      const evidenceIds = fact.evidenceIds.map((legacyId) =>
+    const candidates = entries.map((entry, index) => {
+      const evidenceIds = entry.evidenceIds.map((legacyId) =>
         state.knowledge.evidence.find((item) => item.ownerId === ownerId &&
           item.sourceVersionId === version.id && item.status === "active" &&
           item.locator?.legacyEvidenceId === legacyId)?.id);
       if (evidenceIds.some((id) => !id)) throw new AppError("CONTEXT_STALE",
         "꿀팁 단계의 화면 근거를 찾지 못했어요.", { httpStatus: 409 });
-      return { factIndex: index + 1, text: fact.value.trim(), evidenceIds };
+      return { factIndex: index + 1, text: entry.text.trim(), evidenceIds };
     });
     return { candidate: { importId, title: analysis.title.value.trim(),
       mentionId: mention.id, candidates }, contextQueries };
