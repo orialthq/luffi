@@ -10,6 +10,18 @@ import 'travel_scenario_dialogs.dart';
 import 'life_tip_scenario_dialogs.dart';
 import 'shopping_scenario_dialogs.dart';
 import 'health_scenario_dialogs.dart';
+import 'scenario_connections_section.dart';
+
+bool _connectionKindsVisible(KernelJson board) => const {
+  'recipe',
+  'dining',
+  'fashion',
+  'beauty',
+  'travel',
+  'life_tip',
+  'shopping',
+  'health',
+}.contains(board['scenario']);
 
 KernelJson _object(Object? value) =>
     value is Map ? Map<String, Object?>.from(value) : {};
@@ -2183,6 +2195,26 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
   bool _needsRefresh = false;
   int _loadGeneration = 0;
 
+  Future<void> _openConnectedBoard(String activityId) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => CommonBoardScreen(
+          client: widget.client,
+          activityId: activityId,
+          contracts: widget.contracts,
+          onOpenDiningImport: widget.onOpenDiningImport,
+          onOpenFashionImport: widget.onOpenFashionImport,
+          onOpenBeautyImport: widget.onOpenBeautyImport,
+          onOpenTravelImport: widget.onOpenTravelImport,
+          onOpenLifeTipImport: widget.onOpenLifeTipImport,
+          onOpenShoppingImport: widget.onOpenShoppingImport,
+          onOpenHealthImport: widget.onOpenHealthImport,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3518,6 +3550,21 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                     sliver: SliverToBoxAdapter(child: _overview(board, tasks)),
                   ),
+                  if (_connectionKindsVisible(board))
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      sliver: SliverToBoxAdapter(
+                        child: ScenarioConnectionsSection(
+                          key: ValueKey(
+                            'connections-${board['id']}-${board['revision']}',
+                          ),
+                          client: widget.client,
+                          board: board,
+                          onOpenBoard: (id) =>
+                              unawaited(_openConnectedBoard(id)),
+                        ),
+                      ),
+                    ),
                   SliverPadding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     sliver: SliverList(

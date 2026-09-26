@@ -426,6 +426,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/health/scenarios", "createHealthScenario"],
     ["/health/confirm-exercises", "confirmHealthExercises"],
     ["/health/exercise-outcomes", "recordHealthExerciseOutcomes"],
+    ["/scenario-connections", "createScenarioConnection"],
+    ["/scenario-connections/delete", "deleteScenarioConnection"],
     ["/knowledge/commands", "knowledgeCommand"],
     ["/knowledge/query", "queryKnowledge"],
     ["/knowledge/resolve", "resolveKnowledge"],
@@ -450,6 +452,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
   kernelService.listBoardSummaries = async (options) => ({ method: "listBoardSummaries", options });
   kernelService.listResources = async () => ["resource"];
   kernelService.getBoard = async (activityId) => ({ method: "getBoard", activityId });
+  kernelService.listScenarioConnections = async (activityId) =>
+    ({ method: "listScenarioConnections", activityId });
   const token = "t".repeat(32);
   const baseUrl = await startServer(t, { kernelService, kernelToken: token });
   const authorization = { Authorization: `Bearer ${token}` };
@@ -473,6 +477,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
       options: { limit: 2, cursor: "previous" } }],
     ["/resources", { resources: ["resource"] }],
     ["/boards/summaries", { method: "getBoard", activityId: "summaries" }],
+    ["/scenario-connections/activity-1", { method: "listScenarioConnections",
+      activityId: "activity-1" }],
     ["/boards/meal%20plan", { method: "getBoard", activityId: "meal plan" }],
   ]) {
     const response = await fetch(`${baseUrl}/v1/kernel${path}`, { headers: authorization });

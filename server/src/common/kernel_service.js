@@ -4,6 +4,7 @@ import {
   applyActivityCommand, createActivityState, getActivityBoard,
 } from "../activities/index.js";
 import { domainRegistry } from "../domains/index.js";
+import { CONNECTION_KINDS, SCENARIO_SUBJECT_TYPES, SCENARIO_TYPES } from "../domains/scenario_connections.js";
 import {
   buildReviewedCaptureImport, INGESTION_PREDICATES, INGESTION_TYPES,
   validateImportedValue,
@@ -57,6 +58,8 @@ export function createCommonKernelState() {
     shoppingCommandReceipts: {},
     healthScenarioReceipts: {},
     healthCommandReceipts: {},
+    scenarioConnections: {},
+    scenarioConnectionReceipts: {},
   };
 }
 
@@ -293,11 +296,98 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       claim.ownerId === ownerId && claim.activityId === activityId);
     return {
       ...value,
+      scenario: scenarioForActivity(state, activityId),
       resourceClaims,
       pendingChanges: state.reviewEvents.filter((event) => event.activityId === activityId),
       pendingProposals: Object.values(state.proposals).filter((proposal) =>
         proposal.ownerId === ownerId && proposal.activityId === activityId && proposal.status === "pending"),
     };
+  }
+
+  function scenarioForActivity(state, activityId) {
+    for (const [scenario, receipts] of [
+      ["recipe", state.recipeScenarioReceipts], ["dining", state.diningScenarioReceipts],
+      ["fashion", state.fashionScenarioReceipts], ["beauty", state.beautyScenarioReceipts],
+      ["travel", state.travelScenarioReceipts], ["life_tip", state.lifeTipScenarioReceipts],
+      ["shopping", state.shoppingScenarioReceipts], ["health", state.healthScenarioReceipts],
+    ]) {
+      if (Object.values(receipts ?? {}).some((entry) => !entry.deleted &&
+          entry.result?.activityId === activityId)) return scenario;
+    }
+    return null;
+  }
+
+  function connectionLive(state, entry) {
+    if (entry.deleted || !state.knowledge.sources.some((source) =>
+        source.ownerId === ownerId && source.id === entry.sourceId && source.status === "active")) {
+      return false;
+    }
+    return ["from", "to", "kind"].every((name) =>
+      state.knowledge.assertions.some((assertion) => assertion.ownerId === ownerId &&
+        assertion.id === `${entry.id}:${name}` && assertion.status === "active" &&
+        assertion.evidenceIds.every((id) => state.knowledge.evidence.some((evidence) =>
+          evidence.ownerId === ownerId && evidence.id === id && evidence.status === "active"))));
+  }
+
+  function confirmedScenarioSubject(state, activityId) {
+    const scenario = scenarioForActivity(state, activityId);
+    const config = {
+      dining: ["select_place", "placeId"], fashion: ["confirm_outfit", "outfitId"],
+      beauty: ["confirm_routine", "templateId"],
+      travel: ["confirm_itinerary", "itineraryId"],
+      life_tip: ["confirm_actions", "planId"],
+      shopping: ["confirm_choice", "choice.id"],
+      health: ["confirm_exercises", "planId"],
+    }[scenario];
+    let entityId = null;
+    if (scenario === "recipe") {
+      entityId = Object.values(state.recipeScenarioReceipts ?? {}).find((entry) =>
+        !entry.deleted && entry.result?.activityId === activityId)?.result?.recipeEntityId ?? null;
+    } else if (config) {
+      const activity = state.activities.activities[activityId];
+      const task = activity?.tasks.find((item) => item.id === config[0] &&
+        item.executionStatus === "completed");
+      const output = activity?.results.find((item) => item.id === task?.latestOutputRef)?.value;
+      entityId = config[1] === "choice.id" ? output?.choice?.id : output?.[config[1]];
+    }
+    if (!entityId) return null;
+    const entity = state.knowledge.entities.find((item) => item.ownerId === ownerId &&
+      item.id === entityId && item.type === SCENARIO_SUBJECT_TYPES[scenario] &&
+      item.status === "active");
+    return entity ? { entityId: entity.id, type: entity.type, label: entity.label } : null;
+  }
+
+  function syncConnectionSubjects(state, activityId) {
+    const before = state.knowledge.sequence;
+    const subject = confirmedScenarioSubject(state, activityId);
+    if (!subject) return;
+    for (const connection of Object.values(state.scenarioConnections ?? {})) {
+      if (connection.ownerId !== ownerId || !connectionLive(state, connection)) continue;
+      const side = connection.fromActivityId === activityId ? "from" :
+        connection.toActivityId === activityId ? "to" : null;
+      if (!side || state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
+          item.id === `${connection.id}:${side}-subject`)) continue;
+      const evidenceId = `${connection.id}:evidence`;
+      const payload = { id: `${connection.id}:${side}-subject`, subjectId: connection.id,
+        predicate: `scenario.connection_${side}_subject`, objectEntityId: subject.entityId,
+        scope: { type: "connection", id: connection.id }, origin: "user_reported",
+        assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+        observedAt: new Date().toISOString() };
+      validateAssertionRelation(state, payload);
+      state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+        commandId: `${connection.id}:${side}-subject`, type: "assertion.add", payload },
+      { predicates }).state;
+    }
+    if (state.knowledge.sequence !== before) recordAffectedConsumers(state, before);
+  }
+
+  function linkedScenarioSubject(state, connection, activityId) {
+    const subject = confirmedScenarioSubject(state, activityId);
+    if (!subject) return null;
+    const side = connection.fromActivityId === activityId ? "from" : "to";
+    return state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
+      item.id === `${connection.id}:${side}-subject` && item.status === "active" &&
+      item.objectEntityId === subject.entityId) ? subject : null;
   }
 
   function issuedContext(state, contextId) {
@@ -408,6 +498,25 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   function redactScenarioReceipts(state, receipts, sourceId) {
     for (const receipt of receipts) {
       const { activityId } = receipt.result;
+      for (const connection of Object.values(state.scenarioConnections ?? {})) {
+        if (connection.ownerId !== ownerId || connection.deleted ||
+            (connection.fromActivityId !== activityId && connection.toActivityId !== activityId)) continue;
+        state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+          commandId: `kernel:connection-cascade:${sourceId}:${connection.id}`,
+          type: "source.delete", payload: { sourceId: connection.sourceId },
+        }, { predicates }).state;
+        connection.deleted = true;
+        connection.note = null;
+      }
+      const anchorId = `scenario:activity:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+      const anchor = state.knowledge.entities.find((entity) => entity.ownerId === ownerId &&
+        entity.id === anchorId && entity.status === "active");
+      if (anchor) {
+        anchor.status = "deleted";
+        anchor.label = "";
+        anchor.externalIds = {};
+        anchor.revision += 1;
+      }
       for (const claim of state.resources.claims.filter((item) => item.ownerId === ownerId &&
           item.activityId === activityId && item.state === "held")) {
         const resource = state.resources.resources.find((item) => item.ownerId === ownerId &&
@@ -661,6 +770,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     linkedBeautySources, linkedTravelSources, linkedLifeTipSources,
     linkedShoppingSources, linkedHealthSources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
+    for (const connection of Object.values(state.scenarioConnections ?? {})) {
+      if (connection.ownerId === ownerId && connection.sourceId === source?.id) {
+        connection.deleted = true;
+        connection.note = null;
+      }
+    }
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
     }
@@ -1260,6 +1375,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             const activity = state.activities.activities[id];
             const readyTaskCount = getActivityBoard(state.activities, id, { ownerId }).nextActions.length;
             return { id, title: activity.title, goal: activity.goal, lifecycle: activity.lifecycle,
+              scenario: scenarioForActivity(state, id),
               revision: activity.revision, currentPlanRevision: activity.currentPlanRevision,
               taskCount: activity.tasks.length, readyTaskCount,
               pendingChangeCount: pendingChanges.get(id) ?? 0,
@@ -1272,6 +1388,174 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     async getBoard(activityId) {
       try { return await read((state) => board(state, activityId)); }
       catch (error) { throw toHttpError(error); }
+    },
+    async listScenarioConnections(activityId) {
+      try {
+        safeId(activityId, "활동 ID");
+        return await read((state) => {
+          board(state, activityId);
+          return { connections: Object.values(state.scenarioConnections ?? {})
+            .filter((entry) => entry.ownerId === ownerId && connectionLive(state, entry) &&
+              (entry.fromActivityId === activityId || entry.toActivityId === activityId) &&
+              state.activities.activities[entry.fromActivityId]?.ownerId === ownerId &&
+              state.activities.activities[entry.toActivityId]?.ownerId === ownerId)
+            .map((entry) => {
+              const otherActivityId = entry.fromActivityId === activityId
+                ? entry.toActivityId : entry.fromActivityId;
+              const other = state.activities.activities[otherActivityId];
+              if (!other || other.ownerId !== ownerId) return null;
+              return { id: entry.id, kind: entry.kind, direction: entry.fromActivityId === activityId
+                ? "from" : "to", otherActivityId, otherScenario: scenarioForActivity(state, otherActivityId),
+              otherTitle: other.title, otherLifecycle: other.lifecycle,
+              otherReadyTaskCount: getActivityBoard(state.activities, otherActivityId,
+                { ownerId }).nextActions.length,
+              otherSubject: linkedScenarioSubject(state, entry, otherActivityId),
+              note: entry.note, createdAt: entry.createdAt };
+            }).filter(Boolean).sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async createScenarioConnection(raw) {
+      const input = requestObject(raw);
+      const commandId = safeId(input.commandId, "명령 ID");
+      const fromActivityId = safeId(input.fromActivityId, "시작 활동 ID");
+      const toActivityId = safeId(input.toActivityId, "연결 활동 ID");
+      const kind = safeId(input.kind, "연결 종류");
+      const note = input.note ?? null;
+      if (Object.keys(input).some((key) => !["commandId", "fromActivityId", "toActivityId",
+          "kind", "note", "confirmed", "expectedFromRevision", "expectedToRevision"].includes(key)) ||
+          input.confirmed !== true || fromActivityId === toActivityId ||
+          (kind !== "related" && !Object.hasOwn(CONNECTION_KINDS, kind)) ||
+          (note !== null && (typeof note !== "string" || !note.trim() || note.length > 240)) ||
+          !Number.isInteger(input.expectedFromRevision) ||
+          !Number.isInteger(input.expectedToRevision)) {
+        throw new AppError("INVALID_REQUEST", "활동 연결 요청을 확인해 주세요.", { httpStatus: 400 });
+      }
+      const normalized = { fromActivityId, toActivityId, kind, note: note?.trim() ?? null,
+        expectedFromRevision: input.expectedFromRevision,
+        expectedToRevision: input.expectedToRevision, confirmed: true };
+      try {
+        return await store.transact((state) => {
+          assertState(state);
+          state.scenarioConnections ??= {};
+          state.scenarioConnectionReceipts ??= {};
+          const receiptKey = requestFingerprint([ownerId, commandId]);
+          const existing = state.scenarioConnectionReceipts[receiptKey];
+          const hash = requestFingerprint(normalized);
+          if (existing) {
+            if (existing.kind !== "create" || existing.hash !== hash) {
+              throw new AppError("COMMAND_ID_CONFLICT", "이미 사용한 명령 ID예요.", { httpStatus: 409 });
+            }
+            return { state, result: { id: existing.id,
+              deleted: state.scenarioConnections[existing.id]?.deleted === true, replayed: true } };
+          }
+          const from = board(state, fromActivityId);
+          const to = board(state, toActivityId);
+          if (from.revision !== input.expectedFromRevision || to.revision !== input.expectedToRevision) {
+            throw new AppError("REVISION_CONFLICT", "연결할 활동이 변경됐어요.", { httpStatus: 409 });
+          }
+          const validKinds = kind === "related"
+            ? SCENARIO_TYPES.includes(from.scenario) && SCENARIO_TYPES.includes(to.scenario) &&
+              from.scenario !== to.scenario
+            : from.scenario === CONNECTION_KINDS[kind][0] &&
+              to.scenario === CONNECTION_KINDS[kind][1];
+          if (from.lifecycle !== "active" || to.lifecycle !== "active" ||
+              !from.currentPlanRevision || !to.currentPlanRevision || !validKinds) {
+            throw new AppError("INVALID_CONNECTION", "선택한 활동과 연결 종류가 맞지 않아요.",
+              { httpStatus: 422 });
+          }
+          if (Object.values(state.scenarioConnections).some((entry) => entry.ownerId === ownerId &&
+              connectionLive(state, entry) && entry.fromActivityId === fromActivityId &&
+              entry.toActivityId === toActivityId && entry.kind === kind)) {
+            throw new AppError("CONNECTION_EXISTS", "이미 연결된 활동이에요.", { httpStatus: 409 });
+          }
+          const stem = `scenario:connection:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const evidenceId = `${stem}:evidence`;
+          const at = new Date().toISOString();
+          const content = { fromActivityId, toActivityId, kind, note: normalized.note,
+            confirmedAt: at };
+          const before = state.knowledge.sequence;
+          const apply = (suffix, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${suffix}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "활동 간 연결", provenance: { scenario: "scenario_connection",
+              fromActivityId, toActivityId } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(content), content, capturedAt: at });
+          apply("evidence", "evidence.add", { id: evidenceId, sourceVersionId: versionId,
+            quote: `${from.title} ↔ ${to.title}`, locator: { kind: "user_confirmation",
+              jsonPointer: "/kind" } });
+          const anchor = (activity) => {
+            const id = `scenario:activity:${fingerprint([ownerId, activity.id]).slice(0, 32)}`;
+            if (!state.knowledge.entities.some((entity) => entity.ownerId === ownerId &&
+                entity.id === id && entity.status === "active")) {
+              apply(`anchor:${id}`, "entity.create", { id, type: "scenario.activity",
+                label: activity.title, externalIds: { activityId: activity.id } });
+            }
+            return id;
+          };
+          const fromAnchorId = anchor(from);
+          const toAnchorId = anchor(to);
+          apply("connection", "entity.create", { id: stem, type: "scenario.connection",
+            label: "사용자가 확인한 활동 연결" });
+          const assertion = (name, predicate, objectEntityId, typedValue) =>
+            apply(name, "assertion.add", { id: `${stem}:${name}`, subjectId: stem,
+              predicate, scope: { type: "connection", id: stem }, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+              observedAt: at, ...(objectEntityId ? { objectEntityId } : { typedValue }) });
+          assertion("from", "scenario.connection_from", fromAnchorId);
+          assertion("to", "scenario.connection_to", toAnchorId);
+          assertion("kind", "scenario.connection_kind", null,
+            { type: "scenario.connection_kind", value: kind });
+          state.scenarioConnections[stem] = { id: stem, ownerId, sourceId,
+            fromActivityId, toActivityId, kind, note: normalized.note, createdAt: at, deleted: false };
+          state.scenarioConnectionReceipts[receiptKey] = { kind: "create", hash, id: stem };
+          syncConnectionSubjects(state, fromActivityId);
+          syncConnectionSubjects(state, toActivityId);
+          recordAffectedConsumers(state, before);
+          return { state, result: { id: stem, deleted: false, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async deleteScenarioConnection(raw) {
+      const input = requestObject(raw);
+      const commandId = safeId(input.commandId, "명령 ID");
+      const id = safeId(input.connectionId, "연결 ID");
+      if (Object.keys(input).some((key) => !["commandId", "connectionId"].includes(key))) {
+        throw new AppError("INVALID_REQUEST", "연결 해제 요청을 확인해 주세요.", { httpStatus: 400 });
+      }
+      try {
+        return await store.transact((state) => {
+          assertState(state);
+          state.scenarioConnectionReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const existing = state.scenarioConnectionReceipts[key];
+          if (existing) {
+            if (existing.kind !== "delete" || existing.id !== id) {
+              throw new AppError("COMMAND_ID_CONFLICT", "이미 사용한 명령 ID예요.", { httpStatus: 409 });
+            }
+            return { state, result: { id, deleted: true, replayed: true } };
+          }
+          const connection = state.scenarioConnections?.[id];
+          if (!connection || connection.ownerId !== ownerId || connection.deleted) {
+            throw new AppError("NOT_FOUND", "연결을 찾지 못했어요.", { httpStatus: 404 });
+          }
+          const before = state.knowledge.sequence;
+          state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+            commandId: `kernel:connection-delete:${commandId}`, type: "source.delete",
+            payload: { sourceId: connection.sourceId } }, { predicates }).state;
+          connection.deleted = true;
+          connection.note = null;
+          state.scenarioConnectionReceipts[key] = { kind: "delete", id };
+          recordAffectedConsumers(state, before);
+          return { state, result: { id, deleted: true, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
     },
     async activityCommand(raw) {
       const command = injectOwner(raw, ownerId);
@@ -1863,6 +2147,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.activities = applied.state;
           const result = { activityId, placeId, candidateId, revision: applied.result.revision };
           state.diningCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          syncConnectionSubjects(state, activityId);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -2163,6 +2448,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.activities = applied.state;
           const result = { activityId, outfitId, revision: applied.result.revision };
           state.fashionCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          syncConnectionSubjects(state, activityId);
           scenario.result.confirmationSourceId = sourceId;
           return { state, result: { ...result, replayed: false } };
         });
@@ -2507,6 +2793,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             revision: applied.result.revision };
           state.beautyCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
           scenario.result.confirmationSourceId = sourceId;
+          syncConnectionSubjects(state, activityId);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -2903,6 +3190,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.activities = applied.state;
           const result = { activityId, itineraryId, revision: applied.result.revision };
           state.travelCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          syncConnectionSubjects(state, activityId);
           scenario.result.confirmationSourceId = sourceId;
           return { state, result: { ...result, replayed: false } };
         });
@@ -3253,6 +3541,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.activities = applied.state;
           const result = { activityId, planId, revision: applied.result.revision };
           state.lifeTipCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          syncConnectionSubjects(state, activityId);
           scenario.result.confirmationSourceId = sourceId;
           return { state, result: { ...result, replayed: false } };
         });
@@ -3598,6 +3887,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.activities = applied.state;
           const result = { activityId, planId, revision: applied.result.revision };
           state.healthCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          syncConnectionSubjects(state, activityId);
           scenario.result.confirmationSourceId = sourceId;
           return { state, result: { ...result, replayed: false } };
         });
@@ -4000,6 +4290,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.activities = applied.state;
           const result = { activityId, choiceId, revision: applied.result.revision };
           state.shoppingCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          syncConnectionSubjects(state, activityId);
           scenario.result.confirmationSourceId = sourceId;
           return { state, result: { ...result, replayed: false } };
         });

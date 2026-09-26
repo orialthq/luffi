@@ -49,6 +49,17 @@ test("reviewed restaurant images form branch-safe candidates and a user-confirme
   assert.equal(before.pendingProposals.length, 1);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-dinner" });
   let board = await service.getBoard("dinner-one");
+  await service.activityCommand({ commandId: "create-travel-peer", type: "activity.create",
+    activityId: "travel-peer", expectedRevision: 0,
+    payload: { title: "성수 여행", goal: { description: "방문할 곳 정하기" } } });
+  await store.transact((state) => {
+    state.activities.activities["travel-peer"].currentPlanRevision = 1;
+    state.travelScenarioReceipts["travel-peer"] = { result: { activityId: "travel-peer" } };
+    return { state, result: null };
+  });
+  await service.createScenarioConnection({ commandId: "travel-dinner-link",
+    fromActivityId: "travel-peer", toActivityId: "dinner-one", kind: "travel_dining",
+    expectedFromRevision: 1, expectedToRevision: board.revision, confirmed: true });
   const candidates = board.tasks.find((item) => item.id === "select_place").readiness.inputs.candidates;
   assert.equal(candidates.length, 2);
   assert.deepEqual(candidates.find((item) => item.name === "모퉁이식당 성수점").importIds, ["a", "c"]);
@@ -56,6 +67,10 @@ test("reviewed restaurant images form branch-safe candidates and a user-confirme
   const selected = await service.selectDiningPlace({ commandId: "choose-dinner", activityId: "dinner-one",
     expectedRevision: board.revision, candidateId: candidates[0].id });
   assert.equal(selected.replayed, false);
+  const linked = (await service.listScenarioConnections("travel-peer")).connections[0];
+  assert.equal(linked.otherSubject?.entityId, selected.placeId);
+  assert.equal((await store.snapshot()).knowledge.assertions.find((item) =>
+    item.predicate === "scenario.connection_to_subject")?.objectEntityId, selected.placeId);
   board = await service.getBoard("dinner-one");
   const details = board.tasks.find((item) => item.id === "review_visit_details");
   assert.equal(details.readiness.inputs.placeId, selected.placeId);

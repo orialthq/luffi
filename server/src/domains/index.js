@@ -6,10 +6,11 @@ import { travelPack } from "./travel.js";
 import { lifeTipPack } from "./life_tip.js";
 import { shoppingPack } from "./shopping.js";
 import { healthPack } from "./health.js";
+import { scenarioConnectionsPack } from "./scenario_connections.js";
 import { createDomainRegistry as createRegistry } from "./registry.js";
 
 export { DomainContractError } from "./schema.js";
 export const DOMAIN_PACKS = Object.freeze([recipePack, diningPack, fashionPack, beautyPack,
-  travelPack, lifeTipPack, shoppingPack, healthPack]);
+  travelPack, lifeTipPack, shoppingPack, healthPack, scenarioConnectionsPack]);
 export function createDomainRegistry(packs = DOMAIN_PACKS) { return createRegistry(packs); }
 export const domainRegistry = createDomainRegistry();

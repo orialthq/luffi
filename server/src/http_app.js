@@ -45,6 +45,8 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/health/scenarios": "createHealthScenario",
   "/health/confirm-exercises": "confirmHealthExercises",
   "/health/exercise-outcomes": "recordHealthExerciseOutcomes",
+  "/scenario-connections": "createScenarioConnection",
+  "/scenario-connections/delete": "deleteScenarioConnection",
   "/knowledge/commands": "knowledgeCommand",
   "/knowledge/query": "queryKnowledge",
   "/knowledge/resolve": "resolveKnowledge",
@@ -57,7 +59,8 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/resources/commands": "resourceCommand",
   "/resources/availability": "resourceAvailability",
 });
-const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources", "getBoard"];
+const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
+  "getBoard", "listScenarioConnections"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -165,6 +168,14 @@ export function createHttpServer({
           try { activityId = decodeURIComponent(boardMatch[1]); }
           catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.", { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.getBoard(activityId));
+        }
+        const connectionsMatch = /^\/scenario-connections\/([^/]+)$/.exec(route);
+        if (connectionsMatch && !Object.hasOwn(KERNEL_POST_ROUTES, route)) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(connectionsMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.", { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.listScenarioConnections(activityId));
         }
         if (request.method !== "POST") throw methodNotAllowed("POST");
         assertJsonContentType(request.headers["content-type"]);

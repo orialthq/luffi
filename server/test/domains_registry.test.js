@@ -6,7 +6,8 @@ const rejects = (run, code = "INVALID_DOMAIN_VALUE") => assert.throws(run, (erro
 
 test("all domain packs expose typed capabilities, artifacts, slots and kernel-compatible relations", () => {
   assert.deepEqual(registry.listPacks().map((pack) => pack.id),
-    ["recipe", "dining", "fashion", "beauty", "travel", "life_tip", "shopping", "health"]);
+    ["recipe", "dining", "fashion", "beauty", "travel", "life_tip", "shopping", "health",
+      "scenario_connections"]);
   for (const capability of registry.listCapabilities()) {
     assert.ok(registry.getType(capability.inputType));
     assert.ok(registry.getType(capability.outputType));

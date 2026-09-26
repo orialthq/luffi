@@ -8,6 +8,7 @@ import 'package:ori_beauty/features/boards/travel_scenario_dialogs.dart';
 import 'package:ori_beauty/features/boards/life_tip_scenario_dialogs.dart';
 import 'package:ori_beauty/features/boards/shopping_scenario_dialogs.dart';
 import 'package:ori_beauty/features/boards/health_scenario_dialogs.dart';
+import 'package:ori_beauty/features/boards/scenario_connections_section.dart';
 
 KernelJson _board() => {
   'id': 'activity-1',
@@ -188,6 +189,9 @@ final class FakeKernelClient implements CommonKernelClient {
   final commands = <KernelJson>[];
   final runs = <KernelJson>[];
   final scenarioRequests = <KernelJson>[];
+  final connectionRequests = <KernelJson>[];
+  final connectionDeletions = <KernelJson>[];
+  List<KernelJson> connections = [];
   final acceptedProposals = <KernelJson>[];
   bool conflict = false;
   bool commitThenTimeout = false;
@@ -249,6 +253,23 @@ final class FakeKernelClient implements CommonKernelClient {
       throw const CommonKernelException('NETWORK_UNAVAILABLE', '보드 연결 실패');
     }
     return Map<String, Object?>.from(jsonDecode(jsonEncode(board)) as Map);
+  }
+
+  @override
+  Future<List<KernelJson>> listScenarioConnections(String activityId) async =>
+      connections;
+
+  @override
+  Future<KernelJson> createScenarioConnection(KernelJson request) async {
+    connectionRequests.add(request);
+    return {'id': 'connection-1', 'replayed': false};
+  }
+
+  @override
+  Future<KernelJson> deleteScenarioConnection(KernelJson request) async {
+    connectionDeletions.add(request);
+    connections = [];
+    return {'id': request['connectionId'], 'deleted': true};
   }
 
   @override
@@ -3075,4 +3096,108 @@ void main() {
       expect(find.textContaining('부족 2 count'), findsOneWidget);
     },
   );
+  testWidgets(
+    'scenario panel connects a recipe to a shopping board with current revisions',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.extraBoards = [
+        {
+          'id': 'shopping-1',
+          'title': '장보기',
+          'scenario': 'shopping',
+          'lifecycle': 'active',
+          'revision': 4,
+          'currentPlanRevision': 1,
+        },
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ScenarioConnectionsSection(
+              client: client,
+              board: {'id': 'activity-1', 'scenario': 'recipe', 'revision': 7},
+              onOpenBoard: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('연결'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('장보기'));
+      await tester.pumpAndSettle();
+      expect(client.connectionRequests.single['kind'], 'recipe_shopping');
+      expect(client.connectionRequests.single['fromActivityId'], 'activity-1');
+      expect(client.connectionRequests.single['toActivityId'], 'shopping-1');
+      expect(client.connectionRequests.single['expectedFromRevision'], 7);
+      expect(client.connectionRequests.single['expectedToRevision'], 4);
+    },
+  );
+
+  testWidgets('scenario panel opens and unlinks a related board', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.connections = [
+      {
+        'id': 'connection-1',
+        'kind': 'travel_dining',
+        'otherActivityId': 'dining-1',
+        'otherTitle': '성수 식당',
+        'otherReadyTaskCount': 2,
+      },
+    ];
+    String? opened;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ScenarioConnectionsSection(
+            client: client,
+            board: {'id': 'travel-1', 'scenario': 'travel', 'revision': 3},
+            onOpenBoard: (id) => opened = id,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('성수 식당'));
+    expect(opened, 'dining-1');
+    await tester.tap(find.byTooltip('연결 해제'));
+    await tester.pumpAndSettle();
+    expect(client.connectionDeletions.single['connectionId'], 'connection-1');
+    expect(find.text('연결된 활동이 없어요.'), findsOneWidget);
+  });
+  testWidgets('scenario panel offers a neutral link for another domain pair', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.extraBoards = [
+      {
+        'id': 'fashion-1',
+        'title': '주말 코디',
+        'scenario': 'fashion',
+        'lifecycle': 'active',
+        'revision': 5,
+        'currentPlanRevision': 1,
+      },
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ScenarioConnectionsSection(
+            client: client,
+            board: {'id': 'dining-1', 'scenario': 'dining', 'revision': 3},
+            onOpenBoard: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('연결'));
+    await tester.pumpAndSettle();
+    expect(find.text('관련 활동'), findsOneWidget);
+    await tester.tap(find.text('주말 코디'));
+    await tester.pumpAndSettle();
+    expect(client.connectionRequests.single['kind'], 'related');
+  });
 }

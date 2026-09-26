@@ -480,6 +480,9 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> contracts();
   Future<KernelBoardPage> listBoardsPage({int limit = 20, String? cursor});
   Future<KernelJson> getBoard(String activityId);
+  Future<List<KernelJson>> listScenarioConnections(String activityId);
+  Future<KernelJson> createScenarioConnection(KernelJson request);
+  Future<KernelJson> deleteScenarioConnection(KernelJson request);
   Future<KernelJson> command(KernelJson command);
   Future<KernelJson> createRecipeScenario(KernelJson request);
   Future<KernelJson> createDiningScenario(KernelJson request);
@@ -603,6 +606,39 @@ final class HttpCommonKernelClient implements CommonKernelClient {
     }
     return board;
   }
+
+  @override
+  Future<List<KernelJson>> listScenarioConnections(String activityId) async {
+    final response = await _request(
+      'GET',
+      '/v1/kernel/scenario-connections/${Uri.encodeComponent(activityId)}',
+    );
+    final connections = response['connections'];
+    if (connections is! List ||
+        !connections.every(
+          (item) =>
+              item is Map &&
+              _nonEmptyText(item['id']) &&
+              _nonEmptyText(item['otherActivityId']) &&
+              _nonEmptyText(item['kind']),
+        )) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '활동 연결 응답을 확인해 주세요.',
+      );
+    }
+    return connections
+        .map((item) => Map<String, Object?>.from(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  @override
+  Future<KernelJson> createScenarioConnection(KernelJson request) =>
+      _request('POST', '/v1/kernel/scenario-connections', request);
+
+  @override
+  Future<KernelJson> deleteScenarioConnection(KernelJson request) =>
+      _request('POST', '/v1/kernel/scenario-connections/delete', request);
 
   @override
   Future<KernelJson> command(KernelJson command) =>
