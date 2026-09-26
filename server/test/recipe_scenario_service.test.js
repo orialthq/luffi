@@ -91,6 +91,60 @@ test("confirmed recipe creates evidence-backed graph and an approval-gated plan"
   (error) => error.code === "TASK_BLOCKED");
 });
 
+test("recipe ingredient correction creates an approval-gated patch without rewriting results", async (t) => {
+  const { service, store } = await fixture(t);
+  const created = await service.createRecipeScenario(scenario());
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "accept-before-ingredient-change" });
+  const before = await service.getBoard(created.activityId);
+  const snapshot = await store.snapshot();
+  const confirmed = snapshot.knowledge.assertions.find((item) =>
+    item.subjectId === created.recipeEntityId && item.predicate === "recipe.confirmed_recipe" &&
+    item.status === "active");
+  const correctedRecipe = structuredClone(confirmed.typedValue.value);
+  correctedRecipe.ingredients[0].quantity.amount = 450;
+  await service.knowledgeCommand({ commandId: "correct-tofu-amount",
+    type: "assertion.correct", payload: { assertionId: confirmed.id,
+      expectedRevision: confirmed.revision,
+      assertion: { id: "recipe-corrected-tofu", subjectId: confirmed.subjectId,
+        predicate: confirmed.predicate, scope: confirmed.scope,
+        origin: "user_reported", assertedBy: { type: "user", id: "person-1" },
+        evidenceIds: confirmed.evidenceIds, observedAt: new Date().toISOString(),
+        typedValue: { type: "recipe.recipe", value: correctedRecipe } } } });
+  const requirement = snapshot.knowledge.assertions.find((item) =>
+    item.predicate === "recipe.requirement_value" &&
+    item.typedValue?.value?.id === "tofu-line" && item.status === "active");
+  assert.equal((await service.getBoardReview(created.activityId)).reasonCode,
+    "RECIPE_GRAPH_CONFLICT");
+  await service.knowledgeCommand({ commandId: "correct-tofu-requirement",
+    type: "assertion.correct", payload: { assertionId: requirement.id,
+      expectedRevision: requirement.revision,
+      assertion: { id: "recipe-corrected-tofu-requirement",
+        subjectId: requirement.subjectId, predicate: requirement.predicate,
+        scope: requirement.scope, origin: "user_reported",
+        assertedBy: { type: "user", id: "person-1" },
+        evidenceIds: requirement.evidenceIds, observedAt: new Date().toISOString(),
+        typedValue: { type: requirement.typedValue.type,
+          value: correctedRecipe.ingredients[0] } } } });
+  const report = await service.getBoardReview(created.activityId);
+  assert.equal(report.status, "ready");
+  assert.ok(report.changes.some((item) => item.before.includes("300g") &&
+    item.after.includes("450g")));
+  assert.ok(report.affectedTasks.some((item) => item.id === "scale_servings"));
+  const proposed = await service.proposeBoardReview({ activityId: created.activityId,
+    commandId: "propose-ingredient-patch", expectedRevision: before.revision,
+    confirmed: true });
+  assert.equal(proposed.planKind, "patch");
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "accept-ingredient-patch" });
+  const after = await service.getBoard(created.activityId);
+  assert.equal(after.tasks.find((task) => task.id === "scale_servings")
+    .inputBindings.recipe.ingredients[0].quantity.amount, 450);
+  assert.equal(after.currentPlanRevision, before.currentPlanRevision + 1);
+  assert.equal(after.results.length, 0);
+  assert.equal((await service.getBoardReview(created.activityId)).status, "current");
+});
+
 test("unconfirmed, missing imports, and invalid recipes leave no partial scenario", async (t) => {
   const { service, store } = await fixture(t);
   const initial = await store.snapshot();

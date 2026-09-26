@@ -120,6 +120,160 @@ test("correcting a reviewed price keeps history and invalidates the previous pla
   (error) => error.code === "CONTEXT_STALE");
 });
 
+test("price correction explains the change and a reviewed patch restores the same board", async (t) => {
+  const { service, store, imported } = await fixture(t, (analysis) => {
+    analysis.facts[3].label = "판매가";
+  });
+  await service.reviewImportedField(review({ commandId: "initial-price",
+    sourcePath: "/facts/3/value" }));
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "accept-initial" });
+  const before = await service.getBoard("shopping-board");
+  assert.equal(before.tasks[0].readiness.inputs.candidates[0].displayedPriceText,
+    "19,900원");
+  await service.reviewImportedField(review({ commandId: "correct-price",
+    expectedRevision: 1 }));
+  const report = await service.getBoardReview("shopping-board");
+  const foreign = createCommonKernelService({ ownerId: "other-user", store });
+  await assert.rejects(foreign.getBoardReview("shopping-board"),
+    (error) => error.code === "FORBIDDEN");
+  await assert.rejects(foreign.proposeBoardReview({ activityId: "shopping-board",
+    commandId: "foreign-review", expectedRevision: before.revision,
+    confirmed: true }), (error) => error.code === "FORBIDDEN");
+  assert.equal(report.status, "ready");
+  assert.equal(report.planKind, "patch");
+  assert.ok(report.changes.some((item) => item.before.includes("19,900원") &&
+    item.after.includes("12,900원")));
+  assert.deepEqual(report.affectedTasks.map((item) => item.id), ["confirm_choice"]);
+  const request = { activityId: "shopping-board", commandId: "propose-correction",
+    expectedRevision: before.revision, confirmed: true };
+  const proposed = await service.proposeBoardReview(request);
+  assert.equal(proposed.planKind, "patch");
+  assert.equal((await service.proposeBoardReview(request)).replayed, true);
+  const pending = (await service.getBoard("shopping-board")).pendingProposals;
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].plan.operations[0].type, "updateTaskInput");
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "accept-correction" });
+  const after = await service.getBoard("shopping-board");
+  assert.equal(after.tasks[0].id, "confirm_choice");
+  assert.equal(after.tasks[0].readiness.inputs.candidates[0].displayedPriceText,
+    "12,900원");
+  assert.equal(after.currentPlanRevision, before.currentPlanRevision + 1);
+  assert.equal(after.results.length, 0);
+  assert.equal(after.pendingChanges.length, 0);
+  assert.equal((await service.getBoardReview("shopping-board")).status, "current");
+  await service.knowledgeCommand({ commandId: "delete-reviewed-source", type: "source.delete",
+    payload: { sourceId: imported.sourceId } });
+  await assert.rejects(service.getBoardReview("shopping-board"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.proposeBoardReview({ ...request,
+    commandId: "after-delete", expectedRevision: after.revision }),
+  (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.proposeBoardReview(request),
+    (error) => error.code === "SCENARIO_DELETED");
+  assert.equal(JSON.stringify(await store.snapshot()).includes("12,900원"), false);
+});
+
+test("a stale unapproved proposal is replaced by a fresh draft", async (t) => {
+  const { service } = await fixture(t, (analysis) => {
+    analysis.facts[3].label = "판매가";
+  });
+  await service.reviewImportedField(review({ commandId: "initial-price",
+    sourcePath: "/facts/3/value" }));
+  const original = await service.createShoppingScenario(scenario);
+  await service.reviewImportedField(review({ commandId: "correct-before-approval",
+    expectedRevision: 1 }));
+  const report = await service.getBoardReview("shopping-board");
+  assert.equal(report.status, "ready");
+  assert.equal(report.planKind, "draft");
+  const replacement = await service.proposeBoardReview({ activityId: "shopping-board",
+    commandId: "replace-draft", expectedRevision: report.revision, confirmed: true });
+  await assert.rejects(service.acceptProposal({ proposalId: original.proposalId,
+    commandId: "approve-stale" }), (error) => error.code === "PROPOSAL_CONFLICT");
+  await service.acceptProposal({ proposalId: replacement.proposalId,
+    commandId: "approve-replacement" });
+  assert.equal((await service.getBoard("shopping-board")).tasks[0]
+    .readiness.inputs.candidates[0].displayedPriceText, "12,900원");
+});
+
+test("a recovery proposal cannot be approved after its evidence changes again", async (t) => {
+  const { service } = await fixture(t, (analysis) => {
+    analysis.facts[3].label = "판매가";
+  });
+  await service.reviewImportedField(review({ commandId: "initial-price",
+    sourcePath: "/facts/3/value" }));
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-initial" });
+  const before = await service.getBoard("shopping-board");
+  await service.reviewImportedField(review({ commandId: "first-correction",
+    expectedRevision: 1 }));
+  const proposed = await service.proposeBoardReview({ activityId: "shopping-board",
+    commandId: "propose-first-correction", expectedRevision: before.revision,
+    confirmed: true });
+  await service.reviewImportedField(review({ commandId: "second-correction",
+    sourcePath: "/facts/3/value", expectedRevision: 2 }));
+  await assert.rejects(service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "approve-now-stale" }), (error) => error.code === "CONTEXT_STALE");
+  assert.equal((await service.getBoard("shopping-board")).tasks[0]
+    .readiness.inputs.candidates[0].displayedPriceText, "19,900원");
+});
+
+test("completed shopping choice is historical and cannot be rewritten by recovery", async (t) => {
+  const { service } = await fixture(t, (analysis) => {
+    analysis.facts[3].label = "판매가";
+  });
+  await service.reviewImportedField(review({ commandId: "initial-price",
+    sourcePath: "/facts/3/value" }));
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-choice" });
+  let board = await service.getBoard("shopping-board");
+  await service.confirmShoppingChoice({ commandId: "choose-before-correction",
+    activityId: "shopping-board", expectedRevision: board.revision,
+    selectedImportId: "ambiguous-price", quantity: 1 });
+  board = await service.getBoard("shopping-board");
+  const originalResult = structuredClone(board.results);
+  await service.reviewImportedField(review({ commandId: "correct-after-choice",
+    expectedRevision: 1 }));
+  const report = await service.getBoardReview("shopping-board");
+  assert.equal(report.status, "blocked");
+  assert.equal(report.reasonCode, "STARTED_TASK_PROTECTED");
+  await assert.rejects(service.proposeBoardReview({ activityId: "shopping-board",
+    commandId: "reject-rewrite", expectedRevision: board.revision,
+    confirmed: true }), (error) => error.code === "STARTED_TASK_PROTECTED");
+  assert.deepEqual((await service.getBoard("shopping-board")).results, originalResult);
+});
+
+test("a customized task graph is not silently rebound to new evidence", async (t) => {
+  const { service } = await fixture(t, (analysis) => {
+    analysis.facts[3].label = "판매가";
+  });
+  await service.reviewImportedField(review({ commandId: "initial-price",
+    sourcePath: "/facts/3/value" }));
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-for-customization" });
+  const original = await service.getBoard("shopping-board");
+  await service.activityCommand({ commandId: "add-custom-task", type: "plan.applyPatch",
+    activityId: "shopping-board", expectedRevision: original.revision,
+    payload: { patch: { basePlanRevision: original.currentPlanRevision,
+      operations: [{ type: "addTask", task: { ...original.tasks[0],
+        id: "user_added_task", semanticKey: "user_added_task" } }] } } });
+  await service.reviewImportedField(review({ commandId: "correct-customized-price",
+    expectedRevision: 1 }));
+  const report = await service.getBoardReview("shopping-board");
+  assert.equal(report.status, "blocked");
+  assert.equal(report.reasonCode, "REPLAN_UNAVAILABLE");
+  await assert.rejects(service.proposeBoardReview({ activityId: "shopping-board",
+    commandId: "reject-customized-rebind", expectedRevision: report.revision,
+    confirmed: true }), (error) => error.code === "REPLAN_UNAVAILABLE");
+  assert.equal((await service.getBoard("shopping-board")).tasks.length,
+    original.tasks.length + 1);
+});
+
 test("review ownership, optimistic revision, and capture deletion are enforced", async (t) => {
   const { service, store, imported } = await fixture(t);
   const foreign = createCommonKernelService({ ownerId: "another-user", store });

@@ -49,6 +49,16 @@ String _errorText(Object error) => error is CommonKernelException
     ? error.message
     : '요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.';
 
+String _reviewFieldTitle(Object? predicate) => switch (predicate) {
+  'ingestion.reviewed_field' => '확인한 표시 가격',
+  'ingestion.extracted_field' => '캡처에서 읽은 내용',
+  'recipe.confirmed_recipe' => '확인한 레시피',
+  'recipe.requirement_value' => '재료 정보',
+  'resource.availability' => '자원 상태',
+  'knowledge.freshness' => '근거 확인 시점',
+  _ => '연결된 정보',
+};
+
 String _status(Object? value) => switch (value) {
   'active' => '진행 중',
   'not_started' => '시작 전',
@@ -79,17 +89,6 @@ String _requirementStatus(Object? status) => switch (status) {
   'as_needed' => '적당량',
   _ => '재고 확인 필요',
 };
-
-bool _isRecipeBoard(KernelJson board) =>
-    board['scenarioType'] == 'recipe' ||
-    _objects(
-      board['tasks'],
-    ).any((task) => _text(task['capabilityId']).startsWith('recipe.')) ||
-    _objects(board['pendingProposals']).any(
-      (proposal) => _objects(
-        _object(proposal['plan'])['tasks'],
-      ).any((task) => _text(task['capabilityId']).startsWith('recipe.')),
-    );
 
 final class CommonBoardsScreen extends StatefulWidget {
   const CommonBoardsScreen({
@@ -2253,6 +2252,8 @@ final class CommonBoardScreen extends StatefulWidget {
 
 final class _CommonBoardScreenState extends State<CommonBoardScreen> {
   KernelJson? _board;
+  KernelJson? _review;
+  Object? _reviewError;
   Object? _error;
   bool _loading = true;
   bool _busy = false;
@@ -2294,9 +2295,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     });
     try {
       final board = await widget.client.getBoard(widget.activityId);
+      KernelJson? review;
+      Object? reviewError;
+      try {
+        review = await widget.client.getBoardReview(widget.activityId);
+      } catch (error) {
+        reviewError = error;
+      }
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _board = board;
+        _review = review;
+        _reviewError = reviewError;
         _needsRefresh = false;
       });
     } catch (error) {
@@ -2377,6 +2387,15 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           commandId: commandId,
         );
       });
+
+  Future<void> _proposeBoardReview() => _mutate((revision, commandId) async {
+    await widget.client.proposeBoardReview({
+      'activityId': widget.activityId,
+      'commandId': commandId,
+      'expectedRevision': revision,
+      'confirmed': true,
+    });
+  });
 
   Future<void> _resolveReview(KernelJson task) async {
     final confirmed = await showDialog<bool>(
@@ -3430,6 +3449,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
 
   Widget _proposalCard(KernelJson proposal, bool hasPendingChanges) {
     final plan = _object(proposal['plan']);
+    final run = _object(proposal['run']);
+    final reviewRecovery = run['reviewRecovery'] == true;
     final tasks = _objects(plan['tasks']);
     final recipeTasks = tasks.where(
       (task) => _text(task['capabilityId']).startsWith('recipe.'),
@@ -3443,7 +3464,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final canApprove =
         !_busy &&
         !_needsRefresh &&
-        !hasPendingChanges &&
+        (!hasPendingChanges || reviewRecovery) &&
         _board?['lifecycle'] == 'active' &&
         proposal['id'] is String;
     return Card(
@@ -3455,7 +3476,11 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              recipeTasks.isNotEmpty ? '레시피 계획 제안' : '계획 제안',
+              reviewRecovery
+                  ? '변경된 근거로 계획 수정 제안'
+                  : recipeTasks.isNotEmpty
+                  ? '레시피 계획 제안'
+                  : '계획 제안',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 6),
@@ -3477,9 +3502,12 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               Text(
                 '• ${_text(task['title'], _text(task['capabilityId'], '작업'))}',
               ),
+            if (reviewRecovery)
+              for (final task in _objects(run['affectedTasks']))
+                Text('• ${_text(task['title'], _text(task['id']))} 다시 확인'),
             const SizedBox(height: 8),
             const Text('계획은 확인 후 승인해야 작업 보드에 적용돼요.'),
-            if (hasPendingChanges)
+            if (hasPendingChanges && !reviewRecovery)
               const Text('연결된 정보가 변경됐어요. 새 계획을 만든 뒤 승인해 주세요.'),
             Align(
               alignment: Alignment.centerRight,
@@ -3505,7 +3533,13 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     };
     final pendingChanges = _objects(board['pendingChanges']);
     final proposals = _objects(board['pendingProposals']);
-    final recipeBoard = _isRecipeBoard(board);
+    final review = _review ?? const <String, Object?>{};
+    final reviewStatus = _text(review['status'], 'current');
+    final reviewChanges = _objects(review['changes']);
+    final needsReview = pendingChanges.isNotEmpty || reviewStatus != 'current';
+    final hasRecoveryProposal = proposals.any(
+      (item) => _object(item['run'])['reviewRecovery'] == true,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3529,13 +3563,12 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           key: const Key('kernel-goal'),
           style: Theme.of(context).textTheme.titleMedium,
         ),
-        for (final proposal in proposals)
-          _proposalCard(proposal, pendingChanges.isNotEmpty),
+        for (final proposal in proposals) _proposalCard(proposal, needsReview),
         const SizedBox(height: 20),
         Text('다음 행동', style: Theme.of(context).textTheme.titleMedium),
         if (nextIds.isEmpty) const Text('진행할 작업이 없거나 필요한 조건을 기다리고 있어요.'),
         for (final id in nextIds) Text('• ${titlesById[id] ?? id.toString()}'),
-        if (pendingChanges.isNotEmpty)
+        if (needsReview || _reviewError != null)
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
@@ -3543,15 +3576,35 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '확인할 변경 ${pendingChanges.length}건',
+                    '변경된 근거 확인',
                     key: const Key('kernel-pending-changes'),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                  if (recipeBoard)
-                    const Text('레시피 근거나 재고가 바뀌었어요. 계획을 다시 확인해 주세요.'),
-                  if (!recipeBoard)
-                    for (final change in pendingChanges)
-                      _JsonDetails(title: '변경 근거', value: change),
+                  if (_reviewError != null)
+                    Text(
+                      '변경 내용을 불러오지 못했어요. 새로고침해 주세요: ${_errorText(_reviewError!)}',
+                    ),
+                  for (final change in reviewChanges)
+                    Text(
+                      '${_reviewFieldTitle(change['predicate'])}: '
+                      '${_text(change['before'])} → ${_text(change['after'])}',
+                    ),
+                  if (reviewChanges.isEmpty && _reviewError == null)
+                    const Text('계획의 근거가 변경됐어요. 새 계획을 확인해 주세요.'),
+                  for (final task in _objects(review['affectedTasks']))
+                    Text(
+                      '영향받는 작업 · ${_text(task['title'], _text(task['id']))}',
+                    ),
+                  if (reviewStatus == 'blocked')
+                    Text(_text(review['reason'], '새 활동에서 다시 확인해 주세요.')),
+                  if (reviewStatus == 'ready' && !hasRecoveryProposal)
+                    FilledButton(
+                      key: const Key('kernel-propose-board-review'),
+                      onPressed: _busy || _needsRefresh
+                          ? null
+                          : _proposeBoardReview,
+                      child: const Text('계획 수정안 만들기'),
+                    ),
                 ],
               ),
             ),

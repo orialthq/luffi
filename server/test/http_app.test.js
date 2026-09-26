@@ -403,6 +403,7 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/activities/commands", "activityCommand"],
     ["/activities/run-task", "runTask"],
     ["/planning/proposals", "proposePlan"],
+    ["/planning/review-proposals", "proposeBoardReview"],
     ["/planning/accept", "acceptProposal"],
     ["/recipe/scenarios", "createRecipeScenario"],
     ["/dining/scenarios", "createDiningScenario"],
@@ -453,6 +454,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
   kernelService.listBoardSummaries = async (options) => ({ method: "listBoardSummaries", options });
   kernelService.listResources = async () => ["resource"];
   kernelService.getBoard = async (activityId) => ({ method: "getBoard", activityId });
+  kernelService.getBoardReview = async (activityId) =>
+    ({ method: "getBoardReview", activityId });
   kernelService.listScenarioConnections = async (activityId) =>
     ({ method: "listScenarioConnections", activityId });
   kernelService.getImportedFieldReview = async (importId, fieldKey) =>
@@ -486,6 +489,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
       { method: "getImportedFieldReview", importId: "item-1",
         fieldKey: "shopping.displayed_price" }],
     ["/boards/meal%20plan", { method: "getBoard", activityId: "meal plan" }],
+    ["/boards/meal%20plan/review", { method: "getBoardReview",
+      activityId: "meal plan" }],
   ]) {
     const response = await fetch(`${baseUrl}/v1/kernel${path}`, { headers: authorization });
     assert.equal(response.status, 200, path);

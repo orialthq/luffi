@@ -216,7 +216,9 @@ void main() {
     try {
       await controller.initialize();
       await tester.pump();
-      final requestId = controller.captureById('capture-batch-0')!.batchRequestId;
+      final requestId = controller
+          .captureById('capture-batch-0')!
+          .batchRequestId;
       expect(store.saveAttempts, 2);
       expect(batch.submitted, isEmpty);
       expect((await store.load()).single.batchRequestId, requestId);

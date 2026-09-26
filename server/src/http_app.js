@@ -22,6 +22,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/activities/commands": "activityCommand",
   "/activities/run-task": "runTask",
   "/planning/proposals": "proposePlan",
+  "/planning/review-proposals": "proposeBoardReview",
   "/planning/accept": "acceptProposal",
   "/recipe/scenarios": "createRecipeScenario",
   "/dining/scenarios": "createDiningScenario",
@@ -61,7 +62,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/resources/availability": "resourceAvailability",
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
-  "getBoard", "listScenarioConnections", "getImportedFieldReview"];
+  "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -162,6 +163,15 @@ export function createHttpServer({
         if (route === "/resources") {
           if (request.method !== "GET") throw methodNotAllowed("GET");
           return sendJson(response, 200, { resources: await kernelService.listResources() });
+        }
+        const boardReviewMatch = /^\/boards\/([^/]+)\/review$/.exec(route);
+        if (boardReviewMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(boardReviewMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getBoardReview(activityId));
         }
         if (boardMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");

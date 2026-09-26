@@ -112,6 +112,8 @@ test("regression: acquiring and releasing a resource invalidates another Activit
   assert.equal(afterAcquire.resourceClaims.length, 0, "The watcher is affected even though it holds no claim");
   assert.equal(afterAcquire.revision, beforeAcquire.activityRevision);
   assert.equal(acquireChanges.length, 1);
+  assert.equal((await service.getBoardReview("watching-activity")).reasonCode,
+    "REPLAN_UNAVAILABLE");
   const acquiredState = await store.snapshot();
   await assert.rejects(service.proposePlan({ activityId: "watching-activity",
     contextId: beforeAcquire.contextId, kind: "draft", plan: emptyPlan() }), isCode("CONTEXT_STALE"));

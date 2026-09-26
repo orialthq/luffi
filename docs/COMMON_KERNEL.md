@@ -101,6 +101,8 @@ Context는 선택 Entity, 직접 조회한 Resolution, Assertion, 최대 500자�
 
 `/knowledge/watch`에 `{activityId,contextId}`를 보내거나, `contextId`와 함께 활동 명령을 적용하거나, 계획 변경안을 승인하면 그 맥락을 활동의 구독으로 등록한다. 같은 활동에 새 맥락을 등록하면 이전 구독을 대체한다. 지식 명령과 가져오기 후에는 영향을 받는 활동의 `pendingChanges`를 기록한다. 검색은 기존 Assertion의 변경뿐 아니라 빈 검색 이후 새로운 Entity/신원 연결이 생긴 경우와 관계 registry 변경도 무효화한다. Entity/신원 변경은 현재 소유자 단위로 보수적으로 감시한다. 실행 시에도 저장된 의존성을 다시 확인하며, 별도 주기 작업 없이 시간이 흘렀다는 이유만으로 화면에 변경 알림을 생성하는 것은 아니다.
 
+쇼핑·레시피 보드의 변경 근거 설명과 승인형 계획 수정은 [변경된 근거의 계획 재검토](PLAN_RECOVERY.md)를 따른다.
+
 ## ResourceClaim과 활동 연결
 
 ResourceClaim은 저장된 계획 안에서 같은 자원을 중복 배분하지 않게 한다. 모든 claim은 `guarantee: "planning_only"`이며 실제 소유·재고 차감·구매·예약 확정의 증거가 아니다. 자원 ID가 다르면 별개 자원으로 취급하므로 물리적으로 같은 물건을 알아서 합치지 않는다. `resource.observe`의 `observationId`는 관측 참조값이며 현재 지식 커널의 Assertion/Evidence에 대한 FK나 자동 연결은 없다.

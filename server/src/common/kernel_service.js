@@ -42,6 +42,7 @@ export function createCommonKernelState() {
     retrievalWatches: {},
     resourceWatches: {},
     proposals: {},
+    reviewProposalReceipts: {},
     importReceipts: {},
     fieldReviews: {},
     fieldReviewReceipts: {},
@@ -604,6 +605,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         item.result?.activity?.id !== activityId && item.result?.claim?.activityId !== activityId);
       for (const [key, item] of Object.entries(state.proposals)) {
         if (item.activityId === activityId) delete state.proposals[key];
+      }
+      for (const item of Object.values(state.reviewProposalReceipts ?? {})) {
+        if (item.ownerId === ownerId && item.result?.activityId === activityId) {
+          item.deleted = true;
+          item.result = { activityId };
+        }
       }
       for (const [key, item] of Object.entries(state.issuedContexts)) {
         if (item.context?.activityId === activityId) delete state.issuedContexts[key];
@@ -1467,7 +1474,350 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return { candidates, contextQueries };
   }
 
+  function reviewValue(resolution) {
+    if (resolution?.status !== "resolved") return resolution?.status ?? "unknown";
+    return resolution.values.map((entry) => {
+      const value = entry.typedValue?.value ?? entry.objectEntityId;
+      if (typeof value === "string") return value;
+      if (value?.fieldKey === "shopping.displayed_price") return value.value;
+      if (Array.isArray(value?.ingredients)) return `${value.title}: ${value.ingredients.map((item) =>
+        `${item.name} ${item.quantity?.status === "known" ?
+          `${item.quantity.amount}${item.quantity.unit}` : "수량 미상"}`).join(", ")}`;
+      return JSON.stringify(value).slice(0, 300);
+    }).join(" / ");
+  }
+
+  function reviewDescription(state, activityId, current) {
+    const watched = state.knowledge.subscriptions.find((item) =>
+      item.ownerId === ownerId && item.consumerId === activityId);
+    const sourceProposal = Object.values(state.proposals).find((item) =>
+      item.ownerId === ownerId && item.activityId === activityId &&
+      (watched ? item.status === "accepted" &&
+        state.issuedContexts[item.contextId]?.context?.knowledgeSequence ===
+          watched.context.knowledgeSequence : item.status === "pending" &&
+        item.kind === "draft"));
+    const previous = state.issuedContexts[sourceProposal?.contextId]?.context;
+    const changes = [];
+    if (previous?.resolutions) {
+      const fresh = buildKnowledgeContext(state.knowledge, {
+        ownerId, queries: previous.queryWatches,
+      }, { predicates });
+      previous.resolutions.forEach((old, index) => {
+        const next = fresh.resolutions[index];
+        if (old.status === next.status &&
+            requestFingerprint(old.values) === requestFingerprint(next.values) &&
+            requestFingerprint(old.selectedAssertionIds) === requestFingerprint(next.selectedAssertionIds)) return;
+        changes.push({ predicate: old.predicate, subjectId: old.subjectId,
+          before: reviewValue(old), after: reviewValue(next),
+          status: next.status });
+      });
+    }
+    for (const event of current.pendingChanges) {
+      if (event.resourceId) changes.push({ predicate: "resource.availability",
+        subjectId: event.resourceId, before: "이전 관측", after: "자원 상태 변경",
+        status: "changed" });
+      if (event.retrievalReasons?.length) changes.push({ predicate: "knowledge.retrieval",
+        subjectId: activityId, before: "이전 검색 결과", after: "검색 결과 변경",
+        status: "changed" });
+      if (event.timeDue && !event.eventIds?.length) changes.push({
+        predicate: "knowledge.freshness", subjectId: activityId,
+        before: "이전 확인 시점", after: "근거 유효 기간 경과",
+        status: "stale" });
+    }
+    if (!changes.length) {
+      const eventIds = new Set(current.pendingChanges.flatMap((item) => item.eventIds ?? []));
+      const slots = new Map();
+      for (const event of state.knowledge.events.filter((item) =>
+        item.ownerId === ownerId && eventIds.has(item.id))) {
+        for (const entry of event.changes) {
+          if (!entry.slot?.predicate || !entry.slot?.subjectId) continue;
+          slots.set(requestFingerprint(entry.slot), entry.slot);
+        }
+      }
+      for (const slot of slots.values()) {
+        const assertions = queryKnowledge(state.knowledge, { ownerId,
+          subjectId: slot.subjectId, predicate: slot.predicate,
+          scope: slot.scope, includeInactive: true });
+        const older = assertions.filter((item) => item.status === "corrected" ||
+          item.status === "retracted").at(-1);
+        const active = assertions.filter((item) => item.status === "active").at(-1);
+        changes.push({ predicate: slot.predicate, subjectId: slot.subjectId,
+          before: older ? reviewValue({ status: "resolved",
+            values: [{ typedValue: older.typedValue,
+              objectEntityId: older.objectEntityId }] }) : "이전 근거",
+          after: active ? reviewValue({ status: "resolved",
+            values: [{ typedValue: active.typedValue,
+              objectEntityId: active.objectEntityId }] }) : "근거 없음",
+          status: active ? "resolved" : "unknown" });
+      }
+    }
+    return changes.slice(0, 50);
+  }
+
+  function boardNeedsReview(state, activityId, current) {
+    if (activityContextIsStale(state, activityId, current)) return true;
+    return Object.values(state.proposals).some((item) => {
+      if (item.ownerId !== ownerId || item.activityId !== activityId ||
+          item.status !== "pending") return false;
+      try {
+        const context = issuedContext(state, item.contextId);
+        validateContext(state, context, { activityId,
+          requireActivityBinding: true });
+        return false;
+      } catch (error) {
+        if (error instanceof AppError && ["CONTEXT_STALE", "CONTEXT_NOT_FOUND"]
+          .includes(error.code)) return true;
+        throw error;
+      }
+    });
+  }
+
+  function recoveryDraft(state, activityId, current) {
+    if (current.pendingChanges.some((item) => item.resourceId ||
+        item.retrievalReasons?.length) ||
+        hasStaleResourceReads(state, state.resourceWatches[activityId]) ||
+        (state.retrievalWatches[activityId] &&
+          !validateRetrievalResult(state.knowledge,
+            state.retrievalWatches[activityId], { registry: predicates }).valid)) {
+      throw new AppError("REPLAN_UNAVAILABLE",
+        "자원 또는 검색 결과가 바뀌어 새 활동에서 다시 확인해야 해요.",
+        { httpStatus: 409 });
+    }
+    const scenario = scenarioForActivity(state, activityId);
+    if (scenario === "shopping") {
+      const receipt = Object.values(state.shoppingScenarioReceipts ?? {}).find((item) =>
+        !item.deleted && item.result?.activityId === activityId);
+      if (!receipt) throw new AppError("SCENARIO_DELETED", "쇼핑 활동을 찾지 못했어요.",
+        { httpStatus: 410 });
+      const { candidates, contextQueries } = shoppingCandidates(state, receipt.importIds);
+      return { scenario, contextQueries,
+        draft: buildShoppingPlanDraft({ candidates, purpose: receipt.purpose }, { registry }) };
+    }
+    if (scenario === "recipe") {
+      const receipt = Object.values(state.recipeScenarioReceipts ?? {}).find((item) =>
+        !item.deleted && item.result?.activityId === activityId);
+      if (!receipt) throw new AppError("SCENARIO_DELETED", "레시피 활동을 찾지 못했어요.",
+        { httpStatus: 410 });
+      const confirmed = state.knowledge.assertions.find((item) =>
+        item.ownerId === ownerId && item.status === "active" &&
+        item.subjectId === receipt.result.recipeEntityId &&
+        item.predicate === "recipe.confirmed_recipe" &&
+        item.typedValue?.type === "recipe.recipe" &&
+        item.evidenceIds.every((id) => state.knowledge.evidence.some((evidence) =>
+          evidence.ownerId === ownerId && evidence.id === id && evidence.status === "active")));
+      if (!confirmed) throw new AppError("CONTEXT_STALE",
+        "확인한 레시피 재료의 근거가 없어 계획을 다시 만들 수 없어요.",
+        { httpStatus: 409 });
+      const recipe = confirmed.typedValue.value;
+      const requirementAssertions = state.knowledge.assertions.filter((item) =>
+        item.ownerId === ownerId && item.status === "active" &&
+        item.predicate === "recipe.requirement_value" &&
+        item.scope?.type === "activity" && item.scope.id === activityId);
+      if (requirementAssertions.length !== recipe.ingredients.length) {
+        throw new AppError("RECIPE_GRAPH_CONFLICT",
+          "레시피 본문과 재료 항목 수가 달라요. 함께 확인해 주세요.",
+          { httpStatus: 409 });
+      }
+      for (const ingredient of recipe.ingredients) {
+        const requirement = requirementAssertions.find((item) =>
+          item.typedValue?.value?.id === ingredient.id);
+        const hasRequirement = state.knowledge.assertions.some((item) =>
+          item.ownerId === ownerId && item.status === "active" &&
+          item.subjectId === receipt.result.recipeEntityId &&
+          item.predicate === "recipe.has_requirement" &&
+          item.objectEntityId === requirement?.subjectId &&
+          item.scope?.type === "activity" && item.scope.id === activityId);
+        const hasIngredient = state.knowledge.assertions.some((item) =>
+          item.ownerId === ownerId && item.status === "active" &&
+          item.subjectId === requirement?.subjectId &&
+          item.predicate === "recipe.requires_ingredient" &&
+          item.scope?.type === "activity" && item.scope.id === activityId);
+        if (!requirement ||
+            !hasRequirement || !hasIngredient ||
+            requestFingerprint(requirement.typedValue.value) !== requestFingerprint(ingredient)) {
+          throw new AppError("RECIPE_GRAPH_CONFLICT",
+            "레시피 본문과 재료 근거가 서로 달라요. 둘을 함께 확인해 주세요.",
+            { httpStatus: 409 });
+        }
+      }
+      const originalPlan = current.currentPlanRevision === 0
+        ? Object.values(state.proposals).find((item) => item.ownerId === ownerId &&
+          item.activityId === activityId && item.kind === "draft")?.plan : current;
+      const tasks = originalPlan?.tasks ?? [];
+      const scale = tasks.find((item) => item.id === "scale_servings");
+      const requirements = tasks.find((item) => item.id === "calculate_requirements");
+      if (!scale || !requirements) throw new AppError("REPLAN_UNAVAILABLE",
+        "레시피 작업 구성을 다시 확인해 주세요.", { httpStatus: 409 });
+      const contextQueries = state.knowledge.assertions.filter((item) =>
+        item.ownerId === ownerId && item.status === "active" &&
+        item.scope?.type === "activity" && item.scope.id === activityId &&
+        item.predicate.startsWith("recipe.")).map((item) => ({
+        subjectId: item.subjectId, predicate: item.predicate, scope: item.scope,
+      }));
+      if (!contextQueries?.length) throw new AppError("REPLAN_UNAVAILABLE",
+        "레시피 근거 조회 조건을 찾지 못했어요.", { httpStatus: 409 });
+      const draft = buildRecipePlanDraft({ confirmed: true, recipe,
+        targetServings: scale.inputBindings.targetServings,
+        inventory: requirements.inputBindings.inventory ?? [],
+        includeOptionalIngredientIds: requirements.inputBindings.includeOptionalIngredientIds ?? [],
+        collectInventory: tasks.some((item) => item.id === "check_inventory"),
+        includeCookTask: tasks.some((item) => item.id === "cook"),
+        evidenceIds: [...confirmed.evidenceIds] }, { registry });
+      return { scenario, contextQueries, draft };
+    }
+    throw new AppError("REPLAN_UNAVAILABLE",
+      "이 분야는 자동 계획 수정 대신 새 활동에서 다시 확인해 주세요.",
+      { httpStatus: 409 });
+  }
+
+  function recoveryPlan(current, draft) {
+    if (current.currentPlanRevision === 0) return { kind: "draft", plan: draft,
+      affectedTasks: draft.tasks.map((task) => ({ id: task.id, title: task.title,
+        status: "proposed" })) };
+    const sameIds = (left, right) => requestFingerprint(left.map((item) => item.id).sort()) ===
+      requestFingerprint(right.map((item) => item.id).sort());
+    const sameEdges = (left, right) => requestFingerprint([...left].sort((a, b) =>
+      a.id.localeCompare(b.id))) === requestFingerprint([...right].sort((a, b) =>
+      a.id.localeCompare(b.id)));
+    if (!sameIds(current.tasks, draft.tasks) ||
+        !sameEdges(current.dependencyLinks, draft.dependencyLinks ?? []) ||
+        !sameEdges(current.dataBindings, draft.dataBindings ?? [])) {
+      throw new AppError("REPLAN_UNAVAILABLE",
+        "작업 연결이 변경돼 새 활동에서 확인해야 해요.", { httpStatus: 409 });
+    }
+    const operations = [];
+    const expectedTaskRevisions = {};
+    const affectedTasks = [];
+    for (const next of draft.tasks) {
+      const existing = current.tasks.find((task) => task.id === next.id);
+      if (!existing) throw new AppError("REPLAN_UNAVAILABLE",
+        "작업 구성이 달라 새 활동에서 확인해야 해요.", { httpStatus: 409 });
+      if (requestFingerprint(existing.inputBindings) === requestFingerprint(next.inputBindings)) continue;
+      if (existing.executionStatus !== "not_started" || existing.inputsPinned) {
+        throw new AppError("STARTED_TASK_PROTECTED",
+          "이미 시작한 작업의 입력과 결과는 바꿀 수 없어요. 새 활동에서 확인해 주세요.",
+          { httpStatus: 409 });
+      }
+      const removedKeys = Object.keys(existing.inputBindings).filter((key) =>
+        !Object.hasOwn(next.inputBindings, key));
+      if (removedKeys.length) throw new AppError("REPLAN_UNAVAILABLE",
+        "입력 구조가 달라 새 활동에서 확인해야 해요.", { httpStatus: 409 });
+      operations.push({ type: "updateTaskInput", taskId: next.id,
+        inputs: structuredClone(next.inputBindings) });
+      expectedTaskRevisions[next.id] = existing.revision;
+      affectedTasks.push({ id: next.id, title: next.title, status: "update_pending" });
+    }
+    return { kind: "patch", plan: { basePlanRevision: current.currentPlanRevision,
+      expectedTaskRevisions, operations,
+      reasons: ["사용자가 변경된 근거를 검토하고 계획 수정을 승인함"] },
+    affectedTasks };
+  }
+
   return {
+    async getBoardReview(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => {
+          const current = board(state, activityId);
+          if (!boardNeedsReview(state, activityId, current)) {
+            return { activityId, status: "current", revision: current.revision,
+              changes: [], affectedTasks: [] };
+          }
+          const changes = reviewDescription(state, activityId, current);
+          try {
+            const recovered = recoveryDraft(state, activityId, current);
+            const planned = recoveryPlan(current, recovered.draft);
+            const plan = enrichPlan(planned.kind, planned.plan);
+            applyActivityCommand(state.activities, { ownerId,
+              commandId: `review-preview:${randomUUID()}`,
+              type: planned.kind === "draft" ? "plan.applyDraft" : "plan.applyPatch",
+              activityId, expectedRevision: current.revision,
+              payload: planned.kind === "draft" ? { draft: plan } : { patch: plan },
+            }, activityOptions(state));
+            return { activityId, status: "ready", revision: current.revision,
+              scenario: recovered.scenario, changes,
+              affectedTasks: planned.affectedTasks,
+              planKind: planned.kind };
+          } catch (error) {
+            if (!(error instanceof AppError)) throw error;
+            return { activityId, status: "blocked", revision: current.revision,
+              changes, affectedTasks: [], reasonCode: error.code,
+              reason: error.message };
+          }
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async proposeBoardReview(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["activityId", "commandId",
+          "expectedRevision", "confirmed"].includes(key)) ||
+          input.confirmed !== true || !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 0) {
+          throw new AppError("INVALID_REQUEST", "계획 재검토 요청을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const activityId = safeId(input.activityId, "activityId");
+        const commandId = safeId(input.commandId, "commandId");
+        return await store.transact((state) => {
+          assertState(state);
+          state.reviewProposalReceipts ??= {};
+          const receiptKey = requestFingerprint([ownerId, commandId]);
+          const hash = requestFingerprint({ activityId,
+            expectedRevision: input.expectedRevision });
+          const previous = state.reviewProposalReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 재검토에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 활동의 수정안을 다시 사용할 수 없어요.",
+              { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError(
+            "REVISION_CONFLICT", "활동이 변경됐어요. 다시 불러와 주세요.",
+            { httpStatus: 409 });
+          if (current.lifecycle !== "active" ||
+              !boardNeedsReview(state, activityId, current)) {
+            throw new AppError("NO_REVIEW_REQUIRED",
+              "현재 계획은 변경 검토 대상이 아니에요.", { httpStatus: 409 });
+          }
+          const recovered = recoveryDraft(state, activityId, current);
+          const planned = recoveryPlan(current, recovered.draft);
+          const issued = issueContext(state, { activityId,
+            queries: recovered.contextQueries });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE",
+              "새 계획에 필요한 근거가 부족해요.", { httpStatus: 409 });
+          }
+          const plan = enrichPlan(planned.kind, planned.plan);
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: `review-proposal-check:${randomUUID()}`,
+            type: planned.kind === "draft" ? "plan.applyDraft" : "plan.applyPatch",
+            activityId, expectedRevision: current.revision,
+            payload: planned.kind === "draft" ? { draft: plan } : { patch: plan },
+          }, activityOptions(state));
+          for (const proposal of Object.values(state.proposals)) {
+            if (proposal.ownerId === ownerId && proposal.activityId === activityId &&
+                proposal.status === "pending") proposal.status = "superseded";
+          }
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId, activityId,
+            contextId: issued.contextId, kind: planned.kind,
+            plan: structuredClone(plan), run: { scenario: recovered.scenario,
+              reviewRecovery: true, changes: reviewDescription(state, activityId, current),
+              affectedTasks: planned.affectedTasks },
+            baseActivityRevision: current.revision,
+            basePlanRevision: current.currentPlanRevision,
+            status: "pending", createdAt: new Date().toISOString() };
+          const result = { activityId, proposalId, revision: current.revision,
+            planKind: planned.kind, affectedTasks: planned.affectedTasks };
+          state.reviewProposalReceipts[receiptKey] = { ownerId, hash, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
     async getImportedFieldReview(importId, fieldKey) {
       try {
         safeId(importId, "importId");

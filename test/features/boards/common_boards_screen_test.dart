@@ -186,6 +186,8 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   KernelJson board = _board();
+  KernelJson? boardReview;
+  final boardReviewRequests = <KernelJson>[];
   final commands = <KernelJson>[];
   final runs = <KernelJson>[];
   final scenarioRequests = <KernelJson>[];
@@ -255,6 +257,46 @@ final class FakeKernelClient implements CommonKernelClient {
       throw const CommonKernelException('NETWORK_UNAVAILABLE', '보드 연결 실패');
     }
     return Map<String, Object?>.from(jsonDecode(jsonEncode(board)) as Map);
+  }
+
+  @override
+  Future<KernelJson> getBoardReview(String activityId) async =>
+      boardReview ??
+      {
+        'activityId': activityId,
+        'status': 'current',
+        'revision': board['revision'],
+        'changes': [],
+        'affectedTasks': [],
+      };
+
+  @override
+  Future<KernelJson> proposeBoardReview(KernelJson request) async {
+    boardReviewRequests.add(request);
+    boardReview = {
+      'activityId': request['activityId'],
+      'status': 'ready',
+      'revision': board['revision'],
+      'changes': boardReview?['changes'] ?? [],
+      'affectedTasks': boardReview?['affectedTasks'] ?? [],
+    };
+    final pending = (board['pendingProposals'] ??= <Object?>[]) as List;
+    pending.add({
+      'id': 'recovery-proposal',
+      'kind': 'patch',
+      'run': {
+        'reviewRecovery': true,
+        'affectedTasks': boardReview?['affectedTasks'],
+      },
+      'plan': {'operations': []},
+    });
+    return {
+      'activityId': request['activityId'],
+      'proposalId': 'recovery-proposal',
+      'revision': board['revision'],
+      'planKind': 'patch',
+      'affectedTasks': [],
+    };
   }
 
   @override
@@ -957,8 +999,18 @@ final class FakeKernelClient implements CommonKernelClient {
       );
     }
     final proposal = (board['pendingProposals'] as List).cast<Map>().first;
-    board['tasks'] = (proposal['plan'] as Map)['tasks'];
+    if ((proposal['plan'] as Map).containsKey('tasks')) {
+      board['tasks'] = (proposal['plan'] as Map)['tasks'];
+    }
     board['pendingProposals'] = <Object?>[];
+    board['pendingChanges'] = <Object?>[];
+    boardReview = {
+      'activityId': board['id'],
+      'status': 'current',
+      'revision': (board['revision'] as int) + 1,
+      'changes': [],
+      'affectedTasks': [],
+    };
     board['revision'] = (board['revision'] as int) + 1;
     if (commitThenTimeout) {
       throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 초과됐어요.');
@@ -1066,6 +1118,80 @@ void main() {
       isNotNull,
     );
   });
+
+  testWidgets(
+    'changed evidence is explained and recovery proposal needs approval',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.boardReview = {
+        'activityId': 'activity-1',
+        'status': 'ready',
+        'revision': 7,
+        'scenario': 'shopping',
+        'planKind': 'patch',
+        'changes': [
+          {
+            'predicate': 'ingestion.reviewed_field',
+            'before': '19,900원',
+            'after': '12,900원',
+            'status': 'resolved',
+          },
+        ],
+        'affectedTasks': [
+          {'id': 'task-Z', 'title': '상품과 수량 선택', 'status': 'update_pending'},
+        ],
+      };
+      await _pump(tester, client);
+      expect(find.textContaining('19,900원 → 12,900원'), findsOneWidget);
+      expect(find.textContaining('영향받는 작업 · 상품과 수량 선택'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('kernel-propose-board-review')));
+      await tester.pumpAndSettle();
+      expect(client.boardReviewRequests, hasLength(1));
+      expect(client.boardReviewRequests.single['expectedRevision'], 7);
+      expect(find.text('변경된 근거로 계획 수정 제안'), findsOneWidget);
+      expect(client.acceptedProposals, isEmpty);
+      await tester.tap(
+        find.byKey(const ValueKey('kernel-approve-proposal-recovery-proposal')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        client.acceptedProposals.single['proposalId'],
+        'recovery-proposal',
+      );
+      expect(
+        find.byKey(const Key('kernel-propose-board-review')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'started task keeps its result and explains why recovery is blocked',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.boardReview = {
+        'activityId': 'activity-1',
+        'status': 'blocked',
+        'revision': 7,
+        'reasonCode': 'STARTED_TASK_PROTECTED',
+        'reason': '이미 시작한 작업의 입력과 결과는 바꿀 수 없어요.',
+        'changes': [
+          {
+            'predicate': 'ingestion.reviewed_field',
+            'before': '19,900원',
+            'after': '12,900원',
+          },
+        ],
+        'affectedTasks': [],
+      };
+      await _pump(tester, client);
+      expect(find.text('이미 시작한 작업의 입력과 결과는 바꿀 수 없어요.'), findsOneWidget);
+      expect(
+        find.byKey(const Key('kernel-propose-board-review')),
+        findsNothing,
+      );
+    },
+  );
 
   testWidgets(
     'committed write with lost response requires refresh before retry',

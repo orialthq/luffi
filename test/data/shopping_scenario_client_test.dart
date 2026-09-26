@@ -134,6 +134,51 @@ void main() {
   });
 
   test(
+    'board review client reads changes and proposes an approval-gated patch',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final paths = <String>[];
+      server.listen((request) async {
+        paths.add(request.uri.path);
+        if (request.method == 'POST') {
+          expect(
+            jsonDecode(await utf8.decoder.bind(request).join()),
+            containsPair('expectedRevision', 3),
+          );
+        }
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          request.method == 'GET'
+              ? '{"activityId":"shop-1","status":"ready","revision":3,'
+                    '"changes":[],"affectedTasks":[]}'
+              : '{"activityId":"shop-1","proposalId":"proposal-1",'
+                    '"revision":3,"planKind":"patch","affectedTasks":[]}',
+        );
+        await request.response.close();
+      });
+      final client = HttpCommonKernelClient(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        token: 'development-token',
+      );
+      expect((await client.getBoardReview('shop-1'))['status'], 'ready');
+      expect(
+        (await client.proposeBoardReview({
+          'activityId': 'shop-1',
+          'commandId': 'review-1',
+          'expectedRevision': 3,
+          'confirmed': true,
+        }))['proposalId'],
+        'proposal-1',
+      );
+      expect(paths, [
+        '/v1/kernel/boards/shop-1/review',
+        '/v1/kernel/planning/review-proposals',
+      ]);
+    },
+  );
+
+  test(
     'shopping client routes creation, selection, and purchase report',
     () async {
       final paths = <String>[];
