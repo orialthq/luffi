@@ -404,6 +404,37 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           evidence.id === id && evidence.status === "active"))) ? subject : null;
   }
 
+  function recipeShoppingNeeds(state, connection) {
+    if (connection.kind !== "recipe_shopping" ||
+        !linkedScenarioSubject(state, connection, connection.fromActivityId)) return null;
+    const activityId = connection.fromActivityId;
+    const activity = state.activities.activities[activityId];
+    if (!activity || activity.ownerId !== ownerId) return null;
+    const current = board(state, activityId);
+    if (activityContextIsStale(state, activityId, current)) return { status: "stale" };
+    const task = activity.tasks.find((item) => item.id === "calculate_requirements" &&
+      item.capabilityId === "recipe.calculate_requirements");
+    if (task?.executionStatus !== "completed" || !task.latestOutputRef) {
+      return { status: "not_ready" };
+    }
+    if (task.needsReview) return { status: "stale" };
+    const result = activity.results.find((item) => item.id === task.latestOutputRef &&
+      item.taskId === task.id);
+    if (!result) return { status: "stale" };
+    try { registry.validate("recipe.shopping_list", result.value); }
+    catch { return { status: "stale" }; }
+    const recipe = confirmedScenarioSubject(state, activityId);
+    const confirmed = state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
+      item.status === "active" && item.subjectId === recipe?.entityId &&
+      item.predicate === "recipe.confirmed_recipe" && item.evidenceIds.every((id) =>
+        state.knowledge.evidence.some((evidence) => evidence.ownerId === ownerId &&
+          evidence.id === id && evidence.status === "active")));
+    if (!confirmed) return { status: "stale" };
+    return { status: "ready", sourceActivityId: activityId, sourceResultId: result.id,
+      targetServings: result.value.targetServings,
+      items: structuredClone(result.value.items) };
+  }
+
   function issuedContext(state, contextId) {
     if (typeof contextId !== "string") {
       throw new AppError("INVALID_REQUEST", "서버가 발급한 맥락 ID가 필요해요.", { httpStatus: 400 });
@@ -1432,6 +1463,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               otherReadyTaskCount: getActivityBoard(state.activities, otherActivityId,
                 { ownerId }).nextActions.length,
               otherSubject: linkedScenarioSubject(state, entry, otherActivityId),
+              ...(entry.kind === "recipe_shopping" && activityId === entry.toActivityId
+                ? { recipeNeeds: recipeShoppingNeeds(state, entry) } : {}),
               note: entry.note, createdAt: entry.createdAt };
             }).filter(Boolean).sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
         });

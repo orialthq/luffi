@@ -108,12 +108,44 @@ test("recipe amount 'as needed' stays nonnumeric and an actual tofu offer links 
   const connection = (await service.listScenarioConnections("recipe-board")).connections[0];
   assert.equal(connection.id, linked.id);
   assert.equal(connection.otherSubject?.type, "shopping.purchase_choice");
+  assert.equal(Object.hasOwn(connection, "recipeNeeds"), false);
+  assert.equal((await service.listScenarioConnections("shopping-board"))
+    .connections[0].recipeNeeds.status, "not_ready");
+  recipeBoard = await service.getBoard("recipe-board");
+  await service.activityCommand({ commandId: "record-empty-stock", type: "task.recordResult",
+    activityId: "recipe-board", expectedRevision: recipeBoard.revision,
+    payload: { taskId: "check_inventory", value: [] } });
+  recipeBoard = await service.getBoard("recipe-board");
+  await service.activityCommand({ commandId: "finish-stock-check", type: "task.transition",
+    activityId: "recipe-board", expectedRevision: recipeBoard.revision,
+    payload: { taskId: "check_inventory", to: "completed" } });
+  recipeBoard = await service.getBoard("recipe-board");
+  await service.runTask({ commandId: "calculate-needs", activityId: "recipe-board",
+    taskId: "calculate_requirements", expectedRevision: recipeBoard.revision });
+  const needs = (await service.listScenarioConnections("shopping-board"))
+    .connections[0].recipeNeeds;
+  assert.equal(needs.status, "ready");
+  assert.equal(needs.targetServings, 4);
+  assert.deepEqual(needs.items.map((item) => [item.name, item.requiredQuantity,
+    item.missingQuantity, item.status]), [
+    ["두부", { status: "known", amount: 600, unit: "g" }, { status: "unknown" }, "unknown"],
+    ["달걀", { status: "known", amount: 4, unit: "count" }, { status: "unknown" }, "unknown"],
+    ["소금", { status: "as_needed" }, { status: "as_needed" }, "as_needed"],
+  ]);
+  assert.ok(needs.sourceResultId);
   const state = await store.snapshot();
   assert.equal(active(state, "scenario.connection_from_subject").length, 1);
   assert.equal(active(state, "scenario.connection_to_subject").length, 1);
   assert.ok(active(state, "scenario.connection_to_subject")[0].evidenceIds.length >= 2);
   assert.equal(active(state, "shopping.actual_paid_krw").length, 0);
   assert.equal(active(state, "shopping.purchase_for_choice").length, 0);
+  const recipeValue = active(state, "recipe.requirement_value").find((item) =>
+    item.typedValue?.value?.name === "두부");
+  assert.ok(recipeValue);
+  await service.knowledgeCommand({ commandId: "retract-tofu-requirement",
+    type: "assertion.retract", payload: { assertionId: recipeValue.id } });
+  assert.equal((await service.listScenarioConnections("shopping-board"))
+    .connections[0].recipeNeeds.status, "stale");
   await service.knowledgeCommand({ commandId: "erase-recipe-image", type: "source.delete",
     payload: { sourceId: recipeImport.sourceId } });
   assert.deepEqual((await service.listScenarioConnections("shopping-board")).connections, []);

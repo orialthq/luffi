@@ -3167,6 +3167,71 @@ void main() {
     expect(client.connectionDeletions.single['connectionId'], 'connection-1');
     expect(find.text('연결된 활동이 없어요.'), findsOneWidget);
   });
+
+  testWidgets(
+    'shopping board shows linked recipe needs and hides stale amounts',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.connections = [
+        {
+          'id': 'recipe-shopping-link',
+          'kind': 'recipe_shopping',
+          'otherActivityId': 'recipe-1',
+          'otherTitle': '두부 달걀 볶음',
+          'otherReadyTaskCount': 0,
+          'recipeNeeds': {
+            'status': 'ready',
+            'targetServings': 4,
+            'items': [
+              {
+                'name': '두부',
+                'status': 'unknown',
+                'requiredQuantity': {
+                  'status': 'known',
+                  'amount': 600,
+                  'unit': 'g',
+                },
+              },
+              {
+                'name': '소금',
+                'status': 'as_needed',
+                'requiredQuantity': {'status': 'as_needed'},
+              },
+            ],
+          },
+        },
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ScenarioConnectionsSection(
+              client: client,
+              board: {
+                'id': 'shopping-1',
+                'scenario': 'shopping',
+                'revision': 3,
+              },
+              onOpenBoard: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('레시피 준비 목록 · 4인분'), findsOneWidget);
+      expect(find.text('두부 · 필요한 양 600 g · 재고 미확인'), findsOneWidget);
+      expect(find.text('소금 · 필요한 양 필요한 만큼'), findsOneWidget);
+      client.connections = [
+        {
+          ...client.connections.single,
+          'recipeNeeds': {'status': 'stale'},
+        },
+      ];
+      await tester.tap(find.byTooltip('연결 새로고침'));
+      await tester.pumpAndSettle();
+      expect(find.text('레시피 근거가 바뀌어 준비 목록을 다시 확인해야 해요.'), findsOneWidget);
+      expect(find.text('두부 · 필요한 양 600 g · 재고 미확인'), findsNothing);
+    },
+  );
   testWidgets('scenario panel offers a neutral link for another domain pair', (
     tester,
   ) async {

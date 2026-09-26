@@ -205,6 +205,50 @@ final class _ScenarioConnectionsSectionState
     }
   }
 
+  String _quantity(Object? raw) {
+    if (raw is! Map) return '미확인';
+    if (raw['status'] == 'as_needed') return '필요한 만큼';
+    if (raw['status'] != 'known') return '미확인';
+    final amount = raw['amount'];
+    final unit = raw['unit'];
+    if (amount is! num || unit is! String) return '미확인';
+    return '${amount.toString()} ${unit == 'count' ? '개' : unit}';
+  }
+
+  Widget _recipeNeeds(KernelJson connection) {
+    final needs = connection['recipeNeeds'];
+    if (needs is! Map) return const SizedBox.shrink();
+    final status = needs['status'];
+    final items = needs['items'];
+    if (status == 'not_ready') {
+      return const Text('레시피의 재고 확인과 필요량 계산이 끝나면 준비 목록이 보여요.');
+    }
+    if (status != 'ready' || items is! List) {
+      return const Text('레시피 근거가 바뀌어 준비 목록을 다시 확인해야 해요.');
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('레시피 준비 목록 · ${needs['targetServings']}인분'),
+        for (final item in items.whereType<Map>())
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '${item['name']} · 필요한 양 ${_quantity(item['requiredQuantity'])}'
+              '${item['status'] == 'needed' ? ' · 추가 필요 ${_quantity(item['missingQuantity'])}' : ''}'
+              '${item['status'] == 'satisfied' ? ' · 재고로 충족' : ''}'
+              '${item['status'] == 'unknown' ? ' · 재고 미확인' : ''}'
+              '${item['status'] == 'incompatible_unit' ? ' · 재고 단위 확인 필요' : ''}',
+            ),
+          ),
+        const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Text('상품과 재료가 같은지, 몇 개가 필요한지는 직접 확인해 주세요.'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Card(
     key: const ValueKey('scenario-connections'),
@@ -226,6 +270,11 @@ final class _ScenarioConnectionsSectionState
                 icon: const Icon(Icons.add_link),
                 label: const Text('연결'),
               ),
+              IconButton(
+                tooltip: '연결 새로고침',
+                onPressed: _loading || _busy ? null : _load,
+                icon: const Icon(Icons.refresh),
+              ),
             ],
           ),
           const Text('다른 활동을 함께 볼 수 있어요. 연결만으로 구매·방문·실행이 확인되지는 않아요.'),
@@ -244,22 +293,33 @@ final class _ScenarioConnectionsSectionState
               child: Text('연결된 활동이 없어요.'),
             ),
           for (final connection in _connections)
-            ListTile(
+            Column(
               key: ValueKey('scenario-connection-${connection['id']}'),
-              contentPadding: EdgeInsets.zero,
-              title: Text(connection['otherTitle']?.toString() ?? '연결된 활동'),
-              subtitle: Text(
-                '${_connectionKinds[connection['kind']]?.$3 ?? '활동 연결'} · '
-                '지금 할 일 ${connection['otherReadyTaskCount'] ?? 0}개'
-                '${connection['otherSubject'] is Map ? ' · 확정 결과 있음' : ''}',
-              ),
-              onTap: () =>
-                  widget.onOpenBoard(connection['otherActivityId'] as String),
-              trailing: IconButton(
-                tooltip: '연결 해제',
-                icon: const Icon(Icons.link_off),
-                onPressed: _busy ? null : () => _delete(connection),
-              ),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(connection['otherTitle']?.toString() ?? '연결된 활동'),
+                  subtitle: Text(
+                    '${_connectionKinds[connection['kind']]?.$3 ?? '활동 연결'} · '
+                    '지금 할 일 ${connection['otherReadyTaskCount'] ?? 0}개'
+                    '${connection['otherSubject'] is Map ? ' · 확정 결과 있음' : ''}',
+                  ),
+                  onTap: () => widget.onOpenBoard(
+                    connection['otherActivityId'] as String,
+                  ),
+                  trailing: IconButton(
+                    tooltip: '연결 해제',
+                    icon: const Icon(Icons.link_off),
+                    onPressed: _busy ? null : () => _delete(connection),
+                  ),
+                ),
+                if (connection['recipeNeeds'] is Map)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _recipeNeeds(connection),
+                  ),
+              ],
             ),
         ],
       ),

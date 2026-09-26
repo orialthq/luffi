@@ -34,3 +34,5 @@ UI에서는 양쪽 보드에서 같은 연결을 볼 수 있다. 관계의 방�
 `GET /v1/kernel/scenario-connections/{activityId}`는 연결된 보드의 현재 제목, 시나리오, 실행 가능한 작업 수, 확정된 핵심 결과를 반환한다. `POST /v1/kernel/scenario-connections`는 양쪽 보드 ID·revision, 관계 종류, `confirmed: true`, 재시도용 command ID를 요구한다. 다른 사용자의 보드, 미승인 계획, 오래된 revision, 같은 관계의 중복은 거절한다. `POST /v1/kernel/scenario-connections/delete`는 특정 연결을 해제한다. 모두 기존 커널 토큰으로 보호한다.
 
 연결은 독립 보드의 작업 완료 조건이나 데이터 바인딩을 자동으로 바꾸지 않는다. 한 보드의 결과가 다른 보드의 task input으로 쓰이려면 별도 계획 제안과 근거 재검토가 필요하다. 이는 연결 관계만으로 재고·소유·예약·구매·방문 등의 상태를 추론하지 않기 위한 경계다.
+
+`recipe_shopping` 관계를 쇼핑 보드에서 조회하면, 레시피 보드의 `calculate_requirements` 작업이 완료된 경우 `recipeNeeds` 읽기 전용 투영을 함께 반환한다. 투영에는 계산 결과 ID, 목표 인분, 각 재료의 `requiredQuantity`·`availableQuantity`·`missingQuantity`·상태가 들어간다. 미완료이면 `not_ready`, 레시피 맥락·결과·근거가 바뀌었으면 `stale`만 반환해 과거 수량을 숨긴다. 캡처나 연결 소스를 삭제하면 관계 자체가 조회에서 사라진다. Flutter 쇼핑 보드는 이 목록을 보여주되 상품과 재료의 동일성, 상품 몇 개를 사야 하는지, 구매 여부는 판단하지 않는다. 사용자는 새로고침으로 최신 계산 결과를 다시 읽을 수 있다.
