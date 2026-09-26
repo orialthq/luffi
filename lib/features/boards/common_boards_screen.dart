@@ -3013,6 +3013,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (_object(_taskInputs(task))['linkedRecipe'] is Map)
+                    const Text('확인한 레시피 필요량을 참조해요. 최신 수량은 연결된 활동에서 확인해 주세요.'),
                   for (final candidate in _objects(
                     _object(_taskInputs(task))['candidates'],
                   ))
@@ -3493,7 +3495,9 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final canApprove =
         !_busy &&
         !_needsRefresh &&
-        (!hasPendingChanges || reviewRecovery) &&
+        (!hasPendingChanges ||
+            reviewRecovery ||
+            run['recipeNeedsReview'] is Map) &&
         _board?['lifecycle'] == 'active' &&
         proposal['id'] is String;
     return Card(
@@ -3507,6 +3511,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             Text(
               reviewRecovery
                   ? '변경된 근거로 계획 수정 제안'
+                  : run['recipeNeedsReview'] is Map
+                  ? '레시피 재료를 쇼핑 계획에 반영'
                   : recipeTasks.isNotEmpty
                   ? '레시피 계획 제안'
                   : '계획 제안',
@@ -3529,6 +3535,10 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               for (final step in _objects(recipe['steps']))
                 Text('조리 ${step['order']} · ${_text(step['instruction'])}'),
             ],
+            if (run['recipeNeedsReview'] is Map)
+              Text(
+                '목표 ${_object(run['recipeNeedsReview'])['targetServings']}인분 · 재료 항목 ${_object(run['recipeNeedsReview'])['changedIngredientCount']}개 변경',
+              ),
             for (final task in tasks)
               Text(
                 '• ${_text(task['title'], _text(task['capabilityId'], '작업'))}',
@@ -3738,6 +3748,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                           board: board,
                           onOpenBoard: (id) =>
                               unawaited(_openConnectedBoard(id)),
+                          onPlanProposed: () => unawaited(_load()),
                         ),
                       ),
                     ),

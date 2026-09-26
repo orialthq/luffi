@@ -27,8 +27,14 @@ export const shoppingPack = {
       titleEvidenceIds: ref("core.evidence_ids"),
       priceEvidenceIds: ref("core.evidence_ids"),
       details: array(ref("shopping.capture_detail")) }) },
+    { id: "shopping.linked_recipe_needs", schema: object({
+      connectionId: text, sourceActivityId: text, sourceResultId: text,
+      recipeId: text, recipeRevision: ref("core.revision"),
+    }) },
     { id: "shopping.confirm_input", schema: object({ purpose: text,
-      candidates: array(ref("shopping.capture_candidate"), 1) }) },
+      candidates: array(ref("shopping.capture_candidate"), 1),
+      linkedRecipe: ref("shopping.linked_recipe_needs") },
+    ["purpose", "candidates"]) },
     { id: "shopping.confirm_result", schema: object({ choice: ref("shopping.purchase_choice"),
       confirmedAt: ref("core.timestamp") }) },
     { id: "shopping.outcome_input", schema: object({

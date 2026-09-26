@@ -1,8 +1,9 @@
 import { domainRegistry } from "../domains/index.js";
 
-export function buildShoppingPlanDraft({ candidates, purpose },
+export function buildShoppingPlanDraft({ candidates, purpose, linkedRecipe = null },
   { registry = domainRegistry } = {}) {
-  const confirmation = { candidates, purpose };
+  const confirmation = { candidates, purpose,
+    ...(linkedRecipe ? { linkedRecipe } : {}) };
   registry.validateCapabilityInput("shopping.confirm_choice", confirmation);
   const task = (id, title, capabilityId, inputBindings) => ({
     id, title, capabilityId, kind: registry.getCapability(capabilityId).taskKind,

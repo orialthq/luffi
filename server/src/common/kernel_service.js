@@ -62,6 +62,7 @@ export function createCommonKernelState() {
     lifeTipCommandReceipts: {},
     shoppingScenarioReceipts: {},
     shoppingCommandReceipts: {},
+    shoppingRecipeNeedsProposalReceipts: {},
     healthScenarioReceipts: {},
     healthCommandReceipts: {},
     scenarioConnections: {},
@@ -351,6 +352,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const resourceClaims = state.resources.claims.filter((claim) =>
       claim.ownerId === ownerId && claim.activityId === activityId);
     const continuedFrom = state.reviewContinuations?.[activityId];
+    const pendingChanges = state.reviewEvents.filter((event) => event.activityId === activityId);
+    if (scenarioForActivity(state, activityId) === "shopping") {
+      const reference = value.tasks.find((item) => item.id === "confirm_choice")
+        ?.inputBindings?.linkedRecipe;
+      if (reference && !linkedRecipeNeedsCurrent(state, reference, activityId)) {
+        pendingChanges.push({ key: `${activityId}:linked-recipe-needs`, activityId,
+          eventIds: [], reasonCode: "RECIPE_NEEDS_STALE", timeDue: false });
+      }
+    }
     return {
       ...value,
       scenario: scenarioForActivity(state, activityId),
@@ -360,7 +370,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           entry.fromActivityId === activityId && state.activities.activities[nextId])
         .map(([nextId]) => nextId),
       resourceClaims,
-      pendingChanges: state.reviewEvents.filter((event) => event.activityId === activityId),
+      pendingChanges,
       pendingProposals: Object.values(state.proposals).filter((proposal) =>
         proposal.ownerId === ownerId && proposal.activityId === activityId && proposal.status === "pending"),
     };
@@ -496,9 +506,84 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       return { status: "stale" };
     }
     return { status: "ready", sourceActivityId: activityId, sourceResultId: result.id,
-      recipeRevision: recipe.revision,
+      recipeId: recipe.id, recipeRevision: recipe.revision,
       targetServings: result.value.targetServings,
       items: structuredClone(result.value.items) };
+  }
+
+  function linkedRecipeNeedsCurrent(state, reference, shoppingActivityId = null) {
+    const connection = state.scenarioConnections?.[reference?.connectionId];
+    if (!connection || connection.ownerId !== ownerId || !connectionLive(state, connection) ||
+        connection.kind !== "recipe_shopping" ||
+        connection.fromActivityId !== reference.sourceActivityId ||
+        (shoppingActivityId && connection.toActivityId !== shoppingActivityId)) return false;
+    const needs = recipeShoppingNeeds(state, connection);
+    return needs?.status === "ready" &&
+      needs.sourceResultId === reference.sourceResultId &&
+      needs.recipeId === reference.recipeId &&
+      needs.recipeRevision === reference.recipeRevision;
+  }
+
+  function recipeShoppingPlanReview(state, shoppingActivityId, connectionId) {
+    const shopping = board(state, shoppingActivityId);
+    if (scenarioForActivity(state, shoppingActivityId) !== "shopping" ||
+        shopping.currentPlanRevision === 0 || shopping.lifecycle !== "active") {
+      throw new AppError("SHOPPING_PLAN_UNAVAILABLE", "승인된 쇼핑 보드를 확인해 주세요.",
+        { httpStatus: 409 });
+    }
+    const connection = state.scenarioConnections?.[connectionId];
+    if (!connection || connection.ownerId !== ownerId || !connectionLive(state, connection) ||
+        connection.kind !== "recipe_shopping" ||
+        connection.toActivityId !== shoppingActivityId) {
+      throw new AppError("CONNECTION_NOT_FOUND", "연결된 레시피를 찾지 못했어요.",
+        { httpStatus: 404 });
+    }
+    const needs = recipeShoppingNeeds(state, connection);
+    if (needs?.status !== "ready") throw new AppError("RECIPE_NEEDS_STALE",
+      "레시피 필요량을 다시 계산한 뒤 검토해 주세요.", { httpStatus: 409 });
+    const task = shopping.tasks.find((item) => item.id === "confirm_choice" &&
+      item.capabilityId === "shopping.confirm_choice");
+    if (!task || task.executionStatus !== "not_started" || task.inputsPinned) {
+      throw new AppError("STARTED_TASK_PROTECTED",
+        "상품 선택이 이미 시작됐어요. 새 쇼핑 활동에서 확인해 주세요.",
+        { httpStatus: 409 });
+    }
+    const reference = { connectionId, sourceActivityId: needs.sourceActivityId,
+      sourceResultId: needs.sourceResultId, recipeId: needs.recipeId,
+      recipeRevision: needs.recipeRevision };
+    if (requestFingerprint(task.inputBindings.linkedRecipe ?? null) ===
+        requestFingerprint(reference)) throw new AppError("NO_CHANGE",
+      "이 레시피 계산 결과는 이미 쇼핑 계획에 반영됐어요.", { httpStatus: 409 });
+    const previous = task.inputBindings.linkedRecipe;
+    const previousActivity = state.activities.activities[previous?.sourceActivityId];
+    const previousResult = previousActivity?.ownerId === ownerId
+      ? previousActivity.results.find((item) => item.id === previous.sourceResultId)?.value : null;
+    let before = null;
+    if (previousResult) {
+      try { registry.validate("recipe.shopping_list", previousResult); before = previousResult; }
+      catch { /* A damaged old result is not a reliable comparison. */ }
+    }
+    const sourceActivity = state.activities.activities[needs.sourceActivityId];
+    const after = sourceActivity?.results.find((item) => item.id === needs.sourceResultId)?.value;
+    if (!after) throw new AppError("RECIPE_NEEDS_STALE",
+      "레시피 계산 결과를 다시 확인해 주세요.", { httpStatus: 409 });
+    const oldItems = new Map((before?.items ?? []).map((item) => [item.ingredientId, item]));
+    const newItems = new Map(after.items.map((item) => [item.ingredientId, item]));
+    const changes = [
+      ...after.items.filter((item) => !oldItems.has(item.ingredientId)).map((item) =>
+        ({ type: "added", after: structuredClone(item) })),
+      ...(before?.items ?? []).filter((item) => !newItems.has(item.ingredientId)).map((item) =>
+        ({ type: "removed", before: structuredClone(item) })),
+      ...after.items.filter((item) => oldItems.has(item.ingredientId) &&
+        requestFingerprint(oldItems.get(item.ingredientId)) !== requestFingerprint(item)).map((item) =>
+        ({ type: "changed", before: structuredClone(oldItems.get(item.ingredientId)),
+          after: structuredClone(item) })),
+    ];
+    return { shoppingActivityId, connectionId, expectedRevision: shopping.revision,
+      reference, before: before ? { targetServings: before.targetServings,
+        items: structuredClone(before.items) } : null,
+      after: { targetServings: after.targetServings,
+        items: structuredClone(after.items) }, changes, task };
   }
 
   function issuedContext(state, contextId) {
@@ -664,6 +749,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         if (item.ownerId === ownerId && item.result?.activityId === activityId) {
           item.deleted = true;
           item.result = { activityId };
+        }
+      }
+      for (const item of Object.values(state.shoppingRecipeNeedsProposalReceipts ?? {})) {
+        if (item.ownerId === ownerId &&
+            (item.shoppingActivityId === activityId || item.sourceActivityId === activityId)) {
+          item.deleted = true;
+          item.result = { shoppingActivityId: item.shoppingActivityId };
         }
       }
       for (const [nextId, entry] of Object.entries(state.reviewContinuations ?? {})) {
@@ -1833,8 +1925,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       if (!receipt) throw new AppError("SCENARIO_DELETED", "쇼핑 활동을 찾지 못했어요.",
         { httpStatus: 410 });
       const { candidates, contextQueries } = shoppingCandidates(state, receipt.importIds);
+      const original = current.currentPlanRevision === 0
+        ? Object.values(state.proposals).find((item) => item.ownerId === ownerId &&
+          item.activityId === activityId && item.kind === "draft")?.plan : current;
+      const linkedRecipe = original?.tasks?.find((item) => item.id === "confirm_choice")
+        ?.inputBindings?.linkedRecipe ?? null;
+      if (linkedRecipe && !linkedRecipeNeedsCurrent(state, linkedRecipe, activityId)) {
+        throw new AppError("RECIPE_NEEDS_STALE",
+          "연결된 레시피 필요량이 바뀌었어요. 최신 결과로 쇼핑 계획을 다시 검토해 주세요.",
+          { httpStatus: 409 });
+      }
       return { scenario, contextQueries,
-        draft: buildShoppingPlanDraft({ candidates, purpose: receipt.purpose }, { registry }) };
+        draft: buildShoppingPlanDraft({ candidates, purpose: receipt.purpose,
+          linkedRecipe }, { registry }) };
     }
     if (scenario === "recipe") {
       const receipt = Object.values(state.recipeScenarioReceipts ?? {}).find((item) =>
@@ -2905,6 +3008,119 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         });
       } catch (error) { throw toHttpError(error); }
     },
+    async getRecipeShoppingPlanReview(shoppingActivityId, connectionId) {
+      try {
+        safeId(shoppingActivityId, "shoppingActivityId");
+        safeId(connectionId, "connectionId");
+        return await read((state) => {
+          const { task, ...review } = recipeShoppingPlanReview(state,
+            shoppingActivityId, connectionId);
+          return review;
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async proposeRecipeShoppingPlan(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "shoppingActivityId",
+          "connectionId", "expectedRevision", "expectedSourceResultId",
+          "confirmed"].includes(key)) ||
+          input.confirmed !== true || !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 0) {
+          throw new AppError("INVALID_REQUEST", "레시피 장보기 변경안을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const shoppingActivityId = safeId(input.shoppingActivityId, "shoppingActivityId");
+        const connectionId = safeId(input.connectionId, "connectionId");
+        const expectedSourceResultId = safeId(input.expectedSourceResultId,
+          "expectedSourceResultId");
+        const hash = requestFingerprint({ shoppingActivityId, connectionId,
+          expectedRevision: input.expectedRevision, expectedSourceResultId });
+        return await store.transact((state) => {
+          assertState(state);
+          state.shoppingRecipeNeedsProposalReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const prior = state.shoppingRecipeNeedsProposalReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 장보기 변경안에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제된 활동의 변경안을 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const review = recipeShoppingPlanReview(state, shoppingActivityId, connectionId);
+          if (review.expectedRevision !== input.expectedRevision) throw new AppError(
+            "REVISION_CONFLICT", "쇼핑 활동이 변경됐어요. 다시 확인해 주세요.",
+            { httpStatus: 409 });
+          if (review.reference.sourceResultId !== expectedSourceResultId) {
+            throw new AppError("RECIPE_NEEDS_STALE",
+              "검토한 뒤 레시피 계산 결과가 바뀌었어요. 다시 확인해 주세요.",
+              { httpStatus: 409 });
+          }
+          const shoppingReceipt = reviewScenarioReceipt(state, shoppingActivityId,
+            state.shoppingScenarioReceipts);
+          const { candidates, contextQueries } = shoppingCandidates(state,
+            shoppingReceipt.importIds);
+          if (requestFingerprint(candidates) !==
+              requestFingerprint(review.task.inputBindings.candidates)) {
+            throw new AppError("CONTEXT_STALE",
+              "쇼핑 후보도 변경됐어요. 먼저 쇼핑 계획을 검토해 주세요.",
+              { httpStatus: 409 });
+          }
+          const recipeQueries = state.knowledge.assertions.filter((item) =>
+            item.ownerId === ownerId && item.status === "active" &&
+            item.scope?.type === "activity" &&
+            item.scope.id === review.reference.sourceActivityId &&
+            item.predicate.startsWith("recipe.")).map((item) => ({
+            subjectId: item.subjectId, predicate: item.predicate, scope: item.scope,
+          }));
+          const issued = issueContext(state, { activityId: shoppingActivityId,
+            queries: [...contextQueries, ...recipeQueries] });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE",
+              "레시피 또는 상품 근거가 바뀌었어요. 다시 확인해 주세요.",
+              { httpStatus: 409 });
+          }
+          const current = board(state, shoppingActivityId);
+          const patch = enrichPlan("patch", { basePlanRevision: current.currentPlanRevision,
+            expectedTaskRevisions: { confirm_choice: review.task.revision },
+            operations: [{ type: "updateTaskInput", taskId: "confirm_choice",
+              inputs: { ...review.task.inputBindings,
+                linkedRecipe: review.reference } }],
+            reasons: ["사용자가 연결된 레시피 필요 재료를 확인함"],
+          });
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: "recipe-shopping-proposal-check:" + randomUUID(),
+            type: "plan.applyPatch", activityId: shoppingActivityId,
+            expectedRevision: current.revision, payload: { patch } },
+          activityOptions(state));
+          for (const proposal of Object.values(state.proposals)) {
+            if (proposal.ownerId === ownerId && proposal.activityId === shoppingActivityId &&
+                proposal.status === "pending") proposal.status = "superseded";
+          }
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId,
+            activityId: shoppingActivityId, contextId: issued.contextId,
+            kind: "patch", plan: patch,
+            run: { scenario: "shopping", recipeNeedsReview: {
+              reference: review.reference,
+              previousSourceResultId: review.task.inputBindings.linkedRecipe?.sourceResultId ?? null,
+              changedIngredientCount: review.changes.length,
+              targetServings: review.after.targetServings,
+            } },
+            baseActivityRevision: current.revision,
+            basePlanRevision: current.currentPlanRevision,
+            status: "pending", createdAt: new Date().toISOString() };
+          const result = { shoppingActivityId, connectionId, proposalId,
+            revision: current.revision, changedIngredientCount: review.changes.length };
+          state.shoppingRecipeNeedsProposalReceipts[key] = { ownerId, hash,
+            shoppingActivityId, sourceActivityId: review.reference.sourceActivityId,
+            result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
     async createScenarioConnection(raw) {
       const input = requestObject(raw);
       const commandId = safeId(input.commandId, "명령 ID");
@@ -3180,6 +3396,26 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           }
           if (proposal.status !== "pending") {
             throw new AppError("PROPOSAL_CONFLICT", "이미 처리한 변경안이에요.", { httpStatus: 409 });
+          }
+          const plannedReference = proposal.kind === "draft"
+            ? proposal.plan.tasks?.find((item) => item.id === "confirm_choice")
+              ?.inputBindings?.linkedRecipe
+            : proposal.plan.operations?.find((item) =>
+              item.taskId === "confirm_choice" &&
+              (item.type ?? item.op) === "updateTaskInput")
+              ?.inputs?.linkedRecipe;
+          const reviewedReference = proposal.run?.recipeNeedsReview?.reference;
+          if (reviewedReference && requestFingerprint(plannedReference ?? null) !==
+              requestFingerprint(reviewedReference)) {
+            throw new AppError("INVALID_PLAN", "검토한 레시피와 계획 입력이 달라요.",
+              { httpStatus: 409 });
+          }
+          const linkedRecipe = plannedReference ?? reviewedReference;
+          if (linkedRecipe && !linkedRecipeNeedsCurrent(state, linkedRecipe,
+            proposal.activityId)) {
+            throw new AppError("RECIPE_NEEDS_STALE",
+              "레시피 계산 결과가 바뀌었어요. 쇼핑 변경안을 다시 검토해 주세요.",
+              { httpStatus: 409 });
           }
           const context = issuedContext(state, proposal.contextId);
           validateContext(state, context, { activityId: proposal.activityId, requireActivityBinding: true });
@@ -5726,6 +5962,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
             "지금은 상품을 선택할 수 없어요.", { httpStatus: 409 });
           const ready = task.readiness.inputs;
+          if (ready.linkedRecipe &&
+              (!linkedRecipeNeedsCurrent(state, ready.linkedRecipe, activityId) ||
+                requestFingerprint(ready.linkedRecipe) !==
+                requestFingerprint(task.inputBindings.linkedRecipe))) {
+            throw new AppError("RECIPE_NEEDS_STALE",
+              "연결된 레시피 필요량이 바뀌었어요. 쇼핑 계획을 다시 검토해 주세요.",
+              { httpStatus: 409 });
+          }
           const trusted = shoppingCandidates(state, scenario.importIds).candidates;
           if (ready.purpose !== scenario.purpose ||
               requestFingerprint(ready.candidates) !== requestFingerprint(trusted) ||

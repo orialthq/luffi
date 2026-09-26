@@ -62,6 +62,8 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/life-tip/confirm-actions` | 사용자가 실천할 원본 단계를 고르고 출처 있는 ActionPlan 구성 |
 | `POST /v1/kernel/life-tip/outcomes` | 단계별 실제 실행을 직접 보고. `done`에만 실행 관계 생성 |
 | `POST /v1/kernel/shopping/scenarios` | 확인한 상품 캡처 1~8개로 비교·선택 계획 제안 |
+| `GET /v1/kernel/shopping/recipe-needs/review/{shoppingActivityId}/{connectionId}` | 연결된 레시피의 이전·현재 필요 재료와 차이를 최신 결과에서 계산 |
+| `POST /v1/kernel/shopping/recipe-needs/proposals` | 사용자가 확인한 레시피 계산 결과의 참조를 쇼핑 계획 변경안으로 생성. 별도 계획 승인 필요 |
 | `POST /v1/kernel/shopping/confirm-choice` | 상품 하나와 수량을 직접 확정. 캡처 가격은 시점 한정 표시값으로 저장 |
 | `POST /v1/kernel/shopping/purchase-outcome` | 실제 구매 여부를 직접 보고. `purchased`에만 실제 지불액과 구매 관계 생성 |
 | `POST /v1/kernel/health/scenarios` | 확인한 단계형 운동 캡처로 승인 대기 계획 제안 |

@@ -424,6 +424,7 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/life-tip/confirm-actions", "confirmLifeTipActions"],
     ["/life-tip/outcomes", "recordLifeTipOutcomes"],
     ["/shopping/scenarios", "createShoppingScenario"],
+    ["/shopping/recipe-needs/proposals", "proposeRecipeShoppingPlan"],
     ["/shopping/confirm-choice", "confirmShoppingChoice"],
     ["/shopping/purchase-outcome", "recordShoppingPurchaseOutcome"],
     ["/health/scenarios", "createHealthScenario"],
@@ -467,6 +468,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "getEditableCaptureFields", importId });
   kernelService.getEditableRecipe = async (activityId) =>
     ({ method: "getEditableRecipe", activityId });
+  kernelService.getRecipeShoppingPlanReview = async (shoppingActivityId, connectionId) =>
+    ({ method: "getRecipeShoppingPlanReview", shoppingActivityId, connectionId });
   const token = "t".repeat(32);
   const baseUrl = await startServer(t, { kernelService, kernelToken: token });
   const authorization = { Authorization: `Bearer ${token}` };
@@ -499,6 +502,9 @@ test("kernel HTTP routes forward each request to its declared service method", a
       { method: "getEditableCaptureFields", importId: "item-1" }],
     ["/recipe/editable/meal%20plan",
       { method: "getEditableRecipe", activityId: "meal plan" }],
+    ["/shopping/recipe-needs/review/shop%20one/link%20one",
+      { method: "getRecipeShoppingPlanReview", shoppingActivityId: "shop one",
+        connectionId: "link one" }],
     ["/boards/meal%20plan", { method: "getBoard", activityId: "meal plan" }],
     ["/boards/meal%20plan/review", { method: "getBoardReview",
       activityId: "meal plan" }],

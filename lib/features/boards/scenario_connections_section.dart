@@ -29,12 +29,14 @@ final class ScenarioConnectionsSection extends StatefulWidget {
     required this.client,
     required this.board,
     required this.onOpenBoard,
+    this.onPlanProposed,
     super.key,
   });
 
   final CommonKernelClient client;
   final KernelJson board;
   final void Function(String activityId) onOpenBoard;
+  final VoidCallback? onPlanProposed;
 
   @override
   State<ScenarioConnectionsSection> createState() =>
@@ -47,6 +49,7 @@ final class _ScenarioConnectionsSectionState
   bool _loading = true;
   bool _busy = false;
   Object? _error;
+  KernelJson? _pendingNeedsRequest;
 
   String get _activityId => widget.board['id'] as String;
   String get _scenario => (widget.board['scenario'] as String?) ?? '';
@@ -221,6 +224,109 @@ final class _ScenarioConnectionsSectionState
     }
   }
 
+  Future<void> _reviewRecipeNeeds(KernelJson connection) async {
+    if (_busy || _pendingNeedsRequest != null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final review = await widget.client.getRecipeShoppingPlanReview(
+        _activityId,
+        connection['id'] as String,
+      );
+      if (!mounted) return;
+      final changes = review['changes'] is List
+          ? review['changes'] as List
+          : const [];
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('레시피 재료 변경 검토'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (review['before'] == null)
+                    const Text('쇼핑 계획에 연결된 이전 레시피 계산 결과가 없어요.'),
+                  Text(
+                    '새 계산 결과 · ${(review['after'] as Map?)?['targetServings']}인분',
+                  ),
+                  for (final raw in changes)
+                    if (raw is Map)
+                      Text(switch (raw['type']) {
+                        'added' => '추가 · ${_needSummary(raw['after'])}',
+                        'removed' => '제외 · ${_needSummary(raw['before'])}',
+                        _ =>
+                          '변경 · ${_needSummary(raw['before'])} → ${_needSummary(raw['after'])}',
+                      }),
+                  if (changes.isEmpty)
+                    const Text('재료 수량은 같고 계산 결과의 근거가 새로워졌어요.'),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '이 변경안은 상품을 자동으로 선택하거나 구매 수량을 결정하지 않아요. 보드에서 별도로 승인해야 적용돼요.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('변경안 만들기'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true) return;
+      _pendingNeedsRequest = {
+        'commandId': newKernelCommandId(),
+        'shoppingActivityId': _activityId,
+        'connectionId': connection['id'],
+        'expectedRevision': review['expectedRevision'],
+        'expectedSourceResultId':
+            (review['reference'] as Map)['sourceResultId'],
+        'confirmed': true,
+      };
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (_pendingNeedsRequest != null) await _sendPendingNeedsProposal();
+  }
+
+  Future<void> _sendPendingNeedsProposal() async {
+    final request = _pendingNeedsRequest;
+    if (_busy || request == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.client.proposeRecipeShoppingPlan(request);
+      _pendingNeedsRequest = null;
+      if (mounted) widget.onPlanProposed?.call();
+    } catch (error) {
+      final retryable =
+          error is CommonKernelException &&
+          (['NETWORK_TIMEOUT', 'NETWORK_UNAVAILABLE'].contains(error.code) ||
+              error.statusCode == 429 ||
+              (error.statusCode != null && error.statusCode! >= 500));
+      if (!retryable) _pendingNeedsRequest = null;
+      if (mounted) setState(() => _error = error);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   String _quantity(Object? raw) {
     if (raw is! Map) return '미확인';
     if (raw['status'] == 'as_needed') return '필요한 만큼';
@@ -229,6 +335,35 @@ final class _ScenarioConnectionsSectionState
     final unit = raw['unit'];
     if (amount is! num || unit is! String) return '미확인';
     return '${amount.toString()} ${unit == 'count' ? '개' : unit}';
+  }
+
+  String _needSummary(Object? raw) {
+    if (raw is! Map) return '재료 미확인';
+    final status = switch (raw['status']) {
+      'needed' => '추가 필요',
+      'satisfied' => '재고로 충족',
+      'unknown' => '재고 미확인',
+      'incompatible_unit' => '재고 단위 확인 필요',
+      'as_needed' => '필요한 만큼',
+      _ => '상태 미확인',
+    };
+    return '${raw['name']} · 필요 ${_quantity(raw['requiredQuantity'])} · 부족 ${_quantity(raw['missingQuantity'])} · $status';
+  }
+
+  bool _alreadyPlanned(KernelJson connection) {
+    final needs = connection['recipeNeeds'];
+    if (needs is! Map) return false;
+    final tasks = widget.board['tasks'];
+    if (tasks is! List) return false;
+    for (final task in tasks.whereType<Map>()) {
+      if (task['id'] != 'confirm_choice') continue;
+      final inputs = task['inputBindings'];
+      final linked = inputs is Map ? inputs['linkedRecipe'] : null;
+      return linked is Map &&
+          linked['connectionId'] == connection['id'] &&
+          linked['sourceResultId'] == needs['sourceResultId'];
+    }
+    return false;
   }
 
   Widget _recipeNeeds(KernelJson connection) {
@@ -308,6 +443,11 @@ final class _ScenarioConnectionsSectionState
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ),
+          if (_pendingNeedsRequest != null)
+            TextButton(
+              onPressed: _busy ? null : _sendPendingNeedsProposal,
+              child: const Text('같은 장보기 변경안 다시 보내기'),
+            ),
           if (!_loading && _connections.isEmpty)
             const Padding(
               padding: EdgeInsets.only(top: 8),
@@ -338,7 +478,24 @@ final class _ScenarioConnectionsSectionState
                 if (connection['recipeNeeds'] is Map)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: _recipeNeeds(connection),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _recipeNeeds(connection),
+                        if (_scenario == 'shopping' &&
+                            (connection['recipeNeeds'] as Map)['status'] ==
+                                'ready' &&
+                            !_alreadyPlanned(connection))
+                          TextButton.icon(
+                            key: Key('review-recipe-needs-${connection['id']}'),
+                            onPressed: _busy || _pendingNeedsRequest != null
+                                ? null
+                                : () => _reviewRecipeNeeds(connection),
+                            icon: const Icon(Icons.rate_review_outlined),
+                            label: const Text('쇼핑 계획에 반영 검토'),
+                          ),
+                      ],
+                    ),
                   ),
               ],
             ),

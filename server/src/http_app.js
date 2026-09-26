@@ -43,6 +43,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/life-tip/confirm-actions": "confirmLifeTipActions",
   "/life-tip/outcomes": "recordLifeTipOutcomes",
   "/shopping/scenarios": "createShoppingScenario",
+  "/shopping/recipe-needs/proposals": "proposeRecipeShoppingPlan",
   "/shopping/confirm-choice": "confirmShoppingChoice",
   "/shopping/purchase-outcome": "recordShoppingPurchaseOutcome",
   "/health/scenarios": "createHealthScenario",
@@ -66,7 +67,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
-  "getEditableCaptureFields", "getEditableRecipe"];
+  "getEditableCaptureFields", "getEditableRecipe", "getRecipeShoppingPlanReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -191,6 +192,20 @@ export function createHttpServer({
           try { activityId = decodeURIComponent(connectionsMatch[1]); }
           catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.", { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.listScenarioConnections(activityId));
+        }
+        const recipeShoppingReviewMatch =
+          /^\/shopping\/recipe-needs\/review\/([^/]+)\/([^/]+)$/.exec(route);
+        if (recipeShoppingReviewMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let shoppingActivityId;
+          let connectionId;
+          try {
+            shoppingActivityId = decodeURIComponent(recipeShoppingReviewMatch[1]);
+            connectionId = decodeURIComponent(recipeShoppingReviewMatch[2]);
+          } catch { throw new AppError("INVALID_REQUEST", "연결 ID 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getRecipeShoppingPlanReview(
+            shoppingActivityId, connectionId));
         }
         const fieldReviewMatch = /^\/ingestion\/field-reviews\/([^/]+)$/.exec(route);
         const editableRecipeMatch = /^\/recipe\/editable\/([^/]+)$/.exec(route);

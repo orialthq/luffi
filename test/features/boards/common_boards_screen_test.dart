@@ -195,6 +195,22 @@ final class FakeKernelClient implements CommonKernelClient {
   Future<KernelJson> correctRecipe(KernelJson request) async => request;
 
   @override
+  Future<KernelJson> getRecipeShoppingPlanReview(
+    String shoppingActivityId,
+    String connectionId,
+  ) async => recipeShoppingReview ?? <String, Object?>{};
+
+  @override
+  Future<KernelJson> proposeRecipeShoppingPlan(KernelJson request) async {
+    recipeShoppingPlanRequests.add(request);
+    if (timeoutRecipeShoppingProposalOnce) {
+      timeoutRecipeShoppingProposalOnce = false;
+      throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 지났어요');
+    }
+    return {'proposalId': 'recipe-shopping-proposal'};
+  }
+
+  @override
   Future<KernelJson> getEditableCaptureFields(String importId) async => {
     'importId': importId,
     'fields': <Object>[],
@@ -215,6 +231,9 @@ final class FakeKernelClient implements CommonKernelClient {
   final fieldReviewStates = <String, KernelJson>{};
   final connectionRequests = <KernelJson>[];
   final connectionDeletions = <KernelJson>[];
+  KernelJson? recipeShoppingReview;
+  final recipeShoppingPlanRequests = <KernelJson>[];
+  bool timeoutRecipeShoppingProposalOnce = false;
   List<KernelJson> connections = [];
   final acceptedProposals = <KernelJson>[];
   bool conflict = false;
@@ -3155,6 +3174,42 @@ void main() {
     expect(find.textContaining('새 계획을 만든 뒤 승인해 주세요'), findsOneWidget);
   });
 
+  testWidgets('linked recipe shopping proposal remains separately approvable', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.board['scenario'] = 'shopping';
+    client.board['tasks'] = <Object?>[];
+    client.board['pendingProposals'] = [
+      {
+        'id': 'recipe-shopping-review',
+        'kind': 'patch',
+        'plan': {'operations': <Object?>[]},
+        'run': {
+          'scenario': 'shopping',
+          'recipeNeedsReview': {
+            'targetServings': 4,
+            'changedIngredientCount': 2,
+          },
+        },
+      },
+    ];
+    await _pump(tester, client);
+    expect(find.text('레시피 재료를 쇼핑 계획에 반영'), findsOneWidget);
+    final button = tester.widget<FilledButton>(
+      find.byKey(const Key('kernel-approve-proposal-recipe-shopping-review')),
+    );
+    expect(button.onPressed, isNotNull);
+    await tester.tap(
+      find.byKey(const Key('kernel-approve-proposal-recipe-shopping-review')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      client.acceptedProposals.single['proposalId'],
+      'recipe-shopping-review',
+    );
+  });
+
   testWidgets('keeping a reviewed result requires explicit confirmation', (
     tester,
   ) async {
@@ -3532,10 +3587,146 @@ void main() {
       await tester.tap(find.byTooltip('연결 새로고침'));
       await tester.pumpAndSettle();
       expect(
-        find.text('레시피가 바뀌어 이전 수량을 숨겼어요. 변경을 검토하고, 완료된 계산이라면 새 활동에서 다시 계산해 주세요.'),
+        find.text(
+          '레시피가 바뀌어 이전 수량을 숨겼어요. 변경을 검토하고, 완료된 계산이라면 새 활동에서 다시 계산해 주세요.',
+        ),
         findsOneWidget,
       );
       expect(find.text('두부 · 필요한 양 600 g · 재고 미확인'), findsNothing);
+    },
+  );
+  testWidgets(
+    'shopping recipe needs are reviewed before a separate plan approval',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.connections = [
+        {
+          'id': 'recipe-link',
+          'kind': 'recipe_shopping',
+          'otherActivityId': 'recipe-next',
+          'otherTitle': '두부 달걀 볶음',
+          'otherReadyTaskCount': 0,
+          'recipeNeeds': {
+            'status': 'ready',
+            'sourceResultId': 'new-needs',
+            'targetServings': 4,
+            'items': [
+              {
+                'ingredientId': 'tofu',
+                'name': '두부',
+                'status': 'unknown',
+                'requiredQuantity': {
+                  'status': 'known',
+                  'amount': 700,
+                  'unit': 'g',
+                },
+              },
+            ],
+          },
+        },
+      ];
+      client.recipeShoppingReview = {
+        'expectedRevision': 3,
+        'reference': {'sourceResultId': 'new-needs'},
+        'before': {
+          'targetServings': 4,
+          'items': [
+            {
+              'ingredientId': 'tofu',
+              'name': '두부',
+              'requiredQuantity': {
+                'status': 'known',
+                'amount': 600,
+                'unit': 'g',
+              },
+            },
+          ],
+        },
+        'after': {
+          'targetServings': 4,
+          'items': [
+            {
+              'ingredientId': 'tofu',
+              'name': '두부',
+              'requiredQuantity': {
+                'status': 'known',
+                'amount': 700,
+                'unit': 'g',
+              },
+            },
+          ],
+        },
+        'changes': [
+          {
+            'type': 'changed',
+            'before': {
+              'name': '두부',
+              'requiredQuantity': {
+                'status': 'known',
+                'amount': 600,
+                'unit': 'g',
+              },
+            },
+            'after': {
+              'name': '두부',
+              'requiredQuantity': {
+                'status': 'known',
+                'amount': 700,
+                'unit': 'g',
+              },
+            },
+          },
+        ],
+      };
+      client.timeoutRecipeShoppingProposalOnce = true;
+      var proposed = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ScenarioConnectionsSection(
+              client: client,
+              board: {
+                'id': 'shopping-1',
+                'scenario': 'shopping',
+                'revision': 3,
+              },
+              onOpenBoard: (_) {},
+              onPlanProposed: () => proposed++,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('review-recipe-needs-recipe-link')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('필요 600 g · 부족 미확인 · 상태 미확인 → 두부 · 필요 700 g'),
+        findsOneWidget,
+      );
+      expect(client.recipeShoppingPlanRequests, isEmpty);
+      await tester.tap(find.text('변경안 만들기'));
+      await tester.pumpAndSettle();
+      expect(client.recipeShoppingPlanRequests, hasLength(1));
+      expect(client.recipeShoppingPlanRequests.single['expectedRevision'], 3);
+      expect(
+        client.recipeShoppingPlanRequests.single['expectedSourceResultId'],
+        'new-needs',
+      );
+      expect(
+        client.recipeShoppingPlanRequests.single['connectionId'],
+        'recipe-link',
+      );
+      expect(proposed, 0);
+      await tester.tap(find.text('같은 장보기 변경안 다시 보내기'));
+      await tester.pumpAndSettle();
+      expect(client.recipeShoppingPlanRequests, hasLength(2));
+      expect(
+        client.recipeShoppingPlanRequests[1],
+        client.recipeShoppingPlanRequests[0],
+      );
+      expect(proposed, 1);
     },
   );
   testWidgets('scenario panel offers a neutral link for another domain pair', (

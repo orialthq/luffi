@@ -5,6 +5,59 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/data/common_kernel_client.dart';
 
 void main() {
+  test('recipe shopping review and proposal use stable encoded ids', () async {
+    final requests = <String>[];
+    final bodies = <Map<String, dynamic>>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      requests.add('${request.method} ${request.uri}');
+      if (request.method == 'POST') {
+        bodies.add(
+          jsonDecode(await utf8.decoder.bind(request).join())
+              as Map<String, dynamic>,
+        );
+      } else {
+        await request.drain<void>();
+      }
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        request.method == 'GET'
+            ? '{"expectedRevision":3,"changes":[]}'
+            : '{"proposalId":"proposal-1"}',
+      );
+      await request.response.close();
+    });
+    final client = HttpCommonKernelClient(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      token: 'development-token',
+    );
+    expect(
+      (await client.getRecipeShoppingPlanReview(
+        'shop/a',
+        'link/b',
+      ))['expectedRevision'],
+      3,
+    );
+    final proposal = <String, Object?>{
+      'commandId': 'plan-1',
+      'shoppingActivityId': 'shop/a',
+      'connectionId': 'link/b',
+      'expectedRevision': 3,
+      'expectedSourceResultId': 'needs-1',
+      'confirmed': true,
+    };
+    expect(
+      (await client.proposeRecipeShoppingPlan(proposal))['proposalId'],
+      'proposal-1',
+    );
+    expect(requests, [
+      'GET /v1/kernel/shopping/recipe-needs/review/shop%2Fa/link%2Fb',
+      'POST /v1/kernel/shopping/recipe-needs/proposals',
+    ]);
+    expect(bodies.single, proposal);
+  });
+
   test(
     'recipe correction sends the whole replacement and encoded activity id',
     () async {
