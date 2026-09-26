@@ -189,6 +189,8 @@ final class FakeKernelClient implements CommonKernelClient {
   final commands = <KernelJson>[];
   final runs = <KernelJson>[];
   final scenarioRequests = <KernelJson>[];
+  final fieldReviewRequests = <KernelJson>[];
+  final fieldReviewStates = <String, KernelJson>{};
   final connectionRequests = <KernelJson>[];
   final connectionDeletions = <KernelJson>[];
   List<KernelJson> connections = [];
@@ -824,6 +826,30 @@ final class FakeKernelClient implements CommonKernelClient {
       'proposalId': 'shopping-proposal',
       'revision': 1,
     };
+  }
+
+  @override
+  Future<KernelJson> getImportedFieldReview(String importId) async =>
+      fieldReviewStates[importId] ??
+      {
+        'importId': importId,
+        'fieldKey': 'shopping.displayed_price',
+        'status': 'unreviewed',
+        'revision': 0,
+      };
+
+  @override
+  Future<KernelJson> reviewImportedField(KernelJson request) async {
+    fieldReviewRequests.add(request);
+    final response = <String, Object?>{
+      'importId': request['importId'],
+      'fieldKey': request['fieldKey'],
+      'status': 'reviewed',
+      'revision': (request['expectedRevision'] as int) + 1,
+      'sourcePath': request['sourcePath'],
+    };
+    fieldReviewStates[request['importId'] as String] = response;
+    return response;
   }
 
   @override
@@ -1831,6 +1857,72 @@ void main() {
       expect(find.text('계획 제안'), findsOneWidget);
     },
   );
+
+  testWidgets('ambiguous shopping price is reviewed before scenario creation', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    final intentStore = FakeShoppingIntentStore();
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          diningIntentStore: FakeDiningIntentStore(),
+          fashionIntentStore: FakeFashionIntentStore(),
+          beautyIntentStore: FakeBeautyIntentStore(),
+          travelIntentStore: FakeTravelIntentStore(),
+          lifeTipIntentStore: FakeLifeTipIntentStore(),
+          shoppingIntentStore: intentStore,
+          shoppingImportOptions: const [
+            ShoppingImportOption(
+              importId: 'ambiguous',
+              title: '패브릭 수납함',
+              priceFacts: [
+                ShoppingPriceFact(
+                  sourcePath: '/facts/3/value',
+                  label: '이전 표시가',
+                  value: '19,900원',
+                  selectable: false,
+                ),
+                ShoppingPriceFact(
+                  sourcePath: '/facts/4/value',
+                  label: '화면 표시가',
+                  value: '12,900원',
+                  selectable: true,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('kernel-create-shopping')));
+    await tester.tap(find.byKey(const Key('kernel-create-shopping')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('shopping-purpose')),
+      '수납함 고르기',
+    );
+    await tester.tap(find.byKey(const Key('shopping-import-ambiguous')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('shopping-price-ambiguous-/facts/4/value')),
+    );
+    await tester.tap(find.byKey(const Key('shopping-create-submit')));
+    await tester.pumpAndSettle();
+    expect(client.fieldReviewRequests, hasLength(1));
+    expect(client.fieldReviewRequests.single['sourcePath'], '/facts/4/value');
+    expect(client.fieldReviewRequests.single['expectedRevision'], 0);
+    expect(client.scenarioRequests, hasLength(1));
+    expect(client.scenarioRequests.single.containsKey('priceReviews'), isFalse);
+    expect(intentStore.pending, isNull);
+  });
 
   testWidgets('reviewed life-tip image creates an approval-gated plan', (
     tester,

@@ -548,6 +548,7 @@ void main() {
 
     expect(importer.requests, hasLength(1));
     expect(reviewedController.syncedReviewedCaptureImports, isEmpty);
+    expect(reviewedController.allSyncedReviewedCaptureImports, hasLength(1));
   });
 
   test(

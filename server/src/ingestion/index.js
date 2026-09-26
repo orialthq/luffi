@@ -10,12 +10,20 @@ export const INGESTION_TYPES = Object.freeze([
     sourceVersionId: text, path: text,
     value: { oneOf: [{ type: "string", minLength: 1 }, { type: "number" }, { type: "boolean" }] },
   }) },
+  { id: "ingestion.reviewed_field_value", schema: object({
+    sourceVersionId: text, fieldKey: text, sourcePath: text, value: text,
+  }) },
 ]);
 export const INGESTION_PREDICATES = Object.freeze([
   {
     id: "ingestion.extracted_field", subjectTypes: ["ingestion.material"], valueType: "ingestion.field",
     cardinality: "single", resolution: { strategy: "consensus", version: "1" },
     temporalSemantics: "source_snapshot_only",
+  },
+  {
+    id: "ingestion.reviewed_field", subjectTypes: ["ingestion.material"],
+    valueType: "ingestion.reviewed_field_value", cardinality: "single",
+    resolution: { strategy: "consensus", version: "1" },
   },
 ]);
 
@@ -27,6 +35,10 @@ export function validateImportedValue(typeId, value) {
   };
   validateSchema(resolve(typeId).schema, value, resolve);
   if (typeId === "ingestion.field" && !/^\/(?:title|place|ingredientGroups|steps|facts)\//.test(value.path)) fail("imported field path must address a supported legacy analysis field");
+  if (typeId === "ingestion.reviewed_field_value" &&
+      (!/^[a-z][a-z0-9_.]{0,79}$/.test(value.fieldKey) ||
+        !/^\/(?:title|place|ingredientGroups|steps|facts)\//.test(value.sourcePath) ||
+        value.value.length > 512)) fail("reviewed field must point to a supported source path");
   return value;
 }
 

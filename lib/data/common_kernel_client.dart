@@ -139,7 +139,17 @@ final class FileShoppingScenarioIntentStore
         !(decoded['importIds'] as List).every(_nonEmptyText) ||
         (decoded['importIds'] as List).toSet().length !=
             (decoded['importIds'] as List).length ||
-        !_nonEmptyText(decoded['purpose'])) {
+        !_nonEmptyText(decoded['purpose']) ||
+        (decoded.containsKey('priceReviews') &&
+            (decoded['priceReviews'] is! List ||
+                !(decoded['priceReviews'] as List).every(
+                  (item) =>
+                      item is Map &&
+                      _nonEmptyText(item['importId']) &&
+                      _nonEmptyText(item['sourcePath']) &&
+                      _nonEmptyText(item['commandId']) &&
+                      (decoded['importIds'] as List).contains(item['importId']),
+                )))) {
       throw const FormatException('저장된 쇼핑 생성 요청 형식이 올바르지 않아요.');
     }
     return Map<String, Object?>.from(decoded);
@@ -501,6 +511,8 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> confirmLifeTipActions(KernelJson request);
   Future<KernelJson> recordLifeTipOutcomes(KernelJson request);
   Future<KernelJson> createShoppingScenario(KernelJson request);
+  Future<KernelJson> getImportedFieldReview(String importId);
+  Future<KernelJson> reviewImportedField(KernelJson request);
   Future<KernelJson> confirmShoppingChoice(KernelJson request);
   Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request);
   Future<KernelJson> createHealthScenario(KernelJson request);
@@ -711,6 +723,17 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> createShoppingScenario(KernelJson request) =>
       _request('POST', '/v1/kernel/shopping/scenarios', request);
+
+  @override
+  Future<KernelJson> getImportedFieldReview(String importId) => _request(
+    'GET',
+    '/v1/kernel/ingestion/field-reviews/${Uri.encodeComponent(importId)}'
+        '?fieldKey=shopping.displayed_price',
+  );
+
+  @override
+  Future<KernelJson> reviewImportedField(KernelJson request) =>
+      _request('POST', '/v1/kernel/ingestion/field-reviews', request);
 
   @override
   Future<KernelJson> confirmShoppingChoice(KernelJson request) =>

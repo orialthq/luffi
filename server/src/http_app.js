@@ -55,12 +55,13 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/knowledge/watch": "watchContext",
   "/ingestion/reviewed-capture": "importReviewedCapture",
   "/ingestion/reviewed-capture/delete": "deleteReviewedCapture",
+  "/ingestion/field-reviews": "reviewImportedField",
   "/domains/execute": "executeCapability",
   "/resources/commands": "resourceCommand",
   "/resources/availability": "resourceAvailability",
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
-  "getBoard", "listScenarioConnections"];
+  "getBoard", "listScenarioConnections", "getImportedFieldReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -176,6 +177,16 @@ export function createHttpServer({
           try { activityId = decodeURIComponent(connectionsMatch[1]); }
           catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.", { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.listScenarioConnections(activityId));
+        }
+        const fieldReviewMatch = /^\/ingestion\/field-reviews\/([^/]+)$/.exec(route);
+        if (fieldReviewMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let importId;
+          try { importId = decodeURIComponent(fieldReviewMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "importId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getImportedFieldReview(
+            importId, url.searchParams.get("fieldKey") ?? "shopping.displayed_price"));
         }
         if (request.method !== "POST") throw methodNotAllowed("POST");
         assertJsonContentType(request.headers["content-type"]);

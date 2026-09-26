@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/features/boards/shopping_scenario_dialogs.dart';
+import 'package:ori_beauty/domain/models.dart';
+import 'dart:convert';
+import 'dart:io';
 
 Future<void> openDialog(
   WidgetTester tester,
@@ -61,6 +64,65 @@ void main() {
       'importIds': ['a'],
     });
   });
+
+  testWidgets(
+    'old price is visible but only current displayed price can be confirmed',
+    (tester) async {
+      final analysis = StructuredContentAnalysis.fromJson(
+        Map<String, Object?>.from(
+          jsonDecode(
+                File(
+                  'server/test/fixtures/variation_shopping_old_current_price_live_analysis.json',
+                ).readAsStringSync(),
+              )
+              as Map,
+        ),
+      );
+      final option = shoppingImportOptionForAnalysis('ambiguous', analysis)!;
+      expect(option.priceFacts, hasLength(2));
+      expect(option.priceFacts.first.selectable, isFalse);
+      expect(option.priceFacts.last.selectable, isTrue);
+      Map<String, Object?>? result;
+      await openDialog(
+        tester,
+        ShoppingScenarioDialog(options: [option]),
+        (value) => result = value,
+      );
+      await tester.enterText(
+        find.byKey(const Key('shopping-purpose')),
+        '수납함 고르기',
+      );
+      await tester.tap(find.byKey(const Key('shopping-import-ambiguous')));
+      await tester.pumpAndSettle();
+      expect(find.text('이전 표시가 19,900원'), findsOneWidget);
+      expect(find.text('화면 표시가 12,900원'), findsOneWidget);
+      expect(
+        tester
+            .widget<ListTile>(
+              find.byKey(
+                const ValueKey('shopping-price-ambiguous-/facts/3/value'),
+              ),
+            )
+            .onTap,
+        isNull,
+      );
+      await tester.tap(find.byKey(const Key('shopping-create-submit')));
+      await tester.pumpAndSettle();
+      expect(find.text('현재 표시 가격 문구를 확인해 주세요.'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('shopping-price-ambiguous-/facts/4/value')),
+      );
+      await tester.tap(find.byKey(const Key('shopping-create-submit')));
+      await tester.pumpAndSettle();
+      expect(result, {
+        'purpose': '수납함 고르기',
+        'importIds': ['ambiguous'],
+        'priceReviews': [
+          {'importId': 'ambiguous', 'sourcePath': '/facts/4/value'},
+        ],
+      });
+    },
+  );
 
   testWidgets('selection keeps original price distinct from the outcome', (
     tester,

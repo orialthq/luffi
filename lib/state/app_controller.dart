@@ -184,19 +184,28 @@ final class AppController extends ChangeNotifier {
 
   List<CaptureRecord> get captures => List.unmodifiable(_captures);
   int get pendingReviewedSourceDeletionCount => _pendingSourceDeletions.length;
-  List<ReviewedCaptureImportSummary> get syncedReviewedCaptureImports =>
+  List<ReviewedCaptureImportSummary> get allSyncedReviewedCaptureImports =>
       List.unmodifiable([
         for (final capture in _captures)
           if (capture.reviewedImport case final imported?
               when imported.status == ReviewedCaptureImportStatus.synced &&
-                  imported.sourceId != null &&
-                  capture.analysis?.structuredContent?.isRecipe == true)
+                  imported.sourceId != null)
             ReviewedCaptureImportSummary(
               captureId: capture.raw.id,
               importId: imported.importId,
               title: _reviewedImportTitle(imported.request),
               sourceId: imported.sourceId!,
             ),
+      ]);
+
+  List<ReviewedCaptureImportSummary> get syncedReviewedCaptureImports =>
+      List.unmodifiable([
+        for (final imported in allSyncedReviewedCaptureImports)
+          if (captureById(
+                imported.captureId,
+              )?.analysis?.structuredContent?.isRecipe ==
+              true)
+            imported,
       ]);
 
   static String _reviewedImportTitle(Map<String, Object?> request) {

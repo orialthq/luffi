@@ -1140,11 +1140,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     }
     setState(() => _creatingShopping = true);
     try {
+      final requestSelection = Map<String, Object?>.from(selection);
+      if (requestSelection['priceReviews'] case final List reviews) {
+        requestSelection['priceReviews'] = [
+          for (final review in reviews)
+            if (review is Map)
+              <String, Object?>{
+                ...Map<String, Object?>.from(review),
+                'commandId': newKernelCommandId(),
+              },
+        ];
+      }
       final request = <String, Object?>{
         'commandId': newKernelCommandId(),
         'activityId': 'shopping-${newKernelCommandId()}',
         'confirmed': true,
-        ...selection,
+        ...requestSelection,
       };
       await _shoppingIntentStore.save(request);
       if (mounted) setState(() => _pendingShoppingIntent = request);
@@ -1180,7 +1191,58 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   Future<void> _sendShoppingIntent(KernelJson request) async {
     KernelJson result;
     try {
-      result = await _client.createShoppingScenario(request);
+      if (request['priceReviews'] case final List reviews) {
+        for (final rawReview in reviews) {
+          if (rawReview is! Map ||
+              rawReview['importId'] is! String ||
+              rawReview['sourcePath'] is! String ||
+              rawReview['commandId'] is! String ||
+              !(request['importIds'] as List).contains(rawReview['importId'])) {
+            throw const CommonKernelException(
+              'INVALID_REQUEST',
+              '저장된 가격 확인 요청을 다시 선택해 주세요.',
+            );
+          }
+          final importId = rawReview['importId'] as String;
+          final sourcePath = rawReview['sourcePath'] as String;
+          final current = await _client.getImportedFieldReview(importId);
+          if (current['status'] == 'stale') {
+            throw const CommonKernelException(
+              'CONTEXT_STALE',
+              '가격 확인의 근거가 변경됐어요. 캡처를 다시 확인해 주세요.',
+            );
+          }
+          if (current['status'] != 'reviewed' ||
+              current['sourcePath'] != sourcePath) {
+            final revision = current['revision'];
+            if (revision is! int) {
+              throw const CommonKernelException(
+                'INVALID_RESPONSE',
+                '가격 확인 상태를 읽을 수 없어요.',
+              );
+            }
+            await _client.reviewImportedField({
+              'commandId': rawReview['commandId'],
+              'importId': importId,
+              'fieldKey': 'shopping.displayed_price',
+              'sourcePath': sourcePath,
+              'expectedRevision': revision,
+              'confirmed': true,
+            });
+            final verified = await _client.getImportedFieldReview(importId);
+            if (verified['status'] != 'reviewed' ||
+                verified['sourcePath'] != sourcePath) {
+              throw const CommonKernelException(
+                'REVIEW_REVISION_CONFLICT',
+                '가격 확인 결과가 변경됐어요. 다시 확인해 주세요.',
+              );
+            }
+          }
+        }
+      }
+      final scenarioRequest = Map<String, Object?>.from(request)
+        ..remove('priceReviews');
+      result = await _client.createShoppingScenario(scenarioRequest);
     } on CommonKernelException catch (error) {
       if (const {
         'INVALID_REQUEST',
@@ -1188,6 +1250,8 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
         'IMPORT_NOT_FOUND',
         'IMPORT_NOT_SHOPPING',
         'SCENARIO_DELETED',
+        'INVALID_PRICE_SELECTION',
+        'REVIEW_DELETED',
       }.contains(error.code)) {
         await _shoppingIntentStore.clear();
         if (mounted) setState(() => _pendingShoppingIntent = null);

@@ -1,16 +1,78 @@
 import 'package:flutter/material.dart';
 
 import '../../data/common_kernel_client.dart';
+import '../../domain/models.dart';
+
+final class ShoppingPriceFact {
+  const ShoppingPriceFact({
+    required this.sourcePath,
+    required this.label,
+    required this.value,
+    required this.selectable,
+  });
+  final String sourcePath;
+  final String label;
+  final String value;
+  final bool selectable;
+}
 
 final class ShoppingImportOption {
   const ShoppingImportOption({
     required this.importId,
     required this.title,
-    required this.displayedPriceText,
+    this.displayedPriceText,
+    this.priceFacts = const [],
   });
   final String importId;
   final String title;
-  final String displayedPriceText;
+  final String? displayedPriceText;
+  final List<ShoppingPriceFact> priceFacts;
+}
+
+ShoppingImportOption? shoppingImportOptionForAnalysis(
+  String importId,
+  StructuredContentAnalysis analysis,
+) {
+  if (analysis.contentKind != ContentKind.commerceProduct ||
+      analysis.completeness != StructuredCompleteness.complete ||
+      analysis.title.status != ObservedStatus.observed ||
+      analysis.title.value?.trim().isNotEmpty != true ||
+      analysis.title.evidenceIds.isEmpty ||
+      analysis.place?.name != null ||
+      analysis.facts.length > 9 ||
+      analysis.facts.any(
+        (fact) =>
+            fact.label.trim().isEmpty ||
+            fact.value.trim().isEmpty ||
+            fact.evidenceIds.isEmpty,
+      )) {
+    return null;
+  }
+  final pricePattern = RegExp(r'^\d{1,3}(,\d{3})*원$');
+  final visibleLabel = RegExp(r'가격|현재가|표시가|판매가|할인가|정가|원가');
+  final currentLabel = RegExp(r'^(가격|현재(\s*표시)?가|화면\s*표시가|판매가|할인가)$');
+  final prices = [
+    for (final entry in analysis.facts.asMap().entries)
+      if (visibleLabel.hasMatch(entry.value.label) &&
+          pricePattern.hasMatch(entry.value.value.trim()))
+        ShoppingPriceFact(
+          sourcePath: '/facts/${entry.key}/value',
+          label: entry.value.label,
+          value: entry.value.value.trim(),
+          selectable: currentLabel.hasMatch(entry.value.label.trim()),
+        ),
+  ];
+  if (prices.isEmpty || !prices.any((price) => price.selectable)) return null;
+  return ShoppingImportOption(
+    importId: importId,
+    title: analysis.title.value!.trim(),
+    displayedPriceText: prices.length == 1 && prices.single.label == '가격'
+        ? prices.single.value
+        : null,
+    priceFacts: prices.length > 1 || prices.single.label != '가격'
+        ? prices
+        : const [],
+  );
 }
 
 String _text(Object? value) => value is String ? value : '';
@@ -25,6 +87,7 @@ final class ShoppingScenarioDialog extends StatefulWidget {
 final class _ShoppingScenarioDialogState extends State<ShoppingScenarioDialog> {
   final _purpose = TextEditingController();
   final _selected = <String>{};
+  final _selectedPricePaths = <String, String>{};
   String? _error;
 
   @override
@@ -55,12 +118,16 @@ final class _ShoppingScenarioDialogState extends State<ShoppingScenarioDialog> {
                 hintText: '예: 옷장 수납함 고르기',
               ),
             ),
-            for (final option in widget.options)
+            for (final option in widget.options) ...[
               CheckboxListTile(
                 key: ValueKey('shopping-import-${option.importId}'),
                 value: _selected.contains(option.importId),
                 title: Text(option.title),
-                subtitle: Text('캡처 표시 ${option.displayedPriceText}'),
+                subtitle: Text(
+                  option.priceFacts.isEmpty
+                      ? '캡처 표시 ${option.displayedPriceText}'
+                      : '가격 문구 확인 필요',
+                ),
                 onChanged: (checked) => setState(() {
                   if (checked == true) {
                     _selected.add(option.importId);
@@ -69,6 +136,30 @@ final class _ShoppingScenarioDialogState extends State<ShoppingScenarioDialog> {
                   }
                 }),
               ),
+              if (_selected.contains(option.importId) &&
+                  option.priceFacts.isNotEmpty)
+                for (final price in option.priceFacts)
+                  ListTile(
+                    key: ValueKey(
+                      'shopping-price-${option.importId}-${price.sourcePath}',
+                    ),
+                    leading: Icon(
+                      _selectedPricePaths[option.importId] == price.sourcePath
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                    ),
+                    title: Text('${price.label} ${price.value}'),
+                    subtitle: price.selectable
+                        ? const Text('캡처 당시 표시 가격으로 확인')
+                        : const Text('이전 가격 등: 현재 표시 가격으로 선택할 수 없음'),
+                    onTap: price.selectable
+                        ? () => setState(() {
+                            _selectedPricePaths[option.importId] =
+                                price.sourcePath;
+                          })
+                        : null,
+                  ),
+            ],
             if (_error != null)
               Text(
                 _error!,
@@ -92,12 +183,29 @@ final class _ShoppingScenarioDialogState extends State<ShoppingScenarioDialog> {
             setState(() => _error = '목적과 상품 1~8개를 확인해 주세요.');
             return;
           }
+          final selectedOptions = widget.options
+              .where((item) => _selected.contains(item.importId))
+              .toList();
+          if (selectedOptions.any(
+            (item) =>
+                item.priceFacts.isNotEmpty &&
+                !_selectedPricePaths.containsKey(item.importId),
+          )) {
+            setState(() => _error = '현재 표시 가격 문구를 확인해 주세요.');
+            return;
+          }
+          final priceReviews = [
+            for (final item in selectedOptions)
+              if (item.priceFacts.isNotEmpty)
+                <String, Object?>{
+                  'importId': item.importId,
+                  'sourcePath': _selectedPricePaths[item.importId]!,
+                },
+          ];
           Navigator.pop(context, <String, Object?>{
             'purpose': _purpose.text.trim(),
-            'importIds': widget.options
-                .where((item) => _selected.contains(item.importId))
-                .map((item) => item.importId)
-                .toList(),
+            'importIds': selectedOptions.map((item) => item.importId).toList(),
+            if (priceReviews.isNotEmpty) 'priceReviews': priceReviews,
           });
         },
         child: const Text('계획 제안 받기'),

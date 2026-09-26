@@ -43,6 +43,8 @@ export function createCommonKernelState() {
     resourceWatches: {},
     proposals: {},
     importReceipts: {},
+    fieldReviews: {},
+    fieldReviewReceipts: {},
     recipeScenarioReceipts: {},
     diningScenarioReceipts: {},
     diningCommandReceipts: {},
@@ -209,6 +211,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         throw new AppError("INVALID_DOMAIN_VALUE", "수집 필드의 대상·값 종류가 맞지 않아요.", { httpStatus: 400 });
       }
       validateImportedValue("ingestion.field", raw.typedValue.value);
+      return;
+    }
+    if (raw.predicate === "ingestion.reviewed_field") {
+      if (subject.type !== "ingestion.material" ||
+          raw.typedValue?.type !== "ingestion.reviewed_field_value") {
+        throw new AppError("INVALID_DOMAIN_VALUE", "확인한 필드의 대상·값 종류가 맞지 않아요.",
+          { httpStatus: 400 });
+      }
+      validateImportedValue("ingestion.reviewed_field_value", raw.typedValue.value);
       return;
     }
     registry.validateRelation({
@@ -689,6 +700,20 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         delete receipt.legacyCaptureId;
       }
     }
+    for (const review of Object.values(state.fieldReviews ?? {})) {
+      if (review.ownerId === ownerId &&
+          state.importReceipts[review.importId]?.sourceId === sourceId) {
+        review.deleted = true;
+        delete review.value;
+        delete review.sourcePath;
+      }
+    }
+    for (const receipt of Object.values(state.fieldReviewReceipts ?? {})) {
+      if (receipt.ownerId === ownerId && receipt.importedSourceId === sourceId) {
+        receipt.deleted = true;
+        receipt.result = { importId: receipt.importId, fieldKey: receipt.fieldKey };
+      }
+    }
   }
 
   function purgeIssuedContextsFromSource(state, sourceId) {
@@ -769,7 +794,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "shopping" &&
             shoppingActivityIds.has(item.provenance.activityId)) ||
           (item.provenance?.scenario === "health" &&
-            healthActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
+          healthActivityIds.has(item.provenance.activityId)) ||
+          (item.provenance?.scenario === "field_review" &&
+          item.provenance.importedSourceId === source.id))).map((item) => item.id) : [];
     const linkedFashionSources = state.knowledge.sources.filter((item) =>
       item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
       item.provenance?.scenario === "fashion" &&
@@ -815,6 +842,21 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     linkedBeautySources, linkedTravelSources, linkedLifeTipSources,
     linkedShoppingSources, linkedHealthSources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
+    if (source?.provenance?.scenario === "field_review") {
+      for (const review of Object.values(state.fieldReviews ?? {})) {
+        if (review.ownerId === ownerId && review.sourceId === source.id) {
+          review.deleted = true;
+          delete review.value;
+          delete review.sourcePath;
+        }
+      }
+      for (const receipt of Object.values(state.fieldReviewReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { importId: receipt.importId, fieldKey: receipt.fieldKey };
+        }
+      }
+    }
     for (const connection of Object.values(state.scenarioConnections ?? {})) {
       if (connection.ownerId === ownerId && connection.sourceId === source?.id) {
         connection.deleted = true;
@@ -1311,6 +1353,33 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       mentionId: mention.id, candidates }, contextQueries };
   }
 
+  function currentFieldReview(state, importReceipt, fieldKey) {
+    const key = requestFingerprint([ownerId, importReceipt.importId, fieldKey]);
+    const review = state.fieldReviews?.[key];
+    if (!review || review.deleted || review.ownerId !== ownerId ||
+        review.sourceVersionId !== importReceipt.sourceVersionId) return null;
+    const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
+      item.id === review.sourceId && item.status === "active");
+    const assertion = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
+      item.id === review.assertionId && item.status === "active" &&
+      item.subjectId === importReceipt.result?.materialId &&
+      item.predicate === "ingestion.reviewed_field" &&
+      item.typedValue?.type === "ingestion.reviewed_field_value" &&
+      item.typedValue?.value?.fieldKey === fieldKey &&
+      item.typedValue?.value?.sourceVersionId === review.sourceVersionId &&
+      item.typedValue?.value?.value === review.value &&
+      item.typedValue?.value?.sourcePath === review.sourcePath &&
+      item.evidenceIds.includes(review.evidenceId) &&
+      item.evidenceIds.every((id) => state.knowledge.evidence.some((evidence) =>
+        evidence.ownerId === ownerId && evidence.id === id && evidence.status === "active")));
+    const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
+      item.subjectId === importReceipt.result?.materialId && item.status === "active" &&
+      item.predicate === "ingestion.extracted_field" &&
+      item.typedValue?.value?.path === review.sourcePath &&
+      item.typedValue.value.value === review.value);
+    return source && assertion && field ? review : null;
+  }
+
   function shoppingCandidates(state, importIds) {
     const candidates = [];
     const contextQueries = [];
@@ -1324,15 +1393,23 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         item.ownerId === ownerId && item.id === receipt.sourceVersionId &&
         item.status === "active");
       const analysis = version?.content?.analysis;
-      const priceFacts = analysis?.facts?.filter((item) => item.label === "가격" &&
+      const canonicalPrices = analysis?.facts?.filter((item) => item.label === "가격" &&
         /^\d{1,3}(?:,\d{3})*원$/.test(item.value?.trim() ?? "") &&
         item.evidenceIds?.length);
+      const visiblePrices = analysis?.facts?.filter((item) =>
+        /(?:가격|현재가|표시가|판매가|할인가|정가|원가)/.test(item.label ?? "") &&
+        /^\d{1,3}(?:,\d{3})*원$/.test(item.value?.trim() ?? ""));
+      const review = currentFieldReview(state, receipt, "shopping.displayed_price");
+      const selectedPrice = review
+        ? analysis?.facts?.[Number(/^\/facts\/(\d+)\/value$/.exec(review.sourcePath)?.[1])]
+        : canonicalPrices?.length === 1 && visiblePrices?.length === 1
+          ? canonicalPrices[0] : null;
       if (!analysis || analysis.contentKind !== "commerce_product" ||
           analysis.completeness !== "complete" ||
           analysis.title?.status !== "observed" ||
           !analysis.title.value?.trim() || !analysis.title.evidenceIds?.length ||
           analysis.place?.name || !Array.isArray(analysis.facts) ||
-          analysis.facts.length > 9 || priceFacts?.length !== 1 ||
+          analysis.facts.length > 9 || !selectedPrice ||
           analysis.facts.some((item) => !item.label?.trim() ||
             !item.value?.trim() || !item.evidenceIds?.length)) {
         throw new AppError("IMPORT_NOT_SHOPPING",
@@ -1348,10 +1425,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         state.knowledge.evidence.find((item) => item.ownerId === ownerId &&
           item.sourceVersionId === version.id && item.status === "active" &&
           item.locator?.legacyEvidenceId === legacyId)?.id);
-      const priceEvidenceIds = mappedEvidence(priceFacts[0].evidenceIds);
+      const priceEvidenceIds = review
+        ? [...mappedEvidence(selectedPrice.evidenceIds), review.evidenceId]
+        : mappedEvidence(selectedPrice.evidenceIds);
       if (priceEvidenceIds.some((id) => !id)) throw new AppError("CONTEXT_STALE",
         "가격 화면 근거가 변경됐어요.", { httpStatus: 409 });
-      const details = analysis.facts.filter((item) => item !== priceFacts[0])
+      const details = analysis.facts.filter((item) => item !== selectedPrice)
         .map((item) => ({ label: item.label.trim(), value: item.value.trim(),
           evidenceIds: mappedEvidence(item.evidenceIds) }));
       if (details.some((item) => item.evidenceIds.some((id) => !id))) {
@@ -1374,8 +1453,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         contextQueries.push({ subjectId: field.subjectId,
           predicate: field.predicate, scope: field.scope });
       }
+      if (review) {
+        const assertion = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
+          item.id === review.assertionId && item.status === "active");
+        contextQueries.push({ subjectId: assertion.subjectId,
+          predicate: assertion.predicate, scope: assertion.scope });
+      }
       candidates.push({ importId, title: analysis.title.value.trim(),
-        displayedPriceText: priceFacts[0].value.trim(), mentionId: mention.id,
+        displayedPriceText: selectedPrice.value.trim(), mentionId: mention.id,
         titleEvidenceIds: [...mention.evidenceIds], priceEvidenceIds,
         details });
     }
@@ -1383,6 +1468,161 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   }
 
   return {
+    async getImportedFieldReview(importId, fieldKey) {
+      try {
+        safeId(importId, "importId");
+        if (fieldKey !== "shopping.displayed_price") throw new AppError("INVALID_REQUEST",
+          "지원하지 않는 검토 필드예요.", { httpStatus: 400 });
+        return await read((state) => {
+          const receipt = state.importReceipts[importId];
+          if (receipt?.ownerId !== ownerId || receipt.deleted) {
+            throw new AppError("IMPORT_NOT_FOUND", "확인한 캡처를 찾지 못했어요.",
+              { httpStatus: 404 });
+          }
+          const review = state.fieldReviews?.[requestFingerprint([ownerId, importId, fieldKey])];
+          if (!review || review.deleted) return { importId, fieldKey, status: "unreviewed",
+            revision: 0 };
+          if (!currentFieldReview(state, receipt, fieldKey)) {
+            return { importId, fieldKey, status: "stale", revision: review.revision };
+          }
+          return { importId, fieldKey, status: "reviewed", revision: review.revision,
+            sourcePath: review.sourcePath, value: review.value,
+            sourceVersionId: review.sourceVersionId };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async reviewImportedField(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "importId", "fieldKey",
+          "sourcePath", "expectedRevision", "confirmed"].includes(key)) ||
+          input.confirmed !== true || input.fieldKey !== "shopping.displayed_price" ||
+          !/^\/facts\/(?:0|[1-9]\d*)\/value$/.test(input.sourcePath ?? "") ||
+          !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
+          throw new AppError("INVALID_REQUEST", "확인할 가격 필드를 다시 선택해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const importId = safeId(input.importId, "importId");
+        const fieldKey = input.fieldKey;
+        const sourcePath = input.sourcePath;
+        const hash = requestFingerprint({ importId, fieldKey, sourcePath,
+          expectedRevision: input.expectedRevision });
+        return await store.transact((state) => {
+          assertState(state);
+          state.fieldReviews ??= {};
+          state.fieldReviewReceipts ??= {};
+          const commandKey = requestFingerprint([ownerId, commandId]);
+          const priorCommand = state.fieldReviewReceipts[commandKey];
+          if (priorCommand) {
+            if (priorCommand.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 검토에 사용됐어요.", { httpStatus: 409 });
+            if (priorCommand.deleted) throw new AppError("REVIEW_DELETED",
+              "삭제한 검토는 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...priorCommand.result, replayed: true } };
+          }
+          const imported = state.importReceipts[importId];
+          if (imported?.ownerId !== ownerId || imported.deleted) {
+            throw new AppError("IMPORT_NOT_FOUND", "확인한 캡처를 찾지 못했어요.",
+              { httpStatus: 404 });
+          }
+          const version = state.knowledge.sourceVersions.find((item) =>
+            item.ownerId === ownerId && item.id === imported.sourceVersionId &&
+            item.status === "active");
+          const analysis = version?.content?.analysis;
+          const index = Number(sourcePath.split("/")[2]);
+          const fact = analysis?.facts?.[index];
+          if (analysis?.contentKind !== "commerce_product" ||
+              analysis.completeness !== "complete" || !fact ||
+              !/^(?:가격|현재(?:\s*표시)?가|화면\s*표시가|판매가|할인가)$/.test(fact.label.trim()) ||
+              !/^\d{1,3}(?:,\d{3})*원$/.test(fact.value?.trim() ?? "") ||
+              !fact.evidenceIds?.length) {
+            throw new AppError("INVALID_PRICE_SELECTION",
+              "현재 표시 가격으로 확인할 수 있는 문구가 아니에요.", { httpStatus: 400 });
+          }
+          const sourceField = state.knowledge.assertions.find((item) =>
+            item.ownerId === ownerId && item.subjectId === imported.result?.materialId &&
+            item.status === "active" && item.predicate === "ingestion.extracted_field" &&
+            item.typedValue?.value?.path === sourcePath &&
+            item.typedValue.value.value === fact.value);
+          const selectedEvidenceIds = fact.evidenceIds.map((id) =>
+            state.knowledge.evidence.find((item) => item.ownerId === ownerId &&
+              item.sourceVersionId === version.id && item.status === "active" &&
+              item.locator?.legacyEvidenceId === id)?.id);
+          if (!sourceField || selectedEvidenceIds.some((id) => !id)) {
+            throw new AppError("CONTEXT_STALE", "선택한 가격의 화면 근거가 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          const reviewKey = requestFingerprint([ownerId, importId, fieldKey]);
+          const previous = state.fieldReviews[reviewKey];
+          if (previous?.deleted) throw new AppError("REVIEW_DELETED",
+            "삭제한 검토는 다시 사용할 수 없어요.", { httpStatus: 410 });
+          if ((previous?.revision ?? 0) !== input.expectedRevision) {
+            throw new AppError("REVIEW_REVISION_CONFLICT", "가격 확인 결과가 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          if (previous && !currentFieldReview(state, imported, fieldKey)) {
+            throw new AppError("CONTEXT_STALE", "이전 가격 확인의 근거가 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          if (previous?.sourcePath === sourcePath) {
+            const result = { importId, fieldKey, sourcePath, value: previous.value,
+              sourceVersionId: version.id, revision: previous.revision };
+            state.fieldReviewReceipts[commandKey] = { hash, result, ownerId,
+              importId, fieldKey, importedSourceId: imported.sourceId,
+              sourceId: previous.sourceId };
+            return { state, result: { ...result, replayed: true } };
+          }
+          const stem = `field-review:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const now = new Date().toISOString();
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const evidenceId = `${stem}:evidence`;
+          const assertionId = `${stem}:assertion`;
+          const content = { importId, fieldKey, sourcePath, value: fact.value.trim(),
+            sourceVersionId: version.id, supersedesSourceId: previous?.sourceId ?? null };
+          const before = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 확인한 수집 필드", provenance: { scenario: "field_review",
+              importId, fieldKey, importedSourceId: imported.sourceId } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(content), content, capturedAt: now });
+          apply("evidence", "evidence.add", { id: evidenceId, sourceVersionId: versionId,
+            quote: `${fact.label} ${fact.value} 확인`,
+            locator: { kind: "user_confirmation", jsonPointer: "/sourcePath" } });
+          const evidenceIds = [...selectedEvidenceIds, evidenceId];
+          const assertion = { id: assertionId, subjectId: imported.result.materialId,
+            predicate: "ingestion.reviewed_field",
+            scope: { type: "reviewed_field", id: reviewKey }, origin: "user_reported",
+            assertedBy: { type: "user", id: ownerId }, evidenceIds,
+            supportSets: [evidenceIds], observedAt: now,
+            typedValue: { type: "ingestion.reviewed_field_value", value: {
+              sourceVersionId: version.id, fieldKey, sourcePath, value: fact.value.trim(),
+            } } };
+          if (previous) {
+            const previousAssertion = state.knowledge.assertions.find((item) =>
+              item.ownerId === ownerId && item.id === previous.assertionId &&
+              item.status === "active");
+            apply("assertion", "assertion.correct", { assertionId: previous.assertionId,
+              expectedRevision: previousAssertion.revision, assertion });
+          } else apply("assertion", "assertion.add", assertion);
+          const result = { importId, fieldKey, sourcePath, value: fact.value.trim(),
+            sourceVersionId: version.id, revision: (previous?.revision ?? 0) + 1 };
+          state.fieldReviews[reviewKey] = { ...result, ownerId, sourceId, assertionId,
+            evidenceId, deleted: false };
+          state.fieldReviewReceipts[commandKey] = { hash, result, ownerId,
+            importId, fieldKey, importedSourceId: imported.sourceId, sourceId };
+          recordAffectedConsumers(state, before);
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
     async contracts() {
       return {
         kernelVersion: VERSION,

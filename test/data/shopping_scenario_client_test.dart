@@ -64,6 +64,76 @@ void main() {
   });
 
   test(
+    'shopping intent retains price confirmation command for retry',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'luffi-review-intent-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final store = FileShoppingScenarioIntentStore(
+        directoryPath: directory.path,
+      );
+      final request = <String, Object?>{
+        'commandId': 'create-shop',
+        'activityId': 'shop-1',
+        'confirmed': true,
+        'importIds': ['ambiguous'],
+        'purpose': '수납함 고르기',
+        'priceReviews': [
+          {
+            'commandId': 'confirm-price',
+            'importId': 'ambiguous',
+            'sourcePath': '/facts/4/value',
+          },
+        ],
+      };
+      await store.save(request);
+      expect(await store.load(), request);
+    },
+  );
+
+  test('shopping client reads and writes confirmed price field', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final paths = <String>[];
+    server.listen((request) async {
+      paths.add(request.uri.toString());
+      if (request.method == 'POST') {
+        expect(
+          jsonDecode(await utf8.decoder.bind(request).join()),
+          containsPair('sourcePath', '/facts/4/value'),
+        );
+      }
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        '{"importId":"ambiguous","fieldKey":"shopping.displayed_price",'
+        '"status":"reviewed","revision":1,"sourcePath":"/facts/4/value"}',
+      );
+      await request.response.close();
+    });
+    final client = HttpCommonKernelClient(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      token: 'development-token',
+    );
+    expect(
+      (await client.getImportedFieldReview('ambiguous'))['status'],
+      'reviewed',
+    );
+    await client.reviewImportedField({
+      'commandId': 'confirm-price',
+      'importId': 'ambiguous',
+      'fieldKey': 'shopping.displayed_price',
+      'sourcePath': '/facts/4/value',
+      'expectedRevision': 0,
+      'confirmed': true,
+    });
+    expect(paths, [
+      '/v1/kernel/ingestion/field-reviews/ambiguous?fieldKey=shopping.displayed_price',
+      '/v1/kernel/ingestion/field-reviews',
+    ]);
+  });
+
+  test(
     'shopping client routes creation, selection, and purchase report',
     () async {
       final paths = <String>[];

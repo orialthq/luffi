@@ -280,7 +280,7 @@ final class _HomeShellState extends State<HomeShell>
         RecipeImportOption(importId: imported.importId, title: imported.title),
     ];
     final diningImportOptions = [
-      for (final imported in widget.controller.syncedReviewedCaptureImports)
+      for (final imported in widget.controller.allSyncedReviewedCaptureImports)
         if (widget.controller
                 .captureById(imported.captureId)
                 ?.analysis
@@ -298,7 +298,7 @@ final class _HomeShellState extends State<HomeShell>
           ),
     ];
     final fashionImportOptions = [
-      for (final imported in widget.controller.syncedReviewedCaptureImports)
+      for (final imported in widget.controller.allSyncedReviewedCaptureImports)
         if (widget.controller
                 .captureById(imported.captureId)
                 ?.analysis
@@ -315,7 +315,7 @@ final class _HomeShellState extends State<HomeShell>
           ),
     ];
     final beautyImportOptions = [
-      for (final imported in widget.controller.syncedReviewedCaptureImports)
+      for (final imported in widget.controller.allSyncedReviewedCaptureImports)
         if (widget.controller
                 .captureById(imported.captureId)
                 ?.analysis
@@ -330,7 +330,7 @@ final class _HomeShellState extends State<HomeShell>
           ),
     ];
     final travelImportOptions = [
-      for (final imported in widget.controller.syncedReviewedCaptureImports)
+      for (final imported in widget.controller.allSyncedReviewedCaptureImports)
         if (widget.controller
                 .captureById(imported.captureId)
                 ?.analysis
@@ -347,7 +347,7 @@ final class _HomeShellState extends State<HomeShell>
           ),
     ];
     final lifeTipImportOptions = [
-      for (final imported in widget.controller.syncedReviewedCaptureImports)
+      for (final imported in widget.controller.allSyncedReviewedCaptureImports)
         if (widget.controller
                 .captureById(imported.captureId)
                 ?.analysis
@@ -377,47 +377,16 @@ final class _HomeShellState extends State<HomeShell>
           ),
     ];
     final shoppingImportOptions = [
-      for (final imported in widget.controller.syncedReviewedCaptureImports)
+      for (final imported in widget.controller.allSyncedReviewedCaptureImports)
         if (widget.controller
                 .captureById(imported.captureId)
                 ?.analysis
                 ?.structuredContent
-            case final structured?
-            when structured.contentKind == ContentKind.commerceProduct &&
-                structured.completeness == StructuredCompleteness.complete &&
-                structured.title.status == ObservedStatus.observed &&
-                structured.title.value?.trim().isNotEmpty == true &&
-                structured.title.evidenceIds.isNotEmpty &&
-                structured.place?.name == null &&
-                structured.facts.length <= 9 &&
-                structured.facts
-                        .where(
-                          (fact) =>
-                              fact.label == '가격' &&
-                              RegExp(
-                                r'^\d{1,3}(,\d{3})*원$',
-                              ).hasMatch(fact.value.trim()) &&
-                              fact.evidenceIds.isNotEmpty,
-                        )
-                        .length ==
-                    1 &&
-                structured.facts.every(
-                  (fact) =>
-                      fact.label.trim().isNotEmpty &&
-                      fact.value.trim().isNotEmpty &&
-                      fact.evidenceIds.isNotEmpty,
-                ))
-          ShoppingImportOption(
-            importId: imported.importId,
-            title: structured.title.value!.trim(),
-            displayedPriceText: structured.facts
-                .firstWhere((fact) => fact.label == '가격')
-                .value
-                .trim(),
-          ),
+            case final structured?)
+          ?shoppingImportOptionForAnalysis(imported.importId, structured),
     ];
     final healthImportOptions = [
-      for (final imported in widget.controller.syncedReviewedCaptureImports)
+      for (final imported in widget.controller.allSyncedReviewedCaptureImports)
         if (widget.controller
                 .captureById(imported.captureId)
                 ?.analysis
@@ -467,7 +436,7 @@ final class _HomeShellState extends State<HomeShell>
           healthImportOptions: healthImportOptions,
           onOpenDiningImport: (importId) {
             for (final imported
-                in widget.controller.syncedReviewedCaptureImports) {
+                in widget.controller.allSyncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
               final capture = widget.controller.captureById(imported.captureId);
               if (capture != null) _openCapture(capture);
@@ -476,7 +445,7 @@ final class _HomeShellState extends State<HomeShell>
           },
           onOpenFashionImport: (importId) {
             for (final imported
-                in widget.controller.syncedReviewedCaptureImports) {
+                in widget.controller.allSyncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
               final capture = widget.controller.captureById(imported.captureId);
               if (capture != null) _openCapture(capture);
@@ -485,7 +454,7 @@ final class _HomeShellState extends State<HomeShell>
           },
           onOpenBeautyImport: (importId) {
             for (final imported
-                in widget.controller.syncedReviewedCaptureImports) {
+                in widget.controller.allSyncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
               final capture = widget.controller.captureById(imported.captureId);
               if (capture != null) _openCapture(capture);
@@ -494,7 +463,7 @@ final class _HomeShellState extends State<HomeShell>
           },
           onOpenTravelImport: (importId) {
             for (final imported
-                in widget.controller.syncedReviewedCaptureImports) {
+                in widget.controller.allSyncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
               final capture = widget.controller.captureById(imported.captureId);
               if (capture != null) _openCapture(capture);
@@ -503,7 +472,7 @@ final class _HomeShellState extends State<HomeShell>
           },
           onOpenLifeTipImport: (importId) {
             for (final imported
-                in widget.controller.syncedReviewedCaptureImports) {
+                in widget.controller.allSyncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
               final capture = widget.controller.captureById(imported.captureId);
               if (capture != null) _openCapture(capture);
@@ -512,7 +481,7 @@ final class _HomeShellState extends State<HomeShell>
           },
           onOpenShoppingImport: (importId) {
             for (final imported
-                in widget.controller.syncedReviewedCaptureImports) {
+                in widget.controller.allSyncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
               final capture = widget.controller.captureById(imported.captureId);
               if (capture != null) _openCapture(capture);
@@ -521,7 +490,7 @@ final class _HomeShellState extends State<HomeShell>
           },
           onOpenHealthImport: (importId) {
             for (final imported
-                in widget.controller.syncedReviewedCaptureImports) {
+                in widget.controller.allSyncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
               final capture = widget.controller.captureById(imported.captureId);
               if (capture != null) _openCapture(capture);
