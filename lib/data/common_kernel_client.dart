@@ -30,6 +30,60 @@ abstract interface class DiningScenarioIntentStore {
   Future<void> clear();
 }
 
+abstract interface class FashionScenarioIntentStore {
+  Future<KernelJson?> load();
+  Future<void> save(KernelJson request);
+  Future<void> clear();
+}
+
+final class FileFashionScenarioIntentStore
+    implements FashionScenarioIntentStore {
+  const FileFashionScenarioIntentStore({this.directoryPath});
+
+  final String? directoryPath;
+
+  Future<File> _file() async {
+    final directory = directoryPath == null
+        ? await getApplicationSupportDirectory()
+        : Directory(directoryPath!);
+    await directory.create(recursive: true);
+    return File('${directory.path}/luffi_fashion_scenario_intent.json');
+  }
+
+  @override
+  Future<KernelJson?> load() async {
+    final file = await _file();
+    if (!await file.exists()) return null;
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, dynamic> ||
+        !_nonEmptyText(decoded['commandId']) ||
+        !_nonEmptyText(decoded['activityId']) ||
+        decoded['confirmed'] != true ||
+        decoded['importIds'] is! List ||
+        !(decoded['importIds'] as List).every(_nonEmptyText)) {
+      throw const FormatException('저장된 패션 생성 요청 형식이 올바르지 않아요.');
+    }
+    return Map<String, Object?>.from(decoded);
+  }
+
+  @override
+  Future<void> save(KernelJson request) async {
+    final file = await _file();
+    if (await file.exists()) {
+      throw StateError('An unconfirmed fashion creation intent already exists');
+    }
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(request), flush: true);
+    await temporary.rename(file.path);
+  }
+
+  @override
+  Future<void> clear() async {
+    final file = await _file();
+    if (await file.exists()) await file.delete();
+  }
+}
+
 final class FileDiningScenarioIntentStore implements DiningScenarioIntentStore {
   const FileDiningScenarioIntentStore({this.directoryPath});
 
@@ -154,6 +208,9 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> createDiningScenario(KernelJson request);
   Future<KernelJson> selectDiningPlace(KernelJson request);
   Future<KernelJson> recordDiningVisitOutcome(KernelJson request);
+  Future<KernelJson> createFashionScenario(KernelJson request);
+  Future<KernelJson> confirmFashionOutfit(KernelJson request);
+  Future<KernelJson> recordFashionWearOutcome(KernelJson request);
   Future<KernelJson> acceptProposal({
     required String proposalId,
     required String commandId,
@@ -274,6 +331,18 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> recordDiningVisitOutcome(KernelJson request) =>
       _request('POST', '/v1/kernel/dining/visit-outcome', request);
+
+  @override
+  Future<KernelJson> createFashionScenario(KernelJson request) =>
+      _request('POST', '/v1/kernel/fashion/scenarios', request);
+
+  @override
+  Future<KernelJson> confirmFashionOutfit(KernelJson request) =>
+      _request('POST', '/v1/kernel/fashion/confirm-outfit', request);
+
+  @override
+  Future<KernelJson> recordFashionWearOutcome(KernelJson request) =>
+      _request('POST', '/v1/kernel/fashion/wear-outcome', request);
 
   @override
   Future<KernelJson> acceptProposal({

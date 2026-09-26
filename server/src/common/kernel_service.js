@@ -16,6 +16,7 @@ import {
 import { retrieveKnowledge, validateRetrievalResult } from "../retrieval/index.js";
 import { buildRecipePlanDraft } from "../scenarios/recipe_plan.js";
 import { buildDiningPlanDraft } from "../scenarios/dining_plan.js";
+import { buildFashionPlanDraft } from "../scenarios/fashion_plan.js";
 import {
   applyResourceCommand, createResourceState,
   getResourceAvailability as projectResourceAvailability,
@@ -39,6 +40,8 @@ export function createCommonKernelState() {
     recipeScenarioReceipts: {},
     diningScenarioReceipts: {},
     diningCommandReceipts: {},
+    fashionScenarioReceipts: {},
+    fashionCommandReceipts: {},
   };
 }
 
@@ -432,10 +435,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       state.knowledge = unregisterKnowledgeWatch(state.knowledge, { ownerId, consumerId: activityId });
       delete state.retrievalWatches[activityId];
       delete state.resourceWatches[activityId];
-      for (const item of Object.values(state.diningCommandReceipts ?? {})) {
-        if (item.activityId === activityId) {
-          item.deleted = true;
-          item.result = { activityId };
+      for (const receipts of [state.diningCommandReceipts, state.fashionCommandReceipts]) {
+        for (const item of Object.values(receipts ?? {})) {
+          if (item.activityId === activityId) {
+            item.deleted = true;
+            item.result = { activityId };
+          }
         }
       }
       receipt.deleted = true;
@@ -453,6 +458,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     redactScenarioReceipts(state, Object.values(state.diningScenarioReceipts ?? {}).filter((entry) =>
       !entry.deleted && (entry.result?.activityId === activityId || entry.importIds?.some((id) =>
         state.importReceipts[id]?.sourceId === sourceId))), sourceId);
+  }
+
+  function redactFashionScenario(state, sourceId, activityId = null) {
+    redactScenarioReceipts(state, Object.values(state.fashionScenarioReceipts ?? {}).filter((entry) =>
+      !entry.deleted && (entry.result?.activityId === activityId ||
+        entry.result?.confirmationSourceId === sourceId || entry.importIds?.some((id) =>
+          state.importReceipts[id]?.sourceId === sourceId))), sourceId);
   }
 
   function redactImportedCapture(state, sourceId) {
@@ -496,25 +508,46 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   function sourceDeletionContext(state, sourceId) {
     const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
       item.id === sourceId && item.status === "active");
+    const fashionActivityIds = source?.kind === "capture_analysis"
+      ? new Set(Object.values(state.fashionScenarioReceipts ?? {}).filter((item) =>
+        !item.deleted && item.importIds?.some((id) =>
+          state.importReceipts[id]?.sourceId === source.id)).map((item) => item.result.activityId))
+      : new Set(source?.provenance?.scenario === "fashion" && source.provenance.activityId
+        ? [source.provenance.activityId] : []);
     const linkedConfirmations = source?.kind === "capture_analysis"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.kind === "user_confirmation" &&
-        item.provenance?.scenario === "recipe" &&
-        item.provenance?.importedSourceId === source.id).map((item) => item.id) : [];
-    return { source, linkedConfirmations };
+        ((item.provenance?.scenario === "recipe" &&
+          item.provenance?.importedSourceId === source.id) ||
+          (item.provenance?.scenario === "fashion" &&
+            fashionActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
+    const linkedFashionSources = state.knowledge.sources.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
+      item.provenance?.scenario === "fashion" &&
+      fashionActivityIds.has(item.provenance.activityId) &&
+      (item.kind === "user_confirmation" || item.kind === "user_report"))
+      .map((item) => item.id);
+    return { source, linkedConfirmations, linkedFashionSources };
   }
 
-  function finishSourceDeletion(state, { source, linkedConfirmations }) {
+  function finishSourceDeletion(state, { source, linkedConfirmations, linkedFashionSources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
     }
+    if (source?.kind === "user_confirmation" && source.provenance?.scenario === "fashion") {
+      redactFashionScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "user_report" && source.provenance?.scenario === "dining") {
       redactDiningScenario(state, source.id, source.provenance.activityId);
+    }
+    if (source?.kind === "user_report" && source.provenance?.scenario === "fashion") {
+      redactFashionScenario(state, source.id, source.provenance.activityId);
     }
     if (source?.kind === "capture_analysis") {
       redactImportedCapture(state, source.id);
       redactDiningScenario(state, source.id);
+      redactFashionScenario(state, source.id);
       for (const sourceId of linkedConfirmations) {
         state.knowledge = applyKnowledgeCommand(state.knowledge, {
           ownerId, commandId: `kernel:source-cascade:${sourceId}`,
@@ -522,7 +555,18 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         }, { predicates }).state;
         purgeIssuedContextsFromSource(state, sourceId);
         redactRecipeScenario(state, sourceId);
+        redactFashionScenario(state, sourceId);
       }
+    }
+    for (const sourceId of linkedFashionSources) {
+      const linked = state.knowledge.sources.find((item) => item.id === sourceId);
+      if (linked?.status !== "active") continue;
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      redactFashionScenario(state, sourceId);
     }
   }
 
@@ -651,6 +695,41 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return { candidates, contextQueries };
   }
 
+  function fashionCandidates(state, importIds) {
+    const candidates = [];
+    const contextQueries = [];
+    for (const importId of importIds) {
+      const receipt = state.importReceipts[importId];
+      if (receipt?.ownerId !== ownerId || receipt.deleted) {
+        throw new AppError("IMPORT_NOT_FOUND", "연결할 확인 자료를 찾을 수 없어요.", { httpStatus: 404 });
+      }
+      const version = state.knowledge.sourceVersions.find((item) =>
+        item.ownerId === ownerId && item.id === receipt.sourceVersionId && item.status === "active");
+      const analysis = version?.content?.analysis;
+      if (!analysis || analysis.contentKind !== "commerce_product" ||
+          !analysis.tags?.some((item) => item.facet === "kind" && item.value === "패션") ||
+          analysis.title?.status !== "observed" || !analysis.title.value?.trim()) {
+        throw new AppError("IMPORT_NOT_FASHION", "상품명이 보이는 패션 자료만 사용할 수 있어요.",
+          { httpStatus: 400 });
+      }
+      const mention = state.knowledge.entityMentions.find((item) =>
+        item.ownerId === ownerId && item.sourceVersionId === version.id &&
+        item.entityType === "core.product" && item.status === "active");
+      if (!mention) throw new AppError("IMPORT_NOT_FASHION", "상품 근거를 확인할 수 없어요.",
+        { httpStatus: 400 });
+      candidates.push({ importId, name: analysis.title.value.trim(), mentionId: mention.id,
+        evidenceIds: [...mention.evidenceIds] });
+      const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
+        item.subjectId === receipt.result?.materialId &&
+        item.predicate === "ingestion.extracted_field" &&
+        item.typedValue?.value?.path === "/title/value" && item.status === "active");
+      if (!field) throw new AppError("CONTEXT_STALE", "상품명 근거가 변경됐어요.", { httpStatus: 409 });
+      contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
+        scope: field.scope });
+    }
+    return { candidates, contextQueries };
+  }
+
   return {
     async contracts() {
       return {
@@ -727,10 +806,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             const task = current.tasks.find((item) => item.id === command.payload?.taskId);
             if (!task) throw new AppError("TASK_NOT_FOUND", "작업을 찾을 수 없어요.", { httpStatus: 404 });
             const spec = registry.getCapability(task.capabilityId);
-            if (["dining.select_place", "dining.record_visit_outcome"].includes(spec.id) &&
+            if (["dining.select_place", "dining.record_visit_outcome",
+              "fashion.confirm_outfit", "fashion.record_wear_outcome"].includes(spec.id) &&
                 (command.type === "task.recordResult" || command.payload?.to === "completed" ||
                   Object.hasOwn(command.payload ?? {}, "output"))) {
-              throw new AppError("TASK_EXECUTION_RESTRICTED", "맛집 선택·방문 결과는 전용 경로로 기록해 주세요.",
+              throw new AppError("TASK_EXECUTION_RESTRICTED", "확인·결과 작업은 전용 경로로 기록해 주세요.",
                 { httpStatus: 403 });
             }
             const writesOutput = command.type === "task.recordResult" ||
@@ -1379,6 +1459,308 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, placeId, status: input.status, visitId,
             revision: applied.result.revision };
           state.diningCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async createFashionScenario(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
+          "importIds", "occasion", "scheduledAt"].includes(key)) || input.confirmed !== true ||
+          !Array.isArray(input.importIds) || input.importIds.length < 1 ||
+          input.importIds.length > 5 || typeof input.occasion !== "string" ||
+          !input.occasion.trim() || input.occasion.length > 120) {
+          throw new AppError("INVALID_REQUEST", "패션 활동 입력을 확인해 주세요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const importIds = input.importIds.map((id) => safeId(id, "importId"));
+        if (new Set(importIds).size !== importIds.length) {
+          throw new AppError("INVALID_REQUEST", "같은 캡처를 중복 선택했어요.", { httpStatus: 400 });
+        }
+        registry.validate("core.timestamp", input.scheduledAt);
+        const occasion = input.occasion.trim();
+        const requestHash = requestFingerprint({ activityId, importIds, occasion,
+          scheduledAt: input.scheduledAt });
+        return await store.transact((state) => {
+          assertState(state);
+          state.fashionScenarioReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.fashionScenarioReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 패션 요청에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 패션 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const { candidates, contextQueries } = fashionCandidates(state, importIds);
+          const plan = buildFashionPlanDraft({ candidates, occasion }, { registry });
+          const stem = `fashion:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const created = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:activity`, type: "activity.create", activityId,
+            expectedRevision: 0, payload: { title: `${occasion} 코디`,
+              goal: { description: `${input.scheduledAt} · ${occasion}에 입을 옷 정하기` } } },
+          activityOptions(state));
+          state.activities = created.state;
+          state.resources = applyResourceCommand(state.resources, { ownerId,
+            commandId: `${stem}:resource-activity`, type: "activity.register",
+            expectedRevision: 0, payload: { activityId } }).state;
+          const issued = issueContext(state, { activityId, queries: contextQueries });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE", "패션 캡처 근거를 확인할 수 없어요.",
+              { httpStatus: 409 });
+          }
+          const enriched = enrichPlan("draft", plan);
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:proposal-check`, type: "plan.applyDraft", activityId,
+            expectedRevision: created.result.revision, payload: { draft: enriched } },
+          activityOptions(state));
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId, activityId,
+            contextId: issued.contextId, kind: "draft", plan: structuredClone(enriched),
+            run: { scenario: "fashion", importIds: [...importIds] },
+            baseActivityRevision: created.result.revision, basePlanRevision: 0,
+            status: "pending", createdAt: new Date().toISOString() };
+          const result = { activityId, revision: created.result.revision, proposalId,
+            contextId: issued.contextId, candidateCount: candidates.length };
+          state.fashionScenarioReceipts[receiptKey] = { hash: requestHash,
+            importIds: [...importIds], result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async confirmFashionOutfit(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "selections"].includes(key)) || !Array.isArray(input.selections) ||
+          input.selections.length < 1 || input.selections.length > 5 ||
+          input.selections.some((item) => !item || typeof item !== "object" ||
+            Array.isArray(item) || Object.keys(item).some((key) =>
+              !["importId", "slot", "color", "size", "ownership"].includes(key)) ||
+            !["outerwear", "top", "bottom", "shoes", "accessory"].includes(item.slot) ||
+            !["owned", "candidate", "unknown"].includes(item.ownership) ||
+            !["importId", "color", "size"].every((key) =>
+              typeof item[key] === "string" && item[key].trim() && item[key].length <= 80))) {
+          throw new AppError("INVALID_REQUEST", "코디 항목·색상·사이즈를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const selections = input.selections.map((item) => ({ importId: safeId(item.importId, "importId"),
+          slot: item.slot, color: item.color.trim(), size: item.size.trim(),
+          ownership: item.ownership }));
+        if (new Set(selections.map((item) => item.importId)).size !== selections.length ||
+            new Set(selections.map((item) => item.slot)).size !== selections.length) {
+          throw new AppError("INVALID_REQUEST", "같은 캡처나 코디 자리를 중복 사용할 수 없어요.",
+            { httpStatus: 400 });
+        }
+        const requestHash = requestFingerprint({ activityId, expectedRevision: input.expectedRevision,
+          selections });
+        return await store.transact((state) => {
+          assertState(state);
+          state.fashionCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.fashionCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 코디 확인에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.",
+              { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.values(state.fashionScenarioReceipts ?? {}).find((item) =>
+            item.result?.activityId === activityId && !item.deleted);
+          if (!scenario) throw new AppError("NOT_FOUND", "패션 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "confirm_outfit" &&
+            item.capabilityId === "fashion.confirm_outfit");
+          if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
+            "지금은 코디를 확정할 수 없어요.", { httpStatus: 409 });
+          const candidates = new Map(task.readiness.inputs.candidates.map((item) =>
+            [item.importId, item]));
+          if (selections.some((item) => !candidates.has(item.importId))) {
+            throw new AppError("INVALID_REQUEST", "활동에 제안된 캡처만 사용할 수 있어요.",
+              { httpStatus: 400 });
+          }
+          const stem = `fashion:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const outfitId = `${stem}:outfit`;
+          const sourceId = `${stem}:confirmation-source`;
+          const versionId = `${stem}:confirmation-version`;
+          const confirmedAt = new Date().toISOString();
+          const content = { occasion: task.readiness.inputs.occasion, selections };
+          const beforeSequence = state.knowledge.sequence;
+          const applyKnowledge = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:confirm:${role}`, type, payload }, { predicates }).state;
+          };
+          applyKnowledge("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 확인한 코디", provenance: { scenario: "fashion", activityId,
+              importedSourceIds: selections.map((item) =>
+                state.importReceipts[item.importId].sourceId) } });
+          applyKnowledge("version", "source.version.add", { id: versionId,
+            sourceId, contentHash: fingerprint(content), content, capturedAt: confirmedAt });
+          applyKnowledge("outfit", "entity.create", { id: outfitId,
+            type: "fashion.outfit", label: "사용자가 확정한 코디" });
+          const items = [];
+          for (const selection of selections) {
+            const candidate = candidates.get(selection.importId);
+            const mention = state.knowledge.entityMentions.find((item) =>
+              item.ownerId === ownerId && item.id === candidate.mentionId && item.status === "active");
+            if (!mention) throw new AppError("CONTEXT_STALE", "상품 캡처 근거가 변경됐어요.",
+              { httpStatus: 409 });
+            const role = fingerprint(selection.importId).slice(0, 16);
+            const evidenceId = `${stem}:confirmation-evidence:${role}`;
+            applyKnowledge(`evidence:${role}`, "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId,
+              quote: `${candidate.name} · ${selection.slot} · ${selection.color} · ${selection.size} · ${selection.ownership}`,
+              locator: { kind: "user_confirmation", jsonPointer: `/selections/${items.length}` } });
+            const accepted = state.knowledge.identityDecisions.find((item) =>
+              item.ownerId === ownerId && item.mentionId === mention.id && item.status === "accepted");
+            const productId = accepted?.entityId ?? `${stem}:product:${role}`;
+            if (!accepted) {
+              applyKnowledge(`product:${role}`, "entity.create", { id: productId,
+                type: "core.product", label: "사용자가 확인한 패션 상품" });
+              const decisionId = `${stem}:identity:${role}`;
+              applyKnowledge(`identity-propose:${role}`, "identity.propose", { id: decisionId,
+                mentionId: mention.id, entityId: productId,
+                evidenceIds: mention.evidenceIds,
+                reason: "사용자가 코디 항목의 상품 캡처를 확인함" });
+              applyKnowledge(`identity-accept:${role}`, "identity.accept", {
+                decisionId, expectedRevision: 1 });
+            }
+            const variantId = `fashion:variant:${fingerprint([ownerId, productId,
+              selection.color, selection.size]).slice(0, 32)}`;
+            if (!state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+                item.id === variantId && item.status === "active")) {
+              applyKnowledge(`variant:${role}`, "entity.create", { id: variantId,
+                type: "core.product_variant", label: "사용자가 선택한 색상·사이즈" });
+            }
+            const assertion = (name, subjectId, predicate, objectEntityId = null,
+              typedValue = null) => applyKnowledge(`${name}:${role}`, "assertion.add", {
+              id: `${stem}:${name}:${role}`, subjectId, predicate,
+              scope: { type: "activity", id: activityId }, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+              observedAt: confirmedAt,
+              ...(objectEntityId ? { objectEntityId } : { typedValue }),
+            });
+            assertion("variant-of", variantId, "fashion.variant_of", productId);
+            assertion("variant-options", variantId, "fashion.variant_options", null,
+              { type: "fashion.variant_options", value: {
+                color: selection.color, size: selection.size } });
+            assertion("has-item", outfitId, "fashion.has_item", variantId);
+            if (selection.ownership !== "unknown") {
+              assertion("ownership", variantId, "fashion.ownership", null,
+                { type: "fashion.ownership", value: selection.ownership });
+            }
+            items.push({ slot: selection.slot, variantId, ownership: selection.ownership,
+              importId: selection.importId, color: selection.color, size: selection.size });
+          }
+          const outfit = { id: outfitId, occasion: task.readiness.inputs.occasion, items };
+          registry.validate("fashion.outfit", outfit);
+          recordAffectedConsumers(state, beforeSequence);
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:confirmed`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "confirm_outfit", expectedTaskRevision: task.revision,
+              to: "completed", output: { outfitId, outfit, confirmedAt } } }, activityOptions(state));
+          state.activities = applied.state;
+          const result = { activityId, outfitId, revision: applied.result.revision };
+          state.fashionCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          scenario.result.confirmationSourceId = sourceId;
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async recordFashionWearOutcome(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "status"].includes(key)) || !["worn", "not_worn", "unknown"].includes(input.status)) {
+          throw new AppError("INVALID_REQUEST", "착용 결과를 확인해 주세요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const requestHash = requestFingerprint({ activityId, expectedRevision: input.expectedRevision,
+          status: input.status });
+        return await store.transact((state) => {
+          assertState(state);
+          state.fashionCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.fashionCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 착용 결과에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.",
+              { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.values(state.fashionScenarioReceipts ?? {}).find((item) =>
+            item.result?.activityId === activityId && !item.deleted);
+          if (!scenario) throw new AppError("NOT_FOUND", "패션 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "record_wear" &&
+            item.capabilityId === "fashion.record_wear_outcome");
+          if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
+            "착용 결과를 기록할 수 없어요.", { httpStatus: 409 });
+          const outfitId = task.readiness.inputs.outfitId;
+          if (!state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+              item.id === outfitId && item.type === "fashion.outfit" && item.status === "active")) {
+            throw new AppError("CONTEXT_STALE", "확정한 코디를 찾지 못했어요.",
+              { httpStatus: 409 });
+          }
+          const stem = `fashion:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const reportedAt = new Date().toISOString();
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:wear-outcome`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "record_wear", expectedTaskRevision: task.revision,
+              to: "completed", output: { outfitId, status: input.status, reportedAt } } },
+          activityOptions(state));
+          state.activities = applied.state;
+          let experienceId = null;
+          if (input.status === "worn") {
+            const beforeSequence = state.knowledge.sequence;
+            const sourceId = `${stem}:wear-source`;
+            const versionId = `${stem}:wear-version`;
+            const evidenceId = `${stem}:wear-evidence`;
+            experienceId = `${stem}:wear-experience`;
+            const content = { outfitId, status: "worn", reportedAt };
+            const applyKnowledge = (role, type, payload) => {
+              if (type === "assertion.add") validateAssertionRelation(state, payload);
+              state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+                commandId: `${stem}:wear:${role}`, type, payload }, { predicates }).state;
+            };
+            applyKnowledge("source", "source.create", { id: sourceId, kind: "user_report",
+              title: "코디 착용 기록", provenance: { scenario: "fashion", activityId } });
+            applyKnowledge("version", "source.version.add", { id: versionId,
+              sourceId, contentHash: fingerprint(content), content, capturedAt: reportedAt });
+            applyKnowledge("evidence", "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId, quote: "입었어요",
+              locator: { kind: "user_report", jsonPointer: "/status" } });
+            applyKnowledge("experience", "entity.create", { id: experienceId,
+              type: "fashion.wear_experience", label: "사용자 착용 기록" });
+            applyKnowledge("wore", "assertion.add", { id: `${stem}:wore`,
+              subjectId: experienceId, predicate: "fashion.wore_outfit",
+              objectEntityId: outfitId, scope: { type: "activity", id: activityId },
+              origin: "user_reported", assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [evidenceId], observedAt: reportedAt });
+            recordAffectedConsumers(state, beforeSequence);
+          }
+          const result = { activityId, outfitId, status: input.status, experienceId,
+            revision: applied.result.revision };
+          state.fashionCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

@@ -499,3 +499,22 @@ npm run test:dining-image-live
 검증에 성공한 새 응답으로 fixture를 교체하려면 스크립트에 `--record`를
 전달합니다. 구현 범위와 현재 미완성인 장소 제공자 검증·후보 비교는
 `docs/DINING_FIRST_SCENARIO.md`에 구분해 적었습니다.
+
+### 이미지 기반 패션 시나리오 검증
+
+`test/fixtures/fashion_a_blazer.png`와 `fashion_b_trousers.png`는 합성 상품
+캡처입니다. 두 장을 각각 실제 `POST /v1/analyze`에 전송한 응답을
+`*_live_analysis.json`에 보관했습니다. `npm test`는 이미지 해시·응답 계약과
+코디 계획, 사용자 옵션·소유 확인, 착용 기록, 삭제 연쇄를 비용 없이 재생합니다.
+재킷 이미지의 `합성 자료`가 응답에서 `합성 재료`로 오독됐으므로 소재 사실을
+패션 지식 그래프에 복사하지 않습니다.
+
+```sh
+cd server
+npm run dev
+# 다른 터미널에서; 모델 호출 비용이 발생할 수 있음
+npm run test:fashion-image-live
+```
+
+검증에 성공한 새 응답으로 fixture를 교체할 때만 스크립트에 `--record`를
+전달합니다. 현재 구현 범위는 `docs/FASHION_FIRST_SCENARIO.md`에 적었습니다.

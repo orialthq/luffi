@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "commerce_product",
+  "tags": [
+    {
+      "value": "패션",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "차콜 싱글 재킷",
+        "합성 재료"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "차콜 싱글 재킷",
+    "status": "observed",
+    "confidence": 1,
+    "evidenceIds": [
+      "e1"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "차콜 색상의 싱글 재킷으로 M과 L 사이즈가 보입니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "차콜 싱글 재킷",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e2",
+      "text": "합성 재료",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e3",
+      "text": "색상 차콜",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e4",
+      "text": "사이즈 M, L",
+      "region": "product_panel",
+      "confidence": 1
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "소재",
+      "value": "합성 재료",
+      "confidence": 1,
+      "evidenceIds": [
+        "e2"
+      ]
+    },
+    {
+      "label": "색상",
+      "value": "차콜",
+      "confidence": 1,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "사이즈",
+      "value": "M, L",
+      "confidence": 1,
+      "evidenceIds": [
+        "e4"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

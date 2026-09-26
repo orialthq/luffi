@@ -80,17 +80,23 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.client,
     this.intentStore,
     this.diningIntentStore,
+    this.fashionIntentStore,
     this.importOptions = const [],
     this.diningImportOptions = const [],
+    this.fashionImportOptions = const [],
     this.onOpenDiningImport,
+    this.onOpenFashionImport,
     super.key,
   });
   final CommonKernelClient? client;
   final RecipeScenarioIntentStore? intentStore;
   final DiningScenarioIntentStore? diningIntentStore;
+  final FashionScenarioIntentStore? fashionIntentStore;
   final List<RecipeImportOption> importOptions;
   final List<DiningImportOption> diningImportOptions;
+  final List<FashionImportOption> fashionImportOptions;
   final void Function(String importId)? onOpenDiningImport;
+  final void Function(String importId)? onOpenFashionImport;
 
   @override
   State<CommonBoardsScreen> createState() => _CommonBoardsScreenState();
@@ -119,6 +125,13 @@ final class DiningImportOption {
   final String searchArea;
 }
 
+final class FashionImportOption {
+  const FashionImportOption({required this.importId, required this.title});
+
+  final String importId;
+  final String title;
+}
+
 final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   late final CommonKernelClient _client =
       widget.client ?? const HttpCommonKernelClient();
@@ -126,6 +139,8 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       widget.intentStore ?? const FileRecipeScenarioIntentStore();
   late final DiningScenarioIntentStore _diningIntentStore =
       widget.diningIntentStore ?? const FileDiningScenarioIntentStore();
+  late final FashionScenarioIntentStore _fashionIntentStore =
+      widget.fashionIntentStore ?? const FileFashionScenarioIntentStore();
   List<KernelJson> _boards = [];
   KernelJson _contracts = {};
   bool _contractsUnavailable = false;
@@ -137,12 +152,16 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _creating = false;
   bool _creatingRecipe = false;
   bool _creatingDining = false;
+  bool _creatingFashion = false;
   bool _intentLoading = true;
   bool _diningIntentLoading = true;
+  bool _fashionIntentLoading = true;
   KernelJson? _pendingRecipeIntent;
   KernelJson? _pendingDiningIntent;
+  KernelJson? _pendingFashionIntent;
   Object? _intentError;
   Object? _diningIntentError;
+  Object? _fashionIntentError;
   int _loadGeneration = 0;
 
   @override
@@ -151,6 +170,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     _load();
     unawaited(_loadRecipeIntent());
     unawaited(_loadDiningIntent());
+    unawaited(_loadFashionIntent());
   }
 
   Future<void> _loadDiningIntent() async {
@@ -165,6 +185,21 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       if (mounted) setState(() => _diningIntentError = error);
     } finally {
       if (mounted) setState(() => _diningIntentLoading = false);
+    }
+  }
+
+  Future<void> _loadFashionIntent() async {
+    setState(() {
+      _fashionIntentLoading = true;
+      _fashionIntentError = null;
+    });
+    try {
+      final pending = await _fashionIntentStore.load();
+      if (mounted) setState(() => _pendingFashionIntent = pending);
+    } catch (error) {
+      if (mounted) setState(() => _fashionIntentError = error);
+    } finally {
+      if (mounted) setState(() => _fashionIntentLoading = false);
     }
   }
 
@@ -256,6 +291,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
           activityId: id,
           contracts: _contracts,
           onOpenDiningImport: widget.onOpenDiningImport,
+          onOpenFashionImport: widget.onOpenFashionImport,
         ),
       ),
     );
@@ -436,6 +472,125 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
         setState(() {
           _pendingDiningIntent = null;
           _diningIntentError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    }
+  }
+
+  Future<void> _createReviewedFashion() async {
+    final draft = await showDialog<KernelJson>(
+      context: context,
+      builder: (_) =>
+          _FashionScenarioDialog(options: widget.fashionImportOptions),
+    );
+    if (draft == null ||
+        !mounted ||
+        _pendingFashionIntent != null ||
+        _fashionIntentLoading ||
+        _fashionIntentError != null) {
+      return;
+    }
+    setState(() => _creatingFashion = true);
+    try {
+      final request = <String, Object?>{
+        'commandId': newKernelCommandId(),
+        'activityId': 'fashion-${newKernelCommandId()}',
+        'confirmed': true,
+        ...draft,
+      };
+      await _fashionIntentStore.save(request);
+      if (mounted) setState(() => _pendingFashionIntent = request);
+      await _sendFashionIntent(request);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingFashion = false);
+    }
+  }
+
+  Future<void> _retryFashionIntent() async {
+    final pending = _pendingFashionIntent;
+    if (pending == null || _creatingFashion) return;
+    setState(() => _creatingFashion = true);
+    try {
+      await _sendFashionIntent(pending);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingFashion = false);
+    }
+  }
+
+  Future<void> _sendFashionIntent(KernelJson request) async {
+    KernelJson result;
+    try {
+      result = await _client.createFashionScenario(request);
+    } on CommonKernelException catch (error) {
+      if (const {
+        'INVALID_REQUEST',
+        'INVALID_DOMAIN_VALUE',
+        'IMPORT_NOT_FOUND',
+        'IMPORT_NOT_FASHION',
+        'SCENARIO_DELETED',
+      }.contains(error.code)) {
+        await _fashionIntentStore.clear();
+        if (mounted) setState(() => _pendingFashionIntent = null);
+      }
+      rethrow;
+    }
+    final activityId = result['activityId'];
+    if (activityId is! String || activityId != request['activityId']) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '만든 패션 활동의 ID를 확인할 수 없어요. 같은 요청으로 다시 확인해 주세요.',
+      );
+    }
+    await _fashionIntentStore.clear();
+    if (mounted) {
+      setState(() => _pendingFashionIntent = null);
+      await _open(activityId);
+    }
+  }
+
+  Future<void> _discardFashionIntent() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이전 패션 활동 요청 지우기'),
+        content: const Text('서버에 활동이 이미 만들어졌을 수 있어요. 목록을 확인한 뒤 지워 주세요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('요청 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _fashionIntentStore.clear();
+      if (mounted) {
+        setState(() {
+          _pendingFashionIntent = null;
+          _fashionIntentError = null;
         });
       }
     } catch (error) {
@@ -753,6 +908,72 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
                     message: '저장된 맛집 활동 요청을 읽지 못했어요.',
                     onRefresh: _loadDiningIntent,
                   ),
+                if (widget.fashionImportOptions.isNotEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '첫 패션 시나리오',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '저장한 옷을 일정의 코디로 묶고, 옵션·소유와 실제 착용을 직접 확인해요.',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            key: const Key('kernel-create-fashion'),
+                            onPressed:
+                                _creatingFashion ||
+                                    _fashionIntentLoading ||
+                                    _fashionIntentError != null ||
+                                    _pendingFashionIntent != null
+                                ? null
+                                : _createReviewedFashion,
+                            icon: const Icon(Icons.checkroom_outlined),
+                            label: Text(
+                              _creatingFashion ? '만드는 중' : '저장한 옷으로 시작',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_pendingFashionIntent != null)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('완료 여부를 확인할 패션 활동 요청이 있어요.'),
+                          const Text('같은 요청 ID로 재전송하면 중복 생성되지 않아요.'),
+                          FilledButton(
+                            key: const Key('kernel-retry-fashion-create'),
+                            onPressed: _creatingFashion
+                                ? null
+                                : _retryFashionIntent,
+                            child: const Text('이전 생성 이어하기'),
+                          ),
+                          TextButton(
+                            key: const Key('kernel-discard-fashion-create'),
+                            onPressed: _creatingFashion
+                                ? null
+                                : _discardFashionIntent,
+                            child: const Text('이전 요청 지우기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_fashionIntentError != null)
+                  _ErrorPanel(
+                    message: '저장된 패션 활동 요청을 읽지 못했어요.',
+                    onRefresh: _loadFashionIntent,
+                  ),
                 if (_pendingRecipeIntent != null)
                   Card(
                     child: Padding(
@@ -852,12 +1073,14 @@ final class CommonBoardScreen extends StatefulWidget {
     required this.activityId,
     this.contracts = const {},
     this.onOpenDiningImport,
+    this.onOpenFashionImport,
     super.key,
   });
   final CommonKernelClient client;
   final String activityId;
   final KernelJson contracts;
   final void Function(String importId)? onOpenDiningImport;
+  final void Function(String importId)? onOpenFashionImport;
 
   @override
   State<CommonBoardScreen> createState() => _CommonBoardScreenState();
@@ -1055,6 +1278,41 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
 
   Future<void> _complete(KernelJson task) async {
     final capabilityId = _text(task['capabilityId']);
+    if (capabilityId == 'fashion.confirm_outfit') {
+      final selections = await showDialog<List<KernelJson>>(
+        context: context,
+        builder: (_) => _FashionConfirmDialog(
+          candidates: _objects(_object(_taskInputs(task))['candidates']),
+          onOpenImport: widget.onOpenFashionImport,
+        ),
+      );
+      if (selections == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.confirmFashionOutfit({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'selections': selections,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'fashion.record_wear_outcome') {
+      final status = await showDialog<String>(
+        context: context,
+        builder: (_) => const _FashionWearDialog(),
+      );
+      if (status == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordFashionWearOutcome({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'status': status,
+        });
+      });
+      return;
+    }
     if (capabilityId == 'dining.select_place') {
       final candidates = _objects(_object(_taskInputs(task))['candidates']);
       final candidateId = await showDialog<String>(
@@ -1165,6 +1423,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final renderer = _text(task['rendererKey']);
     final isRecipe = _text(task['capabilityId']).startsWith('recipe.');
     final isDining = _text(task['capabilityId']).startsWith('dining.');
+    final isFashion = _text(task['capabilityId']).startsWith('fashion.');
     final selectedDiningCandidate = isDining
         ? _selectedDiningCandidate()
         : null;
@@ -1230,6 +1489,19 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                     ? '방문 전 영업·예약 정보는 아직 확인되지 않았어요. 직접 확인해도 사실로 자동 저장되지는 않아요.'
                     : '실제로 방문했는지 직접 기록해 주세요.',
               )
+            else if (isFashion && task['id'] == 'confirm_outfit')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    Text('• ${_text(candidate['name'])} · 캡처 후보'),
+                  const Text('색상·사이즈·소유 상태는 원본을 본 뒤 직접 확인해 주세요.'),
+                ],
+              )
+            else if (isFashion)
+              const Text('코디를 만들었다고 입은 것은 아니에요. 실제 착용 여부를 기록해 주세요.')
             else
               _JsonDetails(title: '입력과 연결 정보', value: _taskInputs(task)),
             if (task['latestOutputRef'] != null)
@@ -1242,6 +1514,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                       )
                       .firstOrNull?['value'],
                 )
+              else if (isFashion)
+                _fashionResult(task)
               else
                 _JsonDetails(
                   title: '최근 결과',
@@ -1329,6 +1603,52 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _fashionResult(KernelJson task) {
+    final result = _objects(
+      _board?['results'],
+    ).where((item) => item['id'] == task['latestOutputRef']).firstOrNull;
+    final value = _object(result?['value']);
+    if (task['id'] == 'record_wear') {
+      return Text(switch (value['status']) {
+        'worn' => '착용 결과: 입었어요',
+        'not_worn' => '착용 결과: 안 입었어요',
+        _ => '착용 결과: 아직 몰라요',
+      });
+    }
+    final candidates = {
+      for (final candidate in _objects(
+        _object(task['inputBindings'])['candidates'],
+      ))
+        _text(candidate['importId']): _text(candidate['name']),
+    };
+    final items = _objects(_object(value['outfit'])['items']);
+    const slots = {
+      'outerwear': '겉옷',
+      'top': '상의',
+      'bottom': '하의',
+      'shoes': '신발',
+      'accessory': '액세서리',
+    };
+    const ownership = {
+      'owned': '가지고 있음',
+      'candidate': '구매 후보',
+      'unknown': '소유 미확인',
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('확정한 코디'),
+        for (final item in items)
+          Text(
+            '• ${slots[_text(item['slot'])] ?? '옷'} · '
+            '${candidates[_text(item['importId'])] ?? '상품'} · '
+            '${_text(item['color'])} / ${_text(item['size'])} · '
+            '${ownership[_text(item['ownership'])] ?? '소유 미확인'}',
+          ),
+      ],
     );
   }
 
@@ -1598,6 +1918,361 @@ final class _ErrorPanel extends StatelessWidget {
         TextButton(onPressed: onRefresh, child: const Text('새로고침')),
       ],
     ),
+  );
+}
+
+final class _FashionScenarioDialog extends StatefulWidget {
+  const _FashionScenarioDialog({required this.options});
+  final List<FashionImportOption> options;
+
+  @override
+  State<_FashionScenarioDialog> createState() => _FashionScenarioDialogState();
+}
+
+final class _FashionScenarioDialogState extends State<_FashionScenarioDialog> {
+  final _selected = <String>{};
+  final _occasion = TextEditingController();
+  final _date = TextEditingController();
+  final _time = TextEditingController(text: '18:00');
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final day = DateTime.now().add(const Duration(days: 1));
+    _date.text =
+        '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void dispose() {
+    _occasion.dispose();
+    _date.dispose();
+    _time.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final occasion = _occasion.text.trim();
+    final date = _date.text.trim();
+    final time = _time.text.trim();
+    final when =
+        RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date) &&
+            RegExp(r'^\d{2}:\d{2}$').hasMatch(time)
+        ? DateTime.tryParse('${date}T$time:00')
+        : null;
+    if (_selected.isEmpty ||
+        _selected.length > 5 ||
+        occasion.isEmpty ||
+        occasion.length > 120 ||
+        when == null) {
+      setState(() => _error = '캡처 1~5개, 일정명과 날짜·시각을 확인해 주세요.');
+      return;
+    }
+    Navigator.pop(context, <String, Object?>{
+      'importIds': widget.options
+          .where((item) => _selected.contains(item.importId))
+          .map((item) => item.importId)
+          .toList(),
+      'occasion': occasion,
+      'scheduledAt': when.toUtc().toIso8601String(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('저장한 옷으로 코디 계획'),
+    content: SizedBox(
+      width: 430,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('옷 캡처를 고르세요. 실제 색상·사이즈와 소유 여부는 계획 승인 후 직접 확인합니다.'),
+            for (final option in widget.options)
+              CheckboxListTile(
+                key: ValueKey('fashion-import-${option.importId}'),
+                contentPadding: EdgeInsets.zero,
+                value: _selected.contains(option.importId),
+                title: Text(option.title),
+                onChanged: (checked) => setState(() {
+                  if (checked == true) {
+                    _selected.add(option.importId);
+                  } else {
+                    _selected.remove(option.importId);
+                  }
+                }),
+              ),
+            TextField(
+              controller: _occasion,
+              decoration: const InputDecoration(labelText: '입을 일정·상황'),
+            ),
+            TextField(
+              controller: _date,
+              decoration: const InputDecoration(labelText: '날짜 (YYYY-MM-DD)'),
+            ),
+            TextField(
+              controller: _time,
+              decoration: const InputDecoration(labelText: '시각 (HH:mm)'),
+            ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(
+        key: const Key('fashion-create-submit'),
+        onPressed: _submit,
+        child: const Text('계획 제안 받기'),
+      ),
+    ],
+  );
+}
+
+final class _FashionConfirmDialog extends StatefulWidget {
+  const _FashionConfirmDialog({required this.candidates, this.onOpenImport});
+  final List<KernelJson> candidates;
+  final void Function(String importId)? onOpenImport;
+
+  @override
+  State<_FashionConfirmDialog> createState() => _FashionConfirmDialogState();
+}
+
+final class _FashionConfirmDialogState extends State<_FashionConfirmDialog> {
+  static const _slots = ['outerwear', 'top', 'bottom', 'shoes', 'accessory'];
+  static const _slotLabels = ['겉옷', '상의', '하의', '신발', '액세서리'];
+  final _included = <String>{};
+  final _slot = <String, String>{};
+  final _ownership = <String, String>{};
+  final _color = <String, TextEditingController>{};
+  final _size = <String, TextEditingController>{};
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    for (var index = 0; index < widget.candidates.length; index++) {
+      final id = _text(widget.candidates[index]['importId']);
+      _included.add(id);
+      _slot[id] = '';
+      _ownership[id] = 'unknown';
+      _color[id] = TextEditingController();
+      _size[id] = TextEditingController();
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final controller in [..._color.values, ..._size.values]) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  void _submit() {
+    final selected = widget.candidates
+        .where((item) => _included.contains(_text(item['importId'])))
+        .toList();
+    final slots = selected
+        .map((item) => _slot[_text(item['importId'])])
+        .toList();
+    if (selected.isEmpty ||
+        slots.any((slot) => slot == null || slot.isEmpty) ||
+        slots.toSet().length != slots.length ||
+        selected.any((item) {
+          final id = _text(item['importId']);
+          final color = _color[id]?.text.trim() ?? '';
+          final size = _size[id]?.text.trim() ?? '';
+          return color.isEmpty ||
+              color.length > 80 ||
+              size.isEmpty ||
+              size.length > 80;
+        })) {
+      setState(() => _error = '코디 자리는 겹치지 않게, 선택한 색상·사이즈는 직접 입력해 주세요.');
+      return;
+    }
+    Navigator.pop(
+      context,
+      selected.map((item) {
+        final id = _text(item['importId']);
+        return <String, Object?>{
+          'importId': id,
+          'slot': _slot[id],
+          'color': _color[id]!.text.trim(),
+          'size': _size[id]!.text.trim(),
+          'ownership': _ownership[id],
+        };
+      }).toList(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('코디 항목 확인'),
+    content: SizedBox(
+      width: 450,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '이미지의 옵션 목록과 내가 고른 옵션은 달라요. 실제 선택한 색상·사이즈와 소유 여부만 입력해 주세요.',
+            ),
+            for (final candidate in widget.candidates)
+              Builder(
+                builder: (context) {
+                  final id = _text(candidate['importId']);
+                  return Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CheckboxListTile(
+                            key: ValueKey('fashion-confirm-include-$id'),
+                            value: _included.contains(id),
+                            title: Text(_text(candidate['name'])),
+                            onChanged: (checked) => setState(() {
+                              if (checked == true) {
+                                _included.add(id);
+                              } else {
+                                _included.remove(id);
+                              }
+                            }),
+                          ),
+                          if (_included.contains(id)) ...[
+                            if (widget.onOpenImport != null)
+                              TextButton.icon(
+                                key: ValueKey('fashion-source-$id'),
+                                onPressed: () => widget.onOpenImport!(id),
+                                icon: const Icon(Icons.image_outlined),
+                                label: const Text('원본 캡처 보기'),
+                              ),
+                            DropdownButtonFormField<String>(
+                              key: ValueKey('fashion-slot-$id'),
+                              initialValue: _slot[id]!.isEmpty
+                                  ? null
+                                  : _slot[id],
+                              decoration: const InputDecoration(
+                                labelText: '코디 자리',
+                              ),
+                              items: [
+                                for (var i = 0; i < _slots.length; i++)
+                                  DropdownMenuItem(
+                                    value: _slots[i],
+                                    child: Text(_slotLabels[i]),
+                                  ),
+                              ],
+                              onChanged: (value) => setState(
+                                () => _slot[id] = value ?? _slot[id]!,
+                              ),
+                            ),
+                            TextField(
+                              key: ValueKey('fashion-color-$id'),
+                              controller: _color[id],
+                              decoration: const InputDecoration(
+                                labelText: '선택한 색상',
+                              ),
+                            ),
+                            TextField(
+                              key: ValueKey('fashion-size-$id'),
+                              controller: _size[id],
+                              decoration: const InputDecoration(
+                                labelText: '선택한 사이즈',
+                              ),
+                            ),
+                            DropdownButtonFormField<String>(
+                              initialValue: _ownership[id],
+                              decoration: const InputDecoration(
+                                labelText: '소유 상태',
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'unknown',
+                                  child: Text('아직 몰라요'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'owned',
+                                  child: Text('내가 가지고 있어요'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'candidate',
+                                  child: Text('구매 후보예요'),
+                                ),
+                              ],
+                              onChanged: (value) => setState(
+                                () => _ownership[id] = value ?? 'unknown',
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(
+        key: const Key('fashion-confirm-submit'),
+        onPressed: _submit,
+        child: const Text('코디 확정'),
+      ),
+    ],
+  );
+}
+
+final class _FashionWearDialog extends StatelessWidget {
+  const _FashionWearDialog();
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('실제 착용 여부'),
+    content: const Text('코디를 저장한 것과 실제로 입은 것은 별도로 기록해요.'),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      TextButton(
+        key: const Key('fashion-wear-unknown'),
+        onPressed: () => Navigator.pop(context, 'unknown'),
+        child: const Text('아직 몰라요'),
+      ),
+      TextButton(
+        key: const Key('fashion-wear-not-worn'),
+        onPressed: () => Navigator.pop(context, 'not_worn'),
+        child: const Text('안 입었어요'),
+      ),
+      FilledButton(
+        key: const Key('fashion-wear-worn'),
+        onPressed: () => Navigator.pop(context, 'worn'),
+        child: const Text('입었어요'),
+      ),
+    ],
   );
 }
 

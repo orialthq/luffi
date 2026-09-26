@@ -87,6 +87,22 @@ final class FakeDiningIntentStore implements DiningScenarioIntentStore {
   Future<void> clear() async => pending = null;
 }
 
+final class FakeFashionIntentStore implements FashionScenarioIntentStore {
+  KernelJson? pending;
+
+  @override
+  Future<KernelJson?> load() async => pending;
+
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending fashion intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async => pending = null;
+}
+
 final class FakeKernelClient implements CommonKernelClient {
   KernelJson board = _board();
   final commands = <KernelJson>[];
@@ -314,6 +330,79 @@ final class FakeKernelClient implements CommonKernelClient {
 
   @override
   Future<KernelJson> recordDiningVisitOutcome(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'status': request['status'],
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> createFashionScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    final activityId = request['activityId'];
+    board = {
+      'id': activityId,
+      'title': '${request['occasion']} 코디',
+      'goal': {'description': '저장한 옷으로 코디 만들기'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'fashion-proposal',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'confirm_outfit',
+                'title': '옷과 옵션·소유 상태 확인',
+                'capabilityId': 'fashion.confirm_outfit',
+                'inputBindings': {
+                  'occasion': request['occasion'],
+                  'candidates': [
+                    for (final importId in request['importIds'] as List)
+                      {
+                        'importId': importId,
+                        'name': '캡처 상품',
+                        'mentionId': 'mention-$importId',
+                        'evidenceIds': ['evidence-$importId'],
+                      },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    return {
+      'activityId': activityId,
+      'proposalId': 'fashion-proposal',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> confirmFashionOutfit(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'outfitId': 'outfit-a',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> recordFashionWearOutcome(KernelJson request) async {
     commands.add(request);
     board['revision'] = (board['revision'] as int) + 1;
     return {
@@ -855,6 +944,148 @@ void main() {
             as Map)['tasks'],
         contains(containsPair('title', '방문할 식당 지점 선택')),
       );
+    },
+  );
+
+  testWidgets(
+    'reviewed fashion captures create an approval-gated outfit board',
+    (tester) async {
+      final client = FakeKernelClient();
+      final intentStore = FakeFashionIntentStore();
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardsScreen(
+            client: client,
+            intentStore: FakeRecipeIntentStore(),
+            diningIntentStore: FakeDiningIntentStore(),
+            fashionIntentStore: intentStore,
+            fashionImportOptions: const [
+              FashionImportOption(importId: 'blazer', title: '차콜 싱글 재킷'),
+              FashionImportOption(importId: 'pants', title: '베이지 슬랙스'),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('kernel-create-fashion')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('fashion-import-blazer')));
+      await tester.tap(find.byKey(const ValueKey('fashion-import-pants')));
+      await tester.enterText(
+        find.widgetWithText(TextField, '입을 일정·상황'),
+        '토요일 모임',
+      );
+      await tester.tap(find.byKey(const Key('fashion-create-submit')));
+      await tester.pumpAndSettle();
+      expect(client.scenarioRequests, hasLength(1));
+      final request = client.scenarioRequests.single;
+      expect(request['importIds'], ['blazer', 'pants']);
+      expect(request['occasion'], '토요일 모임');
+      expect(request['scheduledAt'], isA<String>());
+      expect(intentStore.pending, isNull);
+      expect(find.text('계획 제안'), findsOneWidget);
+      expect(
+        ((client.board['pendingProposals'] as List).single['plan']
+            as Map)['tasks'],
+        contains(containsPair('title', '옷과 옵션·소유 상태 확인')),
+      );
+    },
+  );
+
+  testWidgets(
+    'fashion confirmation sends manually selected options and ownership',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.contract = {
+        'capabilities': [
+          {'id': 'fashion.confirm_outfit', 'actor': 'user', 'effect': 'none'},
+        ],
+      };
+      client.board = {
+        'id': 'outfit-test',
+        'title': '토요일 모임 코디',
+        'goal': {'description': '토요일 모임에 입을 옷 정하기'},
+        'revision': 2,
+        'lifecycle': 'active',
+        'nextActions': ['confirm_outfit'],
+        'tasks': [
+          {
+            'id': 'confirm_outfit',
+            'title': '옷과 옵션·소유 상태 확인',
+            'revision': 1,
+            'capabilityId': 'fashion.confirm_outfit',
+            'executionStatus': 'not_started',
+            'readiness': {
+              'status': 'ready',
+              'inputs': {
+                'occasion': '토요일 모임',
+                'candidates': [
+                  {
+                    'importId': 'blazer',
+                    'name': '차콜 싱글 재킷',
+                    'mentionId': 'mention-blazer',
+                    'evidenceIds': ['e1'],
+                  },
+                ],
+              },
+              'reasons': <Object?>[],
+            },
+          },
+        ],
+        'pendingChanges': <Object?>[],
+        'pendingProposals': <Object?>[],
+        'results': <Object?>[],
+        'artifacts': <Object?>[],
+        'reminders': <Object?>[],
+      };
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardScreen(
+            client: client,
+            activityId: 'outfit-test',
+            contracts: client.contract,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('kernel-complete-confirm_outfit')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('fashion-slot-blazer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('겉옷').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('fashion-color-blazer')),
+        '차콜',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('fashion-size-blazer')),
+        'M',
+      );
+      await tester.tap(find.byKey(const Key('fashion-confirm-submit')));
+      await tester.pumpAndSettle();
+      final request = client.commands.single;
+      expect(request['activityId'], 'outfit-test');
+      expect(request['expectedRevision'], 2);
+      expect(request['selections'], [
+        {
+          'importId': 'blazer',
+          'slot': 'outerwear',
+          'color': '차콜',
+          'size': 'M',
+          'ownership': 'unknown',
+        },
+      ]);
     },
   );
 

@@ -44,11 +44,14 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/resources/availability` | `{resourceId,timeRange?}`에 대한 가용량·유지 중인 claim 투영 |
 | `POST /v1/kernel/planning/proposals`, `/accept` | 사전 컴파일된 계획 변경안의 저장·재검증·적용 |
 | `POST /v1/kernel/ingestion/reviewed-capture` | 사용자 확인된 기존 분석의 원자적 가져오기 |
-| `POST /v1/kernel/ingestion/reviewed-capture/delete` | `importId`로 확인 캡처의 서버 Source와 연결된 레시피 시나리오를 원자적으로 삭제하거나 가져오기 전에 삭제 의사를 기록 |
+| `POST /v1/kernel/ingestion/reviewed-capture/delete` | `importId`로 확인 캡처의 서버 Source와 연결된 시나리오를 원자적으로 삭제하거나 가져오기 전에 삭제 의사를 기록 |
 | `POST /v1/kernel/recipe/scenarios` | 사용자가 직접 확인한 레시피로 근거 그래프·Activity·승인 대기 계획을 한 트랜잭션에서 생성 |
 | `POST /v1/kernel/dining/scenarios` | 확인해 가져온 식당·카페 캡처, 지역·시각·인원으로 승인 대기 맛집 계획 생성 |
 | `POST /v1/kernel/dining/select-place` | 사용자가 후보 지점을 고르고 캡처 Mention의 장소 신원을 연결한 뒤 선택 작업 완료 |
 | `POST /v1/kernel/dining/visit-outcome` | 사용자가 방문 여부를 기록. `visited`일 때만 출처가 있는 방문 관계 생성 |
+| `POST /v1/kernel/fashion/scenarios` | 확인해 가져온 패션 상품 캡처로 일정별 코디 계획 제안 |
+| `POST /v1/kernel/fashion/confirm-outfit` | 사용자가 코디 슬롯·색상·사이즈·소유 상태를 확인하고 출처가 있는 Outfit 구성 |
+| `POST /v1/kernel/fashion/wear-outcome` | 사용자가 실제 착용을 보고. `worn`일 때만 착용 관계 생성 |
 | `POST /v1/kernel/domains/execute` | 부수 효과가 없는 등록된 분야 계산만 실행 |
 
 AI가 만든 PlanDraft/PlanPatch를 적용할 때는 `/knowledge/context`가 돌려준 `contextId`를 사용한다. 서버는 이 ID에 연결된 readSet, 없던 사실을 감시하는 queryWatches, 검색의 발견 의존성, 자원 조건, 정책·시간 조건과 Activity revision을 다시 검사한다. API가 전달한 임의 `context` 객체는 신뢰하지 않는다. 발급 맥락은 서버 상태에 저장되며 사용 기한은 1시간이다. `/planning/proposals`는 실제 상태를 바꾸지 않는 컴파일 검사를 먼저 하고, `/planning/accept`에서 기준 버전과 맥락을 다시 검사한다. 같은 명령 ID·같은 요청은 재전송해도 한 번만 처리하고, 같은 ID에 다른 내용은 충돌이다.
@@ -154,6 +157,12 @@ Flutter에서 캡처 분석을 명시적으로 확인하면 `/ingestion/reviewed
 `POST /v1/kernel/dining/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importIds`(1~20개), `scheduledAt`, `area`, `partySize`(1~20명)를 받는다. 서버는 식당·카페 자료의 관측 상호·지역·주소로 임시 후보를 만들고 승인 대기 계획을 반환한다. 계획 승인 후 `select_place → review_visit_details → record_visit_outcome`을 수행한다. 두 특수 명령은 활동의 현재 revision, 준비된 작업, 후보 ID를 검사하며 같은 명령 ID 재전송에 안전하다. 선택 명령은 캡처 Mention의 IdentityDecision을 연결하고, 방문 결과 명령은 `visited`일 때만 사용자 보고 출처와 `dining.visited` 관계를 저장한다.
 
 Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 활동을 만들고 원본·지도 검색을 열 수 있다. 지도 검색은 실장소 확정이 아니며, 방문 전 정보는 현재 `unknown`으로만 기록한다. 제공자 지점 대조·근거 기반 비교·예약 확인·부분 근거 삭제 재계획은 아직 연결되지 않았다. 세부 계약과 검증 이미지는 [첫 맛집 시나리오](DINING_FIRST_SCENARIO.md)를 참조한다.
+
+## 첫 패션 시나리오
+
+`POST /v1/kernel/fashion/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 패션 상품으로 확인해 가져온 `importIds`(1~5개), `occasion`, `scheduledAt`을 받는다. 서버는 캡처의 관측 제목·근거와 미해결 상품 Mention을 후보로 두고, `confirm_outfit → record_wear` 계획을 승인 대기로 만든다. 같은 제목의 다른 캡처를 자동 병합하지 않는다.
+
+사용자는 `confirm-outfit`에서 캡처별 코디 슬롯, 실제 선택한 색상·사이즈, `owned/candidate/unknown`을 직접 보낸다. 확인 Source/Evidence와 상품 IdentityDecision, Product/Variant/Outfit Entity, `fashion.variant_of`·`fashion.variant_options`·`fashion.has_item`·확인된 `fashion.ownership` 관계를 원자적으로 저장한다. `unknown`은 소유 Assertion을 만들지 않는다. `wear-outcome`의 `worn`만 사용자 보고 출처와 `fashion.wore_outfit` 관계를 만든다. 캡처가 삭제되면 현재 개발 저장소는 관련 Activity와 파생 확인·착용 출처를 지우고 명령 재전송을 차단한다. 자세한 예시와 이미지 API 검증은 [첫 패션 시나리오](FASHION_FIRST_SCENARIO.md)를 참조한다.
 
 ## 일관성과 현재 경계
 

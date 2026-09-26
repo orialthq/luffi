@@ -8,6 +8,36 @@ import 'package:ori_beauty/data/remote_content_analysis_service.dart';
 import 'package:ori_beauty/domain/models.dart';
 
 void main() {
+  test(
+    'parses both real fashion image-analysis responses without confirming ownership',
+    () {
+      const cases = <String, String>{
+        'a_blazer': '차콜 싱글 재킷',
+        'b_trousers': '베이지 슬랙스',
+      };
+      for (final entry in cases.entries) {
+        final recorded =
+            jsonDecode(
+                  File(
+                    'server/test/fixtures/fashion_${entry.key}_live_analysis.json',
+                  ).readAsStringSync(),
+                )
+                as Map<String, dynamic>;
+        final analysis = StructuredContentAnalysis.fromJson(
+          Map<String, Object?>.from(recorded),
+        );
+        expect(analysis.contentKind, ContentKind.commerceProduct);
+        expect(analysis.title.value, entry.value);
+        expect(
+          analysis.tags.any(
+            (tag) => tag.facet == TagFacet.kind && tag.value == '패션',
+          ),
+          isTrue,
+        );
+      }
+    },
+  );
+
   test('parses four real image-analysis responses for dining branches', () {
     const cases = <String, (String, String)>{
       'a_seongsu': ('모퉁이식당 성수점', '성수'),

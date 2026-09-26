@@ -293,12 +293,39 @@ final class _HomeShellState extends State<HomeShell>
             searchArea: structured.place?.searchArea ?? '',
           ),
     ];
+    final fashionImportOptions = [
+      for (final imported in widget.controller.syncedReviewedCaptureImports)
+        if (widget.controller
+                .captureById(imported.captureId)
+                ?.analysis
+                ?.structuredContent
+            case final structured?
+            when structured.contentKind == ContentKind.commerceProduct &&
+                structured.title.value?.trim().isNotEmpty == true &&
+                structured.tags.any(
+                  (tag) => tag.facet == TagFacet.kind && tag.value == '패션',
+                ))
+          FashionImportOption(
+            importId: imported.importId,
+            title: imported.title,
+          ),
+    ];
     Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => CommonBoardsScreen(
           importOptions: importOptions,
           diningImportOptions: diningImportOptions,
+          fashionImportOptions: fashionImportOptions,
           onOpenDiningImport: (importId) {
+            for (final imported
+                in widget.controller.syncedReviewedCaptureImports) {
+              if (imported.importId != importId) continue;
+              final capture = widget.controller.captureById(imported.captureId);
+              if (capture != null) _openCapture(capture);
+              return;
+            }
+          },
+          onOpenFashionImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;
