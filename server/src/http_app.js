@@ -26,6 +26,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/planning/review-successors": "createReviewSuccessor",
   "/planning/accept": "acceptProposal",
   "/recipe/scenarios": "createRecipeScenario",
+  "/recipe/corrections": "correctRecipe",
   "/dining/scenarios": "createDiningScenario",
   "/dining/select-place": "selectDiningPlace",
   "/dining/visit-outcome": "recordDiningVisitOutcome",
@@ -65,7 +66,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
-  "getEditableCaptureFields"];
+  "getEditableCaptureFields", "getEditableRecipe"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -192,6 +193,15 @@ export function createHttpServer({
           return sendJson(response, 200, await kernelService.listScenarioConnections(activityId));
         }
         const fieldReviewMatch = /^\/ingestion\/field-reviews\/([^/]+)$/.exec(route);
+        const editableRecipeMatch = /^\/recipe\/editable\/([^/]+)$/.exec(route);
+        if (editableRecipeMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableRecipeMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableRecipe(activityId));
+        }
         const editableFieldsMatch = /^\/ingestion\/editable-fields\/([^/]+)$/.exec(route);
         if (editableFieldsMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");

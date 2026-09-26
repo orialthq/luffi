@@ -11,6 +11,7 @@ import 'life_tip_scenario_dialogs.dart';
 import 'shopping_scenario_dialogs.dart';
 import 'health_scenario_dialogs.dart';
 import 'scenario_connections_section.dart';
+import 'recipe_correction_screen.dart';
 
 bool _connectionKindsVisible(KernelJson board) => const {
   'recipe',
@@ -2280,6 +2281,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openRecipeEditor() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => RecipeCorrectionScreen(
+          client: widget.client,
+          activityId: widget.activityId,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3513,6 +3526,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 Text(
                   '재료 · ${_text(ingredient['name'])} ${_quantity(ingredient['quantity'])}',
                 ),
+              for (final step in _objects(recipe['steps']))
+                Text('조리 ${step['order']} · ${_text(step['instruction'])}'),
             ],
             for (final task in tasks)
               Text(
@@ -3579,6 +3594,13 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           key: const Key('kernel-goal'),
           style: Theme.of(context).textTheme.titleMedium,
         ),
+        if (board['scenario'] == 'recipe')
+          OutlinedButton.icon(
+            key: const Key('kernel-open-recipe-correction'),
+            onPressed: _busy || _needsRefresh ? null : _openRecipeEditor,
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('레시피 재료·순서 정정'),
+          ),
         if (board['continuedFrom'] is String)
           TextButton(
             onPressed: () =>
@@ -4814,12 +4836,16 @@ final class _RecipeInputs extends StatelessWidget {
               Text(
                 '• ${_text(ingredient['name'], '재료')} ${_quantity(ingredient['quantity'])}',
               ),
+            for (final step in _objects(recipe['steps']))
+              Text('${step['order']}. ${_text(step['instruction'])}'),
           ] else if (capabilityId == 'recipe.check_inventory') ...[
             const Text('보유 수량을 확인할 재료'),
             for (final id in ingredientIds)
               Text('• ${_text(ingredients[id]?['name'], id)}'),
           ] else if (capabilityId == 'recipe.cook') ...[
             Text('요리할 분량: ${input['targetServings']}인분'),
+            for (final step in _objects(input['steps']))
+              Text('${step['order']}. ${_text(step['instruction'])}'),
             const Text('완료 기록은 실제 요리 여부만 남기며 재고를 자동으로 차감하지 않아요.'),
           ] else if (input.isEmpty)
             const Text('앞선 작업 결과를 기다리고 있어요.'),

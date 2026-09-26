@@ -48,6 +48,7 @@ export function createCommonKernelState() {
     fieldReviews: {},
     fieldReviewReceipts: {},
     fieldCorrectionReceipts: {},
+    recipeCorrectionReceipts: {},
     recipeScenarioReceipts: {},
     diningScenarioReceipts: {},
     diningCommandReceipts: {},
@@ -781,6 +782,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         receipt.result = { importId: receipt.importId, path: receipt.path };
       }
     }
+    for (const receipt of Object.values(state.recipeCorrectionReceipts ?? {})) {
+      if (receipt.ownerId === ownerId && receipt.importedSourceId === sourceId) {
+        receipt.deleted = true;
+        receipt.result = { activityId: receipt.activityId };
+      }
+    }
   }
 
   function purgeIssuedContextsFromSource(state, sourceId) {
@@ -865,7 +872,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "field_review" &&
           item.provenance.importedSourceId === source.id) ||
           (item.provenance?.scenario === "field_correction" &&
+          item.provenance.importedSourceId === source.id) ||
+          (item.provenance?.scenario === "recipe_correction" &&
           item.provenance.importedSourceId === source.id))).map((item) => item.id) : [];
+    const linkedRecipeCorrections = source?.provenance?.scenario === "recipe"
+      ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
+        item.status === "active" && item.provenance?.scenario === "recipe_correction" &&
+        item.provenance.confirmationSourceId === source.id).map((item) => item.id)
+      : [];
     const linkedFashionSources = state.knowledge.sources.filter((item) =>
       item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
       item.provenance?.scenario === "fashion" &&
@@ -902,12 +916,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       healthActivityIds.has(item.provenance.activityId) &&
       (item.kind === "user_confirmation" || item.kind === "user_report"))
       .map((item) => item.id);
-    return { source, linkedConfirmations, linkedFashionSources, linkedBeautySources,
+    return { source, linkedConfirmations, linkedRecipeCorrections,
+      linkedFashionSources, linkedBeautySources,
       linkedTravelSources, linkedLifeTipSources, linkedShoppingSources,
       linkedHealthSources };
   }
 
-  function finishSourceDeletion(state, { source, linkedConfirmations, linkedFashionSources,
+  function finishSourceDeletion(state, { source, linkedConfirmations, linkedRecipeCorrections,
+    linkedFashionSources,
     linkedBeautySources, linkedTravelSources, linkedLifeTipSources,
     linkedShoppingSources, linkedHealthSources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
@@ -934,6 +950,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         }
       }
     }
+    if (source?.provenance?.scenario === "recipe_correction") {
+      for (const receipt of Object.values(state.recipeCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
     for (const connection of Object.values(state.scenarioConnections ?? {})) {
       if (connection.ownerId === ownerId && connection.sourceId === source?.id) {
         connection.deleted = true;
@@ -942,6 +966,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
+    }
+    for (const sourceId of linkedRecipeCorrections ?? []) {
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      for (const receipt of Object.values(state.recipeCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
     }
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "fashion") {
       redactFashionScenario(state, source.id, source.provenance.activityId);
@@ -1198,6 +1235,77 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         item.ownerId === ownerId && item.id === current.supersedesId) : null;
     }
     return revision;
+  }
+
+  function editableRecipeGraph(state, activityId) {
+    board(state, activityId);
+    const receipt = Object.values(state.recipeScenarioReceipts ?? {}).find((item) =>
+      !item.deleted && item.result?.activityId === activityId);
+    if (!receipt) throw new AppError("NOT_FOUND", "레시피 활동을 찾지 못했어요.",
+      { httpStatus: 404 });
+    const confirmationSourceId = receipt.result.confirmationSourceId;
+    const source = state.knowledge.sources.find((item) =>
+      item.ownerId === ownerId && item.id === confirmationSourceId && item.status === "active");
+    const originalEvidence = state.knowledge.evidence.find((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      state.knowledge.sourceVersions.some((version) => version.ownerId === ownerId &&
+        version.sourceId === confirmationSourceId && version.id === item.sourceVersionId &&
+        version.status === "active"));
+    if (!source || !originalEvidence) throw new AppError("CONTEXT_STALE",
+      "확인한 레시피 원본 근거가 없어요.", { httpStatus: 409 });
+    const scope = { type: "activity", id: activityId };
+    const active = (predicate) => state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.predicate === predicate && item.scope?.type === scope.type &&
+      item.scope.id === scope.id);
+    const confirmed = active("recipe.confirmed_recipe").filter((item) =>
+      item.subjectId === receipt.result.recipeEntityId &&
+      item.typedValue?.type === "recipe.recipe");
+    if (confirmed.length !== 1) throw new AppError("RECIPE_GRAPH_CONFLICT",
+      "확인한 레시피 값이 여러 개이거나 없어요.", { httpStatus: 409 });
+    const recipe = confirmed[0].typedValue.value;
+    const requirements = active("recipe.requirement_value");
+    const hasRequirements = active("recipe.has_requirement");
+    const requiresIngredients = active("recipe.requires_ingredient");
+    const steps = active("recipe.step_value");
+    const hasSteps = active("recipe.has_step");
+    if (requirements.length !== recipe.ingredients.length ||
+        hasRequirements.length !== requirements.length ||
+        requiresIngredients.length !== requirements.length ||
+        steps.length !== (recipe.steps?.length ?? 0) ||
+        hasSteps.length !== steps.length) {
+      throw new AppError("RECIPE_GRAPH_CONFLICT",
+        "레시피 본문과 재료·조리 단계의 연결 수가 달라요.", { httpStatus: 409 });
+    }
+    const ingredientLines = new Map();
+    for (const item of recipe.ingredients) {
+      const values = requirements.filter((entry) => entry.typedValue?.value?.id === item.id);
+      const value = values[0];
+      const has = hasRequirements.find((entry) => entry.objectEntityId === value?.subjectId &&
+        entry.subjectId === receipt.result.recipeEntityId);
+      const requires = requiresIngredients.find((entry) => entry.subjectId === value?.subjectId);
+      if (values.length !== 1 || !has || !requires ||
+          requestFingerprint(value.typedValue.value) !== requestFingerprint(item)) {
+        throw new AppError("RECIPE_GRAPH_CONFLICT",
+          "레시피 본문과 재료 값이 서로 달라요.", { httpStatus: 409 });
+      }
+      ingredientLines.set(item.id, { value, has, requires });
+    }
+    const stepLines = new Map();
+    for (const [index, step] of (recipe.steps ?? []).entries()) {
+      const values = steps.filter((entry) => entry.typedValue?.value?.id === step.id);
+      const value = values[0];
+      const has = hasSteps.find((entry) => entry.objectEntityId === value?.subjectId &&
+        entry.subjectId === receipt.result.recipeEntityId);
+      if (values.length !== 1 || !has || step.order !== index + 1 ||
+          requestFingerprint(value.typedValue.value) !== requestFingerprint(step)) {
+        throw new AppError("RECIPE_GRAPH_CONFLICT",
+          "레시피 본문과 조리 단계가 서로 달라요.", { httpStatus: 409 });
+      }
+      stepLines.set(step.id, { value, has });
+    }
+    return { receipt, recipe, confirmed: confirmed[0], source, originalEvidence,
+      ingredientLines, stepLines, scope };
   }
 
   function diningCandidates(state, importIds, area) {
@@ -1749,6 +1857,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           "레시피 본문과 재료 항목 수가 달라요. 함께 확인해 주세요.",
           { httpStatus: 409 });
       }
+      const activeRecipeLinks = (predicate) => state.knowledge.assertions.filter((item) =>
+        item.ownerId === ownerId && item.status === "active" &&
+        item.predicate === predicate && item.scope?.type === "activity" &&
+        item.scope.id === activityId);
+      if (activeRecipeLinks("recipe.has_requirement").length !== recipe.ingredients.length ||
+          activeRecipeLinks("recipe.requires_ingredient").length !== recipe.ingredients.length) {
+        throw new AppError("RECIPE_GRAPH_CONFLICT",
+          "레시피 재료 연결 수가 본문과 달라요. 함께 확인해 주세요.", { httpStatus: 409 });
+      }
       for (const ingredient of recipe.ingredients) {
         const requirement = requirementAssertions.find((item) =>
           item.typedValue?.value?.id === ingredient.id);
@@ -1768,6 +1885,33 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             requestFingerprint(requirement.typedValue.value) !== requestFingerprint(ingredient)) {
           throw new AppError("RECIPE_GRAPH_CONFLICT",
             "레시피 본문과 재료 근거가 서로 달라요. 둘을 함께 확인해 주세요.",
+            { httpStatus: 409 });
+        }
+      }
+      const stepAssertions = state.knowledge.assertions.filter((item) =>
+        item.ownerId === ownerId && item.status === "active" &&
+        item.predicate === "recipe.step_value" &&
+        item.scope?.type === "activity" && item.scope.id === activityId);
+      if (stepAssertions.length !== (recipe.steps?.length ?? 0)) {
+        throw new AppError("RECIPE_GRAPH_CONFLICT",
+          "레시피 본문과 조리 단계 수가 달라요. 함께 확인해 주세요.", { httpStatus: 409 });
+      }
+      if (activeRecipeLinks("recipe.has_step").length !== stepAssertions.length) {
+        throw new AppError("RECIPE_GRAPH_CONFLICT",
+          "레시피 조리 단계 연결 수가 본문과 달라요. 함께 확인해 주세요.", { httpStatus: 409 });
+      }
+      for (const [index, step] of (recipe.steps ?? []).entries()) {
+        const value = stepAssertions.find((item) => item.typedValue?.value?.id === step.id);
+        const hasStep = state.knowledge.assertions.some((item) =>
+          item.ownerId === ownerId && item.status === "active" &&
+          item.subjectId === receipt.result.recipeEntityId &&
+          item.predicate === "recipe.has_step" &&
+          item.objectEntityId === value?.subjectId &&
+          item.scope?.type === "activity" && item.scope.id === activityId);
+        if (!value || !hasStep || step.order !== index + 1 ||
+            requestFingerprint(value.typedValue.value) !== requestFingerprint(step)) {
+          throw new AppError("RECIPE_GRAPH_CONFLICT",
+            "레시피 본문과 조리 순서가 서로 달라요. 함께 확인해 주세요.",
             { httpStatus: 409 });
         }
       }
@@ -2177,6 +2321,227 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, proposalId, revision: current.revision,
             planKind: planned.kind, affectedTasks: planned.affectedTasks };
           state.reviewProposalReceipts[receiptKey] = { ownerId, hash, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async getEditableRecipe(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => {
+          const graph = editableRecipeGraph(state, activityId);
+          const original = state.knowledge.sourceVersions.find((item) =>
+            item.ownerId === ownerId && item.sourceId === graph.source.id &&
+            item.status === "active")?.content?.recipe;
+          const importId = Object.values(state.importReceipts).find((item) =>
+            item.ownerId === ownerId && !item.deleted &&
+            item.sourceId === graph.source.provenance?.importedSourceId)?.importId ?? null;
+          return { activityId, assertionId: graph.confirmed.id,
+            recipe: graph.recipe, originalRecipe: original ?? null, importId };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctRecipe(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedAssertionId", "recipe", "confirmed"].includes(key)) ||
+          input.confirmed !== true) {
+          throw new AppError("INVALID_REQUEST", "레시피 정정 형식이 올바르지 않아요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const expectedAssertionId = safeId(input.expectedAssertionId, "expectedAssertionId");
+        const rawRecipe = requestObject(input.recipe);
+        if (Object.keys(rawRecipe).some((key) => !["title", "baseServings", "ingredients",
+          "steps"].includes(key)) || typeof rawRecipe.title !== "string" ||
+          !rawRecipe.title.trim() || rawRecipe.title.trim().length > 200 ||
+          !Number.isSafeInteger(rawRecipe.baseServings) || rawRecipe.baseServings < 1 ||
+          rawRecipe.baseServings > 50 || !Array.isArray(rawRecipe.ingredients) ||
+          rawRecipe.ingredients.length < 1 || rawRecipe.ingredients.length > 25 ||
+          !Array.isArray(rawRecipe.steps ?? []) || (rawRecipe.steps ?? []).length > 30 ||
+          rawRecipe.ingredients.some((item) => !item || typeof item !== "object" ||
+            typeof item.id !== "string" || !item.id.trim() || item.id.length > 512 ||
+            typeof item.ingredientId !== "string" || !item.ingredientId.trim() ||
+            item.ingredientId.length > 512 || typeof item.name !== "string" ||
+            !item.name.trim() || item.name.length > 100) ||
+          (rawRecipe.steps ?? []).some((item) => !item || typeof item !== "object" ||
+            typeof item.id !== "string" || !item.id.trim() || item.id.length > 512 ||
+            typeof item.instruction !== "string" || !item.instruction.trim() ||
+            item.instruction.length > 1000)) {
+          throw new AppError("INVALID_REQUEST", "레시피 크기나 재료·단계를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const hash = requestFingerprint({ activityId, expectedAssertionId, recipe: rawRecipe });
+        return await store.transact((state) => {
+          assertState(state);
+          state.recipeCorrectionReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const prior = state.recipeCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 레시피 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 레시피 정정은 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const graph = editableRecipeGraph(state, activityId);
+          if (graph.confirmed.id !== expectedAssertionId) {
+            throw new AppError("RECIPE_REVISION_CONFLICT", "다른 레시피 정정이 먼저 반영됐어요.",
+              { httpStatus: 409 });
+          }
+          const recipe = { id: graph.recipe.id, revision: graph.recipe.revision + 1,
+            title: rawRecipe.title.trim(), baseServings: rawRecipe.baseServings,
+            ingredients: rawRecipe.ingredients.map((item, index) => ({ ...item,
+              name: item.name.trim(), order: index + 1 })),
+            ...(rawRecipe.steps?.length ? { steps: rawRecipe.steps.map((item, index) => ({
+              ...item, instruction: item.instruction.trim(), order: index + 1 })) } : {}) };
+          registry.validate("recipe.recipe", recipe);
+          if (new Set(recipe.ingredients.map((item) => item.id)).size !== recipe.ingredients.length ||
+              new Set((recipe.steps ?? []).map((item) => item.id)).size !== (recipe.steps?.length ?? 0)) {
+            throw new AppError("INVALID_REQUEST", "재료·단계 ID가 중복됐어요.", { httpStatus: 400 });
+          }
+          const semanticRecipe = (value) => ({ title: value.title,
+            baseServings: value.baseServings,
+            ingredients: value.ingredients.map((item) => ({ id: item.id,
+              ingredientId: item.ingredientId, name: item.name, quantity: item.quantity,
+              scaling: item.scaling, optional: item.optional === true })),
+            steps: (value.steps ?? []).map((item) => ({ id: item.id,
+              instruction: item.instruction })) });
+          if (requestFingerprint(semanticRecipe(recipe)) ===
+              requestFingerprint(semanticRecipe(graph.recipe))) {
+            throw new AppError("UNCHANGED_RECIPE", "변경된 레시피 내용이 없어요.",
+              { httpStatus: 409 });
+          }
+          const current = board(state, activityId);
+          const originalPlan = current.currentPlanRevision === 0
+            ? Object.values(state.proposals).find((item) => item.ownerId === ownerId &&
+              item.activityId === activityId && item.kind === "draft")?.plan : current;
+          const scale = originalPlan?.tasks?.find((item) => item.id === "scale_servings");
+          const requirements = originalPlan?.tasks?.find((item) => item.id === "calculate_requirements");
+          if (!scale || !requirements) throw new AppError("REPLAN_UNAVAILABLE",
+            "레시피 계획 입력을 찾지 못했어요.", { httpStatus: 409 });
+          buildRecipePlanDraft({ confirmed: true, recipe,
+            targetServings: scale.inputBindings.targetServings,
+            inventory: requirements.inputBindings.inventory ?? [],
+            includeOptionalIngredientIds: requirements.inputBindings.includeOptionalIngredientIds ?? [],
+            collectInventory: originalPlan.tasks.some((item) => item.id === "check_inventory"),
+            includeCookTask: originalPlan.tasks.some((item) => item.id === "cook") }, { registry });
+          const stem = `recipe-correction:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const evidenceId = `${stem}:evidence`;
+          const now = new Date().toISOString();
+          const importedSourceId = graph.source.provenance?.importedSourceId ?? null;
+          const before = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 정정한 레시피", provenance: { scenario: "recipe_correction",
+              activityId, confirmationSourceId: graph.source.id,
+              ...(importedSourceId ? { importedSourceId } : {}) } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(recipe), content: { recipe,
+              previousAssertionId: graph.confirmed.id }, capturedAt: now });
+          apply("evidence", "evidence.add", { id: evidenceId,
+            sourceVersionId: versionId, quote: recipe.title,
+            locator: { kind: "user_confirmation", jsonPointer: "/recipe" } });
+          const evidenceIds = [graph.originalEvidence.id, evidenceId];
+          const writeAssertion = (role, previous, subjectId, predicate, value,
+            valueType = null) => {
+            const assertion = { id: `${stem}:${role}`, subjectId, predicate,
+              scope: graph.scope, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId }, evidenceIds,
+              supportSets: [evidenceIds], observedAt: now,
+              ...(valueType ? { typedValue: { type: valueType, value } } :
+                { objectEntityId: value }) };
+            if (previous) apply(role, "assertion.correct", {
+              assertionId: previous.id, expectedRevision: previous.revision, assertion });
+            else apply(role, "assertion.add", assertion);
+          };
+          const retract = (role, assertion) => apply(role, "assertion.retract", {
+            assertionId: assertion.id, expectedRevision: assertion.revision });
+          writeAssertion("confirmed", graph.confirmed, graph.confirmed.subjectId,
+            "recipe.confirmed_recipe", recipe, "recipe.recipe");
+          const ingredientEntities = new Map();
+          for (const item of graph.recipe.ingredients) {
+            ingredientEntities.set(item.ingredientId,
+              graph.ingredientLines.get(item.id).requires.objectEntityId);
+          }
+          const ingredientEntity = (item) => {
+            if (ingredientEntities.has(item.ingredientId)) return ingredientEntities.get(item.ingredientId);
+            const id = `${stem}:ingredient:${fingerprint(item.ingredientId).slice(0,16)}`;
+            apply(`ingredient:${fingerprint(item.ingredientId).slice(0,16)}`, "entity.create",
+              { id, type: "recipe.ingredient", label: "재료" });
+            ingredientEntities.set(item.ingredientId, id);
+            return id;
+          };
+          for (const [id, line] of graph.ingredientLines) {
+            if (recipe.ingredients.some((item) => item.id === id)) continue;
+            const role = fingerprint(id).slice(0,16);
+            retract(`remove-has:${role}`, line.has);
+            retract(`remove-requires:${role}`, line.requires);
+            retract(`remove-value:${role}`, line.value);
+          }
+          for (const item of recipe.ingredients) {
+            const role = fingerprint(item.id).slice(0,16);
+            const existing = graph.ingredientLines.get(item.id);
+            if (existing) {
+              if (existing.requires.objectEntityId !== ingredientEntity(item)) {
+                writeAssertion(`requires:${role}`, existing.requires, existing.value.subjectId,
+                  "recipe.requires_ingredient", ingredientEntity(item));
+              }
+              if (requestFingerprint(existing.value.typedValue.value) !== requestFingerprint(item)) {
+                writeAssertion(`value:${role}`, existing.value, existing.value.subjectId,
+                  "recipe.requirement_value", item, "recipe.ingredient_requirement");
+              }
+            } else {
+              const requirementId = `${stem}:requirement:${role}`;
+              apply(`requirement:${role}`, "entity.create", { id: requirementId,
+                type: "recipe.ingredient_requirement", label: "재료 항목" });
+              writeAssertion(`has:${role}`, null, graph.confirmed.subjectId,
+                "recipe.has_requirement", requirementId);
+              writeAssertion(`requires:${role}`, null, requirementId,
+                "recipe.requires_ingredient", ingredientEntity(item));
+              writeAssertion(`value:${role}`, null, requirementId,
+                "recipe.requirement_value", item, "recipe.ingredient_requirement");
+            }
+          }
+          for (const [id, line] of graph.stepLines) {
+            if (recipe.steps?.some((step) => step.id === id)) continue;
+            const role = fingerprint(id).slice(0,16);
+            retract(`remove-step-has:${role}`, line.has);
+            retract(`remove-step-value:${role}`, line.value);
+          }
+          for (const step of recipe.steps ?? []) {
+            const role = fingerprint(step.id).slice(0,16);
+            const existing = graph.stepLines.get(step.id);
+            if (existing) {
+              if (requestFingerprint(existing.value.typedValue.value) !== requestFingerprint(step)) {
+                writeAssertion(`step-value:${role}`, existing.value, existing.value.subjectId,
+                  "recipe.step_value", step, "recipe.step_value");
+              }
+            } else {
+              const stepId = `${stem}:step:${role}`;
+              apply(`step:${role}`, "entity.create", { id: stepId, type: "recipe.step",
+                label: "조리 단계" });
+              writeAssertion(`has-step:${role}`, null, graph.confirmed.subjectId,
+                "recipe.has_step", stepId);
+              writeAssertion(`step-value:${role}`, null, stepId,
+                "recipe.step_value", step, "recipe.step_value");
+            }
+          }
+          recoveryDraft(state, activityId, current);
+          recordAffectedConsumers(state, before);
+          const result = { activityId, assertionId: `${stem}:confirmed`,
+            revision: recipe.revision, sourceId, knowledgeSequence: state.knowledge.sequence };
+          state.recipeCorrectionReceipts[key] = { ownerId, activityId, sourceId,
+            importedSourceId, hash, result };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -3071,6 +3436,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             assertion(`requires:${item.id}`, requirementId, "recipe.requires_ingredient", ingredientEntityId);
             assertion(`value:${item.id}`, requirementId, "recipe.requirement_value", item,
               "recipe.ingredient_requirement");
+          }
+          for (const step of recipe.steps ?? []) {
+            const stepId = `${stem}:step:${fingerprint(step.id).slice(0,16)}`;
+            applyKnowledge(`step:${step.id}`, "entity.create", {
+              id: stepId, type: "recipe.step", label: "조리 단계" });
+            assertion(`has-step:${step.id}`, recipeEntityId, "recipe.has_step", stepId);
+            assertion(`step-value:${step.id}`, stepId, "recipe.step_value", step,
+              "recipe.step_value");
           }
           recordAffectedConsumers(state, beforeSequence);
           const created = applyActivityCommand(state.activities, {

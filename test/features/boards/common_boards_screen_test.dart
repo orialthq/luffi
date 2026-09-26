@@ -186,6 +186,15 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   @override
+  Future<KernelJson> getEditableRecipe(String activityId) async => {
+    'activityId': activityId,
+    'recipe': <String, Object?>{},
+  };
+
+  @override
+  Future<KernelJson> correctRecipe(KernelJson request) async => request;
+
+  @override
   Future<KernelJson> getEditableCaptureFields(String importId) async => {
     'importId': importId,
     'fields': <Object>[],
@@ -1095,6 +1104,16 @@ Future<void> _pump(WidgetTester tester, FakeKernelClient client) async {
 }
 
 void main() {
+  testWidgets('recipe board opens the linked graph correction editor', (
+    tester,
+  ) async {
+    final client = FakeKernelClient()..board['scenario'] = 'recipe';
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('kernel-open-recipe-correction')));
+    await tester.pumpAndSettle();
+    expect(find.text('레시피 정정'), findsOneWidget);
+  });
+
   testWidgets(
     'renders goal, next actions, evidence and pending changes with safe unknown renderer',
     (tester) async {

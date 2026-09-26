@@ -6,6 +6,66 @@ import 'package:ori_beauty/data/common_kernel_client.dart';
 
 void main() {
   test(
+    'recipe correction sends the whole replacement and encoded activity id',
+    () async {
+      final requests = <String>[];
+      final bodies = <Map<String, dynamic>>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        requests.add('${request.method} ${request.uri}');
+        if (request.method == 'POST') {
+          bodies.add(
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>,
+          );
+        } else {
+          await request.drain<void>();
+        }
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode(
+            request.method == 'GET'
+                ? {
+                    'activityId': 'meal/a',
+                    'assertionId': 'confirmed-1',
+                    'recipe': <String, Object?>{},
+                  }
+                : {'activityId': 'meal/a', 'revision': 2},
+          ),
+        );
+        await request.response.close();
+      });
+      final client = HttpCommonKernelClient(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        token: 'development-token',
+      );
+      expect(
+        (await client.getEditableRecipe('meal/a'))['assertionId'],
+        'confirmed-1',
+      );
+      final correction = <String, Object?>{
+        'commandId': 'recipe-fix-1',
+        'activityId': 'meal/a',
+        'expectedAssertionId': 'confirmed-1',
+        'recipe': <String, Object?>{
+          'title': '수정한 요리',
+          'baseServings': 2,
+          'ingredients': <Object>[],
+          'steps': <Object>[],
+        },
+        'confirmed': true,
+      };
+      expect((await client.correctRecipe(correction))['revision'], 2);
+      expect(requests, [
+        'GET /v1/kernel/recipe/editable/meal%2Fa',
+        'POST /v1/kernel/recipe/corrections',
+      ]);
+      expect(bodies.single, correction);
+    },
+  );
+
+  test(
     'capture correction uses an encoded import id and sends the confirmed field',
     () async {
       final requests = <String>[];

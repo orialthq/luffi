@@ -4,12 +4,16 @@ import { artifact, capability, relation, slot, valueRelation } from "./shared.js
 const ingredient = object({
   id: text, ingredientId: text, name: text, quantity: ref("core.ingredient_quantity"),
   scaling: enumeration("linear", "fixed"), optional: { type: "boolean" },
+  order: ref("core.positive_number"),
 }, ["id", "ingredientId", "name", "quantity", "scaling"]);
+
+const step = object({ id: text, order: ref("core.positive_number"), instruction: text });
 
 const recipe = object({
   id: text, revision: ref("core.revision"), title: text,
   baseServings: ref("core.positive_number"), ingredients: array(ref("recipe.ingredient_requirement"), 1),
-});
+  steps: array(ref("recipe.step_value"), 1),
+}, ["id", "revision", "title", "baseServings", "ingredients"]);
 const scaled = object({
   recipeId: text, recipeRevision: ref("core.revision"), baseServings: ref("core.positive_number"),
   targetServings: ref("core.positive_number"), ingredients: array(ref("recipe.ingredient_requirement"), 1),
@@ -24,6 +28,16 @@ const requirement = object({
 
 function validateRecipe(input) {
   assertUnique(input.recipe.ingredients, "id", "$.recipe.ingredients");
+  if (input.recipe.ingredients.some((item) => item.order !== undefined) &&
+      input.recipe.ingredients.some((item, index) => item.order !== index + 1)) {
+    fail("ingredient order must match the recipe list", "$.recipe.ingredients");
+  }
+  if (input.recipe.steps) {
+    assertUnique(input.recipe.steps, "id", "$.recipe.steps");
+    if (input.recipe.steps.some((item, index) => item.order !== index + 1)) {
+      fail("step order must match the recipe list", "$.recipe.steps");
+    }
+  }
 }
 
 function rounded(value) {
@@ -99,11 +113,16 @@ export function calculateRecipeRequirements(input) {
 
 export const recipePack = {
   id: "recipe", version: 1, compatibleKernelVersions: [1],
-  entityTypes: ["recipe.recipe", "recipe.ingredient", "recipe.ingredient_requirement", "recipe.inventory_observation"],
+  entityTypes: ["recipe.recipe", "recipe.ingredient", "recipe.ingredient_requirement", "recipe.step", "recipe.inventory_observation"],
   types: [
     { id: "recipe.ingredient", schema: object({ id: text, name: text }) },
     { id: "recipe.ingredient_requirement", schema: ingredient },
-    { id: "recipe.recipe", schema: recipe, validate: (value) => assertUnique(value.ingredients, "id", "$.ingredients") },
+    { id: "recipe.step_value", schema: step },
+    { id: "recipe.step", schema: object({ id: text }) },
+    { id: "recipe.recipe", schema: recipe, validate: (value) => {
+      assertUnique(value.ingredients, "id", "$.ingredients");
+      if (value.steps) assertUnique(value.steps, "id", "$.steps");
+    } },
     { id: "recipe.inventory_observation", schema: inventory },
     { id: "recipe.inventory", schema: array(ref("recipe.inventory_observation")), validate: (value) => assertUnique(value, "ingredientId") },
     { id: "recipe.scale_input", schema: scaleInput },
@@ -111,12 +130,14 @@ export const recipePack = {
     { id: "recipe.requirements_input", schema: object({ ...scaleInput.properties, inventory: ref("recipe.inventory"), includeOptionalIngredientIds: array(text) }, ["recipe", "targetServings", "inventory"]) },
     { id: "recipe.shopping_list", schema: object({ recipeId: text, recipeRevision: ref("core.revision"), targetServings: ref("core.positive_number"), items: array(requirement) }) },
     { id: "recipe.inventory_input", schema: object({ ingredientIds: array(text, 1) }) },
-    { id: "recipe.cook_input", schema: object({ recipeId: text, recipeRevision: ref("core.revision"), targetServings: ref("core.positive_number") }) },
+    { id: "recipe.cook_input", schema: object({ recipeId: text, recipeRevision: ref("core.revision"), targetServings: ref("core.positive_number"), steps: array(ref("recipe.step_value"), 1) }, ["recipeId", "recipeRevision", "targetServings"]) },
     { id: "recipe.cook_result", schema: object({ recipeId: text, completedAt: ref("core.timestamp"), reportedBy: text }) },
   ],
   relations: [
     valueRelation("recipe.confirmed_recipe", ["recipe.recipe"], "recipe.recipe", "explicit_user_observation"),
     valueRelation("recipe.requirement_value", ["recipe.ingredient_requirement"], "recipe.ingredient_requirement", "explicit_user_observation"),
+    relation("recipe.has_step", ["recipe.recipe"], ["recipe.step"]),
+    valueRelation("recipe.step_value", ["recipe.step"], "recipe.step_value", "explicit_user_observation"),
     relation("recipe.has_requirement", ["recipe.recipe"], ["recipe.ingredient_requirement"]),
     relation("recipe.requires_ingredient", ["recipe.ingredient_requirement"], ["recipe.ingredient"], "one"),
     relation("recipe.observes_inventory", ["recipe.inventory_observation"], ["recipe.ingredient"], "one"),

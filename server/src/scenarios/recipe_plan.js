@@ -44,6 +44,7 @@ export function buildRecipePlanDraft(input, { registry = domainRegistry } = {}) 
   registry.validateCapabilityInput("recipe.cook", {
     recipeId: input.recipe.id, recipeRevision: input.recipe.revision,
     targetServings: input.targetServings,
+    ...(input.recipe.steps?.length ? { steps: input.recipe.steps } : {}),
   });
 
   const chosen = new Set(selected);
@@ -79,6 +80,7 @@ export function buildRecipePlanDraft(input, { registry = domainRegistry } = {}) 
     tasks.push(task("cook", "요리 완료 기록", "recipe.cook", {
       recipeId: input.recipe.id, recipeRevision: input.recipe.revision,
       targetServings: input.targetServings,
+      ...(input.recipe.steps?.length ? { steps: structuredClone(input.recipe.steps) } : {}),
     }));
     dependencyLinks.push({ id: "requirements_before_cook",
       fromTaskId: "calculate_requirements", toTaskId: "cook" });
