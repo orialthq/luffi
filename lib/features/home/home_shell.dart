@@ -23,6 +23,7 @@ import '../../state/plan_controller.dart';
 import '../analysis/analysis_review_screen.dart';
 import '../analysis/structured_review_screen.dart';
 import '../boards/common_boards_screen.dart';
+import '../boards/travel_scenario_dialogs.dart';
 import '../inbox/inbox_screen.dart';
 import '../plans/past_plans_screen.dart';
 import '../plans/plan_detail_screen.dart';
@@ -325,6 +326,23 @@ final class _HomeShellState extends State<HomeShell>
             title: structured.title.value!.trim(),
           ),
     ];
+    final travelImportOptions = [
+      for (final imported in widget.controller.syncedReviewedCaptureImports)
+        if (widget.controller
+                .captureById(imported.captureId)
+                ?.analysis
+                ?.structuredContent
+            case final structured?
+            when structured.contentKind == ContentKind.place &&
+                structured.place?.category == PlaceCategory.activity &&
+                structured.place?.name?.trim().isNotEmpty == true &&
+                structured.place?.searchArea?.trim().isNotEmpty == true)
+          TravelImportOption(
+            importId: imported.importId,
+            name: structured.place!.name!.trim(),
+            searchArea: structured.place!.searchArea!.trim(),
+          ),
+    ];
     Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => CommonBoardsScreen(
@@ -332,6 +350,7 @@ final class _HomeShellState extends State<HomeShell>
           diningImportOptions: diningImportOptions,
           fashionImportOptions: fashionImportOptions,
           beautyImportOptions: beautyImportOptions,
+          travelImportOptions: travelImportOptions,
           onOpenDiningImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
@@ -351,6 +370,15 @@ final class _HomeShellState extends State<HomeShell>
             }
           },
           onOpenBeautyImport: (importId) {
+            for (final imported
+                in widget.controller.syncedReviewedCaptureImports) {
+              if (imported.importId != importId) continue;
+              final capture = widget.controller.captureById(imported.captureId);
+              if (capture != null) _openCapture(capture);
+              return;
+            }
+          },
+          onOpenTravelImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;

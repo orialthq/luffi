@@ -162,6 +162,9 @@ export function buildReviewedCaptureImport(input, options = {}) {
   if (analysis.place) {
     for (const key of ["name", "address", "searchArea", "category"]) field(`/place/${key}`, analysis.place[key], analysis.place);
     if (["restaurant", "cafe"].includes(analysis.place.category)) mention("/place/name", analysis.place.name, "dining.place", analysis.place);
+    if (analysis.contentKind === "place" && analysis.place.category === "activity") {
+      mention("/place/name", analysis.place.name, "travel.place", analysis.place);
+    }
   }
   analysis.ingredientGroups.forEach((group, groupIndex) => group.ingredients.forEach((entry, index) => {
     const path = `/ingredientGroups/${groupIndex}/ingredients/${index}`;

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/common_kernel_client.dart';
 import '../../data/place_map_links.dart';
+import 'travel_scenario_dialogs.dart';
 
 KernelJson _object(Object? value) =>
     value is Map ? Map<String, Object?>.from(value) : {};
@@ -82,13 +83,16 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.diningIntentStore,
     this.fashionIntentStore,
     this.beautyIntentStore,
+    this.travelIntentStore,
     this.importOptions = const [],
     this.diningImportOptions = const [],
     this.fashionImportOptions = const [],
     this.beautyImportOptions = const [],
+    this.travelImportOptions = const [],
     this.onOpenDiningImport,
     this.onOpenFashionImport,
     this.onOpenBeautyImport,
+    this.onOpenTravelImport,
     super.key,
   });
   final CommonKernelClient? client;
@@ -96,13 +100,16 @@ final class CommonBoardsScreen extends StatefulWidget {
   final DiningScenarioIntentStore? diningIntentStore;
   final FashionScenarioIntentStore? fashionIntentStore;
   final BeautyScenarioIntentStore? beautyIntentStore;
+  final TravelScenarioIntentStore? travelIntentStore;
   final List<RecipeImportOption> importOptions;
   final List<DiningImportOption> diningImportOptions;
   final List<FashionImportOption> fashionImportOptions;
   final List<BeautyImportOption> beautyImportOptions;
+  final List<TravelImportOption> travelImportOptions;
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
   final void Function(String importId)? onOpenBeautyImport;
+  final void Function(String importId)? onOpenTravelImport;
 
   @override
   State<CommonBoardsScreen> createState() => _CommonBoardsScreenState();
@@ -156,6 +163,8 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       widget.fashionIntentStore ?? const FileFashionScenarioIntentStore();
   late final BeautyScenarioIntentStore _beautyIntentStore =
       widget.beautyIntentStore ?? const FileBeautyScenarioIntentStore();
+  late final TravelScenarioIntentStore _travelIntentStore =
+      widget.travelIntentStore ?? const FileTravelScenarioIntentStore();
   List<KernelJson> _boards = [];
   KernelJson _contracts = {};
   bool _contractsUnavailable = false;
@@ -169,18 +178,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _creatingDining = false;
   bool _creatingFashion = false;
   bool _creatingBeauty = false;
+  bool _creatingTravel = false;
   bool _intentLoading = true;
   bool _diningIntentLoading = true;
   bool _fashionIntentLoading = true;
   bool _beautyIntentLoading = true;
+  bool _travelIntentLoading = true;
   KernelJson? _pendingRecipeIntent;
   KernelJson? _pendingDiningIntent;
   KernelJson? _pendingFashionIntent;
   KernelJson? _pendingBeautyIntent;
+  KernelJson? _pendingTravelIntent;
   Object? _intentError;
   Object? _diningIntentError;
   Object? _fashionIntentError;
   Object? _beautyIntentError;
+  Object? _travelIntentError;
   int _loadGeneration = 0;
 
   @override
@@ -191,6 +204,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     unawaited(_loadDiningIntent());
     unawaited(_loadFashionIntent());
     unawaited(_loadBeautyIntent());
+    unawaited(_loadTravelIntent());
+  }
+
+  Future<void> _loadTravelIntent() async {
+    setState(() {
+      _travelIntentLoading = true;
+      _travelIntentError = null;
+    });
+    try {
+      final pending = await _travelIntentStore.load();
+      if (mounted) setState(() => _pendingTravelIntent = pending);
+    } catch (error) {
+      if (mounted) setState(() => _travelIntentError = error);
+    } finally {
+      if (mounted) setState(() => _travelIntentLoading = false);
+    }
   }
 
   Future<void> _loadBeautyIntent() async {
@@ -328,6 +357,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
           onOpenDiningImport: widget.onOpenDiningImport,
           onOpenFashionImport: widget.onOpenFashionImport,
           onOpenBeautyImport: widget.onOpenBeautyImport,
+          onOpenTravelImport: widget.onOpenTravelImport,
         ),
       ),
     );
@@ -746,6 +776,124 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
         setState(() {
           _pendingBeautyIntent = null;
           _beautyIntentError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    }
+  }
+
+  Future<void> _createReviewedTravel() async {
+    final draft = await showDialog<KernelJson>(
+      context: context,
+      builder: (_) => TravelScenarioDialog(options: widget.travelImportOptions),
+    );
+    if (draft == null ||
+        !mounted ||
+        _pendingTravelIntent != null ||
+        _travelIntentLoading ||
+        _travelIntentError != null) {
+      return;
+    }
+    setState(() => _creatingTravel = true);
+    try {
+      final request = <String, Object?>{
+        'commandId': newKernelCommandId(),
+        'activityId': 'travel-${newKernelCommandId()}',
+        'confirmed': true,
+        ...draft,
+      };
+      await _travelIntentStore.save(request);
+      if (mounted) setState(() => _pendingTravelIntent = request);
+      await _sendTravelIntent(request);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingTravel = false);
+    }
+  }
+
+  Future<void> _retryTravelIntent() async {
+    final pending = _pendingTravelIntent;
+    if (pending == null || _creatingTravel) return;
+    setState(() => _creatingTravel = true);
+    try {
+      await _sendTravelIntent(pending);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingTravel = false);
+    }
+  }
+
+  Future<void> _sendTravelIntent(KernelJson request) async {
+    KernelJson result;
+    try {
+      result = await _client.createTravelScenario(request);
+    } on CommonKernelException catch (error) {
+      if (const {
+        'INVALID_REQUEST',
+        'INVALID_DOMAIN_VALUE',
+        'IMPORT_NOT_FOUND',
+        'IMPORT_NOT_TRAVEL',
+        'SCENARIO_DELETED',
+      }.contains(error.code)) {
+        await _travelIntentStore.clear();
+        if (mounted) setState(() => _pendingTravelIntent = null);
+      }
+      rethrow;
+    }
+    final activityId = result['activityId'];
+    if (activityId is! String || activityId != request['activityId']) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '만든 여행 활동의 ID를 확인할 수 없어요. 같은 요청으로 다시 확인해 주세요.',
+      );
+    }
+    await _travelIntentStore.clear();
+    if (mounted) {
+      setState(() => _pendingTravelIntent = null);
+      await _open(activityId);
+    }
+  }
+
+  Future<void> _discardTravelIntent() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이전 여행 활동 요청 지우기'),
+        content: const Text('서버에 활동이 이미 만들어졌을 수 있어요. 목록을 확인한 뒤 지워 주세요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('요청 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _travelIntentStore.clear();
+      if (mounted) {
+        setState(() {
+          _pendingTravelIntent = null;
+          _travelIntentError = null;
         });
       }
     } catch (error) {
@@ -1195,6 +1343,72 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
                     message: '저장된 뷰티 활동 요청을 읽지 못했어요.',
                     onRefresh: _loadBeautyIntent,
                   ),
+                if (widget.travelImportOptions.isNotEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '첫 여행 시나리오',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '저장한 관광 장소로 하루 방문 순서와 시각을 정하고, 실제 방문한 곳만 기록해요.',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            key: const Key('kernel-create-travel'),
+                            onPressed:
+                                _creatingTravel ||
+                                    _travelIntentLoading ||
+                                    _travelIntentError != null ||
+                                    _pendingTravelIntent != null
+                                ? null
+                                : _createReviewedTravel,
+                            icon: const Icon(Icons.route_outlined),
+                            label: Text(
+                              _creatingTravel ? '만드는 중' : '저장한 장소로 시작',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_pendingTravelIntent != null)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('완료 여부를 확인할 여행 활동 요청이 있어요.'),
+                          const Text('같은 요청 ID로 재전송하면 중복 생성되지 않아요.'),
+                          FilledButton(
+                            key: const Key('kernel-retry-travel-create'),
+                            onPressed: _creatingTravel
+                                ? null
+                                : _retryTravelIntent,
+                            child: const Text('이전 생성 이어하기'),
+                          ),
+                          TextButton(
+                            key: const Key('kernel-discard-travel-create'),
+                            onPressed: _creatingTravel
+                                ? null
+                                : _discardTravelIntent,
+                            child: const Text('이전 요청 지우기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_travelIntentError != null)
+                  _ErrorPanel(
+                    message: '저장된 여행 활동 요청을 읽지 못했어요.',
+                    onRefresh: _loadTravelIntent,
+                  ),
                 if (_pendingRecipeIntent != null)
                   Card(
                     child: Padding(
@@ -1296,6 +1510,7 @@ final class CommonBoardScreen extends StatefulWidget {
     this.onOpenDiningImport,
     this.onOpenFashionImport,
     this.onOpenBeautyImport,
+    this.onOpenTravelImport,
     super.key,
   });
   final CommonKernelClient client;
@@ -1304,6 +1519,7 @@ final class CommonBoardScreen extends StatefulWidget {
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
   final void Function(String importId)? onOpenBeautyImport;
+  final void Function(String importId)? onOpenTravelImport;
 
   @override
   State<CommonBoardScreen> createState() => _CommonBoardScreenState();
@@ -1474,7 +1690,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     ).where((item) => item['id'] == candidateId).firstOrNull;
   }
 
-  Future<void> _openDiningMap(KernelJson candidate) async {
+  Future<void> _openPlaceMap(KernelJson candidate) async {
     final links = PlaceMapLinks.fromPlace(
       name: _text(candidate['name']),
       searchArea: _text(candidate['searchArea']),
@@ -1501,6 +1717,45 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
 
   Future<void> _complete(KernelJson task) async {
     final capabilityId = _text(task['capabilityId']);
+    if (capabilityId == 'travel.confirm_itinerary') {
+      final inputs = _object(_taskInputs(task));
+      final selections = await showDialog<List<KernelJson>>(
+        context: context,
+        builder: (_) => TravelConfirmDialog(
+          candidates: _objects(inputs['candidates']),
+          startAt: _text(inputs['startAt']),
+          onOpenImport: widget.onOpenTravelImport,
+        ),
+      );
+      if (selections == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.confirmTravelItinerary({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'selections': selections,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'travel.record_stop_outcomes') {
+      final itinerary = _object(_object(_taskInputs(task))['itinerary']);
+      final stops = await showDialog<List<KernelJson>>(
+        context: context,
+        builder: (_) =>
+            TravelOutcomeDialog(stops: _objects(itinerary['stops'])),
+      );
+      if (stops == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordTravelStopOutcomes({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'stops': stops,
+        });
+      });
+      return;
+    }
     if (capabilityId == 'beauty.confirm_routine') {
       final selections = await showDialog<List<KernelJson>>(
         context: context,
@@ -1685,6 +1940,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final isDining = _text(task['capabilityId']).startsWith('dining.');
     final isFashion = _text(task['capabilityId']).startsWith('fashion.');
     final isBeauty = _text(task['capabilityId']).startsWith('beauty.');
+    final isTravel = _text(task['capabilityId']).startsWith('travel.');
     final selectedDiningCandidate = isDining
         ? _selectedDiningCandidate()
         : null;
@@ -1786,6 +2042,34 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               )
             else if (isBeauty)
               const Text('확정한 루틴의 실행 회차를 만듭니다. 실제 사용은 다음 단계에서 기록해요.')
+            else if (isTravel && task['id'] == 'confirm_itinerary')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    Text(
+                      '• ${_text(candidate['name'])} · ${_text(candidate['searchArea'])} · 캡처 후보',
+                    ),
+                  const Text(
+                    '장소 순서와 시각은 직접 확인해 주세요. 지도 검색은 정확한 주소나 운영 상태의 확인이 아니에요.',
+                  ),
+                ],
+              )
+            else if (isTravel && task['id'] == 'record_stop_outcomes')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final stop in _objects(
+                    _object(_object(_taskInputs(task))['itinerary'])['stops'],
+                  ))
+                    Text(
+                      '• ${_text(stop['title'])} · ${_text(stop['plannedAt'])}',
+                    ),
+                  const Text('예정된 장소가 실제 방문 장소는 아니에요. 방문 여부를 직접 기록해 주세요.'),
+                ],
+              )
             else
               _JsonDetails(title: '입력과 연결 정보', value: _taskInputs(task)),
             if (task['latestOutputRef'] != null)
@@ -1802,6 +2086,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 _fashionResult(task)
               else if (isBeauty)
                 _beautyResult(task)
+              else if (isTravel)
+                _travelResult(task)
               else
                 _JsonDetails(
                   title: '최근 결과',
@@ -1822,7 +2108,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                     selectedDiningCandidate != null)
                   OutlinedButton.icon(
                     key: const Key('kernel-open-dining-map'),
-                    onPressed: () => _openDiningMap(selectedDiningCandidate),
+                    onPressed: () => _openPlaceMap(selectedDiningCandidate),
                     icon: const Icon(Icons.map_outlined),
                     label: const Text('지도에서 확인'),
                   ),
@@ -1854,6 +2140,30 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                       icon: const Icon(Icons.image_outlined),
                       label: const Text('저장한 원본 보기'),
                     ),
+                if (isTravel && task['id'] == 'confirm_itinerary')
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  )) ...[
+                    OutlinedButton.icon(
+                      key: ValueKey(
+                        'kernel-open-travel-map-${candidate['importId']}',
+                      ),
+                      onPressed: () => _openPlaceMap(candidate),
+                      icon: const Icon(Icons.map_outlined),
+                      label: Text('${_text(candidate['name'])} 지도 검색'),
+                    ),
+                    if (widget.onOpenTravelImport != null)
+                      OutlinedButton.icon(
+                        key: ValueKey(
+                          'kernel-open-travel-source-${candidate['importId']}',
+                        ),
+                        onPressed: () => widget.onOpenTravelImport!(
+                          _text(candidate['importId']),
+                        ),
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('저장한 원본 보기'),
+                      ),
+                  ],
                 if (system &&
                     cap['effect'] == 'none' &&
                     status == 'not_started')
@@ -1999,6 +2309,50 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             Text(
               '• ${titles[_text(step['templateStepId'])] ?? '단계'} · '
               '${statuses[_text(step['status'])] ?? '상태 미확인'}',
+            ),
+        ],
+      );
+    }
+    return _JsonDetails(title: '최근 결과', value: result);
+  }
+
+  Widget _travelResult(KernelJson task) {
+    final result = _objects(
+      _board?['results'],
+    ).where((item) => item['id'] == task['latestOutputRef']).firstOrNull;
+    final value = _object(result?['value']);
+    if (task['id'] == 'confirm_itinerary') {
+      final stops = _objects(_object(value['itinerary'])['stops']);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('확정한 방문 순서'),
+          for (var index = 0; index < stops.length; index++)
+            Text(
+              '${index + 1}. ${_text(stops[index]['title'])} · ${_text(stops[index]['plannedAt'])}',
+            ),
+        ],
+      );
+    }
+    if (task['id'] == 'record_stop_outcomes') {
+      final itinerary = _object(_object(_taskInputs(task))['itinerary']);
+      final titles = {
+        for (final stop in _objects(itinerary['stops']))
+          _text(stop['id']): _text(stop['title']),
+      };
+      const statuses = {
+        'visited': '다녀왔어요',
+        'skipped': '못 갔어요',
+        'unknown': '아직 몰라요',
+      };
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('실제 방문 기록'),
+          for (final stop in _objects(value['stops']))
+            Text(
+              '• ${titles[_text(stop['stopId'])] ?? '장소'} · '
+              '${statuses[_text(stop['status'])] ?? '상태 미확인'}',
             ),
         ],
       );

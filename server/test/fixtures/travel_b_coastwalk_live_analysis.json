@@ -1,0 +1,124 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "place",
+  "tags": [
+    {
+      "value": "장소",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "장소 정보 화면에 관광 명소로 표시됨"
+      ],
+      "citations": []
+    },
+    {
+      "value": "제주",
+      "facet": "area",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e3"
+      ],
+      "quotes": [
+        "위치 표시에 제주가 보임"
+      ],
+      "citations": []
+    },
+    {
+      "value": "관광지",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e2",
+        "e4"
+      ],
+      "quotes": [
+        "관광 명소",
+        "해안 산책 코스"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "needs_review",
+  "title": {
+    "value": "푸른곶 해안길",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e1"
+    ]
+  },
+  "place": {
+    "name": "푸른곶 해안길",
+    "address": null,
+    "searchArea": "제주",
+    "category": "activity",
+    "confidence": 0.98,
+    "evidenceIds": [
+      "e1",
+      "e3"
+    ]
+  },
+  "summary": "푸른 바다와 초원이 이어지는 한적한 해안 산책 코스입니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "푸른곶 해안길",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "관광 명소",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e3",
+      "text": "제주",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "해안 산책 코스",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e5",
+      "text": "푸른 바다를 따라 이어지는 한적한 해안 산책 코스입니다.",
+      "region": "image_text",
+      "confidence": 0.98
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "장소 소개",
+      "value": "푸른 바다를 따라 이어지는 한적한 해안 산책 코스입니다.",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e5"
+      ]
+    },
+    {
+      "label": "환경",
+      "value": "탁 트인 바다와 낮은 초원이 어우러져 제주다운 자연을 느낄 수 있는 곳입니다.",
+      "confidence": 0.97,
+      "evidenceIds": []
+    }
+  ],
+  "conflicts": [],
+  "warnings": [
+    "일부 정보는 확인이 필요해요."
+  ]
+}

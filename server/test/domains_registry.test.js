@@ -4,8 +4,8 @@ import { createDomainRegistry, domainRegistry as registry, DOMAIN_PACKS, DomainC
 
 const rejects = (run, code = "INVALID_DOMAIN_VALUE") => assert.throws(run, (error) => error instanceof DomainContractError && error.code === code);
 
-test("all four packs expose typed capabilities, artifacts, slots and kernel-compatible relations", () => {
-  assert.deepEqual(registry.listPacks().map((pack) => pack.id), ["recipe", "dining", "fashion", "beauty"]);
+test("all five packs expose typed capabilities, artifacts, slots and kernel-compatible relations", () => {
+  assert.deepEqual(registry.listPacks().map((pack) => pack.id), ["recipe", "dining", "fashion", "beauty", "travel"]);
   for (const capability of registry.listCapabilities()) {
     assert.ok(registry.getType(capability.inputType));
     assert.ok(registry.getType(capability.outputType));
@@ -36,15 +36,15 @@ test("value relations validate registered values and preserve unknown as a disti
 
 test("new packs register without changing the common registry", () => {
   const custom = {
-    id: "travel", version: 1, compatibleKernelVersions: [1], entityTypes: ["travel.destination"],
-    types: [{ id: "travel.destination", schema: { type: "string", minLength: 1 } }],
+    id: "hiking", version: 1, compatibleKernelVersions: [1], entityTypes: ["hiking.destination"],
+    types: [{ id: "hiking.destination", schema: { type: "string", minLength: 1 } }],
     relations: [], slots: [], artifacts: [], capabilities: [],
   };
   const extended = createDomainRegistry([...DOMAIN_PACKS, custom]);
-  assert.equal(extended.validate("travel.destination", "Seoul"), "Seoul");
+  assert.equal(extended.validate("hiking.destination", "Seoul"), "Seoul");
   custom.types[0].schema.type = "number";
-  assert.equal(extended.validate("travel.destination", "Busan"), "Busan");
-  assert.throws(() => { extended.getType("travel.destination").schema.type = "number"; }, TypeError);
+  assert.equal(extended.validate("hiking.destination", "Busan"), "Busan");
+  assert.throws(() => { extended.getType("hiking.destination").schema.type = "number"; }, TypeError);
   rejects(() => createDomainRegistry([...DOMAIN_PACKS, DOMAIN_PACKS[0]]), "INVALID_DOMAIN_PACK");
 });
 

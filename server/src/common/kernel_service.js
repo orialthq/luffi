@@ -18,6 +18,7 @@ import { buildRecipePlanDraft } from "../scenarios/recipe_plan.js";
 import { buildDiningPlanDraft } from "../scenarios/dining_plan.js";
 import { buildFashionPlanDraft } from "../scenarios/fashion_plan.js";
 import { buildBeautyPlanDraft } from "../scenarios/beauty_plan.js";
+import { buildTravelPlanDraft } from "../scenarios/travel_plan.js";
 import {
   applyResourceCommand, createResourceState,
   getResourceAvailability as projectResourceAvailability,
@@ -45,6 +46,8 @@ export function createCommonKernelState() {
     fashionCommandReceipts: {},
     beautyScenarioReceipts: {},
     beautyCommandReceipts: {},
+    travelScenarioReceipts: {},
+    travelCommandReceipts: {},
   };
 }
 
@@ -439,7 +442,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       delete state.retrievalWatches[activityId];
       delete state.resourceWatches[activityId];
       for (const receipts of [state.diningCommandReceipts, state.fashionCommandReceipts,
-        state.beautyCommandReceipts]) {
+        state.beautyCommandReceipts, state.travelCommandReceipts]) {
         for (const item of Object.values(receipts ?? {})) {
           if (item.activityId === activityId) {
             item.deleted = true;
@@ -473,6 +476,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
 
   function redactBeautyScenario(state, sourceId, activityId = null) {
     redactScenarioReceipts(state, Object.values(state.beautyScenarioReceipts ?? {}).filter((entry) =>
+      !entry.deleted && (entry.result?.activityId === activityId ||
+        entry.result?.confirmationSourceId === sourceId || entry.importIds?.some((id) =>
+          state.importReceipts[id]?.sourceId === sourceId))), sourceId);
+  }
+
+  function redactTravelScenario(state, sourceId, activityId = null) {
+    redactScenarioReceipts(state, Object.values(state.travelScenarioReceipts ?? {}).filter((entry) =>
       !entry.deleted && (entry.result?.activityId === activityId ||
         entry.result?.confirmationSourceId === sourceId || entry.importIds?.some((id) =>
           state.importReceipts[id]?.sourceId === sourceId))), sourceId);
@@ -531,6 +541,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.importReceipts[id]?.sourceId === source.id)).map((item) => item.result.activityId))
       : new Set(source?.provenance?.scenario === "beauty" && source.provenance.activityId
         ? [source.provenance.activityId] : []);
+    const travelActivityIds = source?.kind === "capture_analysis"
+      ? new Set(Object.values(state.travelScenarioReceipts ?? {}).filter((item) =>
+        !item.deleted && item.importIds?.some((id) =>
+          state.importReceipts[id]?.sourceId === source.id)).map((item) => item.result.activityId))
+      : new Set(source?.provenance?.scenario === "travel" && source.provenance.activityId
+        ? [source.provenance.activityId] : []);
     const linkedConfirmations = source?.kind === "capture_analysis"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.kind === "user_confirmation" &&
@@ -539,7 +555,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "fashion" &&
             fashionActivityIds.has(item.provenance.activityId)) ||
           (item.provenance?.scenario === "beauty" &&
-            beautyActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
+            beautyActivityIds.has(item.provenance.activityId)) ||
+          (item.provenance?.scenario === "travel" &&
+            travelActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
     const linkedFashionSources = state.knowledge.sources.filter((item) =>
       item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
       item.provenance?.scenario === "fashion" &&
@@ -552,11 +570,18 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       beautyActivityIds.has(item.provenance.activityId) &&
       (item.kind === "user_confirmation" || item.kind === "user_report"))
       .map((item) => item.id);
-    return { source, linkedConfirmations, linkedFashionSources, linkedBeautySources };
+    const linkedTravelSources = state.knowledge.sources.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
+      item.provenance?.scenario === "travel" &&
+      travelActivityIds.has(item.provenance.activityId) &&
+      (item.kind === "user_confirmation" || item.kind === "user_report"))
+      .map((item) => item.id);
+    return { source, linkedConfirmations, linkedFashionSources, linkedBeautySources,
+      linkedTravelSources };
   }
 
   function finishSourceDeletion(state, { source, linkedConfirmations, linkedFashionSources,
-    linkedBeautySources }) {
+    linkedBeautySources, linkedTravelSources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
@@ -567,6 +592,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "beauty") {
       redactBeautyScenario(state, source.id, source.provenance.activityId);
     }
+    if (source?.kind === "user_confirmation" && source.provenance?.scenario === "travel") {
+      redactTravelScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "user_report" && source.provenance?.scenario === "dining") {
       redactDiningScenario(state, source.id, source.provenance.activityId);
     }
@@ -576,11 +604,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (source?.kind === "user_report" && source.provenance?.scenario === "beauty") {
       redactBeautyScenario(state, source.id, source.provenance.activityId);
     }
+    if (source?.kind === "user_report" && source.provenance?.scenario === "travel") {
+      redactTravelScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "capture_analysis") {
       redactImportedCapture(state, source.id);
       redactDiningScenario(state, source.id);
       redactFashionScenario(state, source.id);
       redactBeautyScenario(state, source.id);
+      redactTravelScenario(state, source.id);
       for (const sourceId of linkedConfirmations) {
         state.knowledge = applyKnowledgeCommand(state.knowledge, {
           ownerId, commandId: `kernel:source-cascade:${sourceId}`,
@@ -590,6 +622,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         redactRecipeScenario(state, sourceId);
         redactFashionScenario(state, sourceId);
         redactBeautyScenario(state, sourceId);
+        redactTravelScenario(state, sourceId);
       }
     }
     for (const sourceId of linkedFashionSources) {
@@ -611,6 +644,16 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       redactBeautyScenario(state, sourceId);
+    }
+    for (const sourceId of linkedTravelSources) {
+      const linked = state.knowledge.sources.find((item) => item.id === sourceId);
+      if (linked?.status !== "active") continue;
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      redactTravelScenario(state, sourceId);
     }
   }
 
@@ -809,6 +852,47 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return { candidates, contextQueries };
   }
 
+  function travelCandidates(state, importIds, area) {
+    const candidates = [];
+    const contextQueries = [];
+    for (const importId of importIds) {
+      const receipt = state.importReceipts[importId];
+      if (receipt?.ownerId !== ownerId || receipt.deleted) {
+        throw new AppError("IMPORT_NOT_FOUND", "연결할 확인 자료를 찾을 수 없어요.", { httpStatus: 404 });
+      }
+      const version = state.knowledge.sourceVersions.find((item) =>
+        item.ownerId === ownerId && item.id === receipt.sourceVersionId && item.status === "active");
+      const analysis = version?.content?.analysis;
+      if (!analysis || analysis.contentKind !== "place" ||
+          analysis.place?.category !== "activity" || !analysis.place.name?.trim() ||
+          !analysis.place.searchArea?.trim() ||
+          placeKey(analysis.place.searchArea) !== placeKey(area) ||
+          !analysis.place.evidenceIds?.length) {
+        throw new AppError("IMPORT_NOT_TRAVEL", "지역과 장소명이 보이는 여행 장소만 사용할 수 있어요.",
+          { httpStatus: 400 });
+      }
+      const mention = state.knowledge.entityMentions.find((item) =>
+        item.ownerId === ownerId && item.sourceVersionId === version.id &&
+        item.entityType === "travel.place" && item.status === "active");
+      if (!mention) throw new AppError("IMPORT_NOT_TRAVEL", "여행 장소 근거를 확인할 수 없어요.",
+        { httpStatus: 400 });
+      candidates.push({ importId, name: analysis.place.name.trim(),
+        searchArea: analysis.place.searchArea.trim(), mentionId: mention.id,
+        evidenceIds: [...mention.evidenceIds] });
+      for (const path of ["/place/name", "/place/searchArea"]) {
+        const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
+          item.subjectId === receipt.result?.materialId &&
+          item.predicate === "ingestion.extracted_field" &&
+          item.typedValue?.value?.path === path && item.status === "active");
+        if (!field) throw new AppError("CONTEXT_STALE", "여행 장소 근거가 변경됐어요.",
+          { httpStatus: 409 });
+        contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
+          scope: field.scope });
+      }
+    }
+    return { candidates, contextQueries };
+  }
+
   return {
     async contracts() {
       return {
@@ -887,7 +971,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             const spec = registry.getCapability(task.capabilityId);
             if (["dining.select_place", "dining.record_visit_outcome",
               "fashion.confirm_outfit", "fashion.record_wear_outcome",
-              "beauty.confirm_routine", "beauty.record_routine_outcome"].includes(spec.id) &&
+              "beauty.confirm_routine", "beauty.record_routine_outcome",
+              "travel.confirm_itinerary", "travel.record_stop_outcomes"].includes(spec.id) &&
                 (command.type === "task.recordResult" || command.payload?.to === "completed" ||
                   Object.hasOwn(command.payload ?? {}, "output"))) {
               throw new AppError("TASK_EXECUTION_RESTRICTED", "확인·결과 작업은 전용 경로로 기록해 주세요.",
@@ -2259,6 +2344,388 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             completedStepIds: completed.map((item) => item.templateStepId), experienceIds,
             revision: applied.result.revision };
           state.beautyCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async createTravelScenario(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
+          "importIds", "area", "startAt"].includes(key)) || input.confirmed !== true ||
+          !Array.isArray(input.importIds) || input.importIds.length < 1 ||
+          input.importIds.length > 8 || typeof input.area !== "string" ||
+          !input.area.trim() || input.area.length > 120) {
+          throw new AppError("INVALID_REQUEST", "여행 일정 입력을 확인해 주세요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const importIds = input.importIds.map((id) => safeId(id, "importId"));
+        if (new Set(importIds).size !== importIds.length) {
+          throw new AppError("INVALID_REQUEST", "같은 캡처를 중복 선택했어요.", { httpStatus: 400 });
+        }
+        registry.validate("core.timestamp", input.startAt);
+        const area = input.area.trim();
+        const requestHash = requestFingerprint({ activityId, importIds, area,
+          startAt: input.startAt });
+        return await store.transact((state) => {
+          assertState(state);
+          state.travelScenarioReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.travelScenarioReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 여행 요청에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 여행 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const { candidates, contextQueries } = travelCandidates(state, importIds, area);
+          const stem = `travel:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const plan = buildTravelPlanDraft({ candidates, area, startAt: input.startAt },
+            { registry });
+          const created = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:activity`, type: "activity.create", activityId,
+            expectedRevision: 0, payload: { title: `${area} 하루 여행`,
+              goal: { description: `${input.startAt} · 저장한 장소의 방문 순서 정하기` } } },
+          activityOptions(state));
+          state.activities = created.state;
+          state.resources = applyResourceCommand(state.resources, { ownerId,
+            commandId: `${stem}:resource-activity`, type: "activity.register",
+            expectedRevision: 0, payload: { activityId } }).state;
+          const issued = issueContext(state, { activityId, queries: contextQueries });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE", "여행 장소 근거를 확인할 수 없어요.",
+              { httpStatus: 409 });
+          }
+          const enriched = enrichPlan("draft", plan);
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:proposal-check`, type: "plan.applyDraft", activityId,
+            expectedRevision: created.result.revision, payload: { draft: enriched } },
+          activityOptions(state));
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId, activityId,
+            contextId: issued.contextId, kind: "draft", plan: structuredClone(enriched),
+            run: { scenario: "travel", importIds: [...importIds] },
+            baseActivityRevision: created.result.revision, basePlanRevision: 0,
+            status: "pending", createdAt: new Date().toISOString() };
+          const result = { activityId, revision: created.result.revision, proposalId,
+            contextId: issued.contextId, candidateCount: candidates.length };
+          state.travelScenarioReceipts[receiptKey] = { hash: requestHash,
+            importIds: [...importIds], area, startAt: input.startAt, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async confirmTravelItinerary(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "selections"].includes(key)) || !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 0 || !Array.isArray(input.selections) ||
+          input.selections.length < 1 || input.selections.length > 8 ||
+          input.selections.some((item) => !item || typeof item !== "object" ||
+            Array.isArray(item) || Object.keys(item).some((key) =>
+              !["importId", "plannedAt"].includes(key)) ||
+            typeof item.importId !== "string" || !item.importId.trim() ||
+            typeof item.plannedAt !== "string")) {
+          throw new AppError("INVALID_REQUEST", "장소 순서와 방문 예정 시각을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const selections = input.selections.map((item) => ({
+          importId: safeId(item.importId, "importId"), plannedAt: item.plannedAt,
+        }));
+        for (const item of selections) registry.validate("core.timestamp", item.plannedAt);
+        if (new Set(selections.map((item) => item.importId)).size !== selections.length) {
+          throw new AppError("INVALID_REQUEST", "같은 장소 캡처를 중복 사용할 수 없어요.",
+            { httpStatus: 400 });
+        }
+        const requestHash = requestFingerprint({ activityId,
+          expectedRevision: input.expectedRevision, selections });
+        return await store.transact((state) => {
+          assertState(state);
+          state.travelCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.travelCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 여행 일정 확인에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.",
+              { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.entries(state.travelScenarioReceipts ?? {}).find(([key, item]) =>
+            key.startsWith(`${ownerId}:`) && item.result?.activityId === activityId && !item.deleted)?.[1];
+          if (!scenario) throw new AppError("NOT_FOUND", "여행 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "confirm_itinerary" &&
+            item.capabilityId === "travel.confirm_itinerary");
+          if (task?.readiness?.status !== "ready") {
+            throw new AppError("TASK_BLOCKED", "지금은 여행 일정을 확정할 수 없어요.",
+              { httpStatus: 409 });
+          }
+          const { candidates: readyCandidates, area, startAt } = task.readiness.inputs;
+          if (area !== scenario.area || startAt !== scenario.startAt) {
+            throw new AppError("INVALID_PLAN", "여행 활동 조건이 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          const candidates = new Map(readyCandidates.map((item) => [item.importId, item]));
+          if (selections.some((item) => !candidates.has(item.importId) ||
+              !scenario.importIds.includes(item.importId))) {
+            throw new AppError("INVALID_REQUEST", "활동에 제안된 장소만 사용할 수 있어요.",
+              { httpStatus: 400 });
+          }
+          const startMs = Date.parse(startAt);
+          let previousMs = startMs - 1;
+          for (const item of selections) {
+            const atMs = Date.parse(item.plannedAt);
+            if (atMs < startMs || atMs >= startMs + 24 * 60 * 60 * 1000 ||
+                atMs <= previousMs) {
+              throw new AppError("INVALID_REQUEST",
+                "방문 시각은 시작 후 24시간 안에서 순서대로 입력해 주세요.",
+                { httpStatus: 400 });
+            }
+            previousMs = atMs;
+          }
+          const stem = `travel:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const itineraryId = `${stem}:itinerary`;
+          const confirmedAt = new Date().toISOString();
+          const content = { area, startAt, selections };
+          const sourceId = `${stem}:confirmation-source`;
+          const versionId = `${stem}:confirmation-version`;
+          const beforeSequence = state.knowledge.sequence;
+          const applyKnowledge = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:confirm:${role}`, type, payload }, { predicates }).state;
+          };
+          applyKnowledge("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 확정한 하루 여행 일정", provenance: { scenario: "travel",
+              activityId, importedSourceIds: selections.map((item) =>
+                state.importReceipts[item.importId].sourceId) } });
+          applyKnowledge("version", "source.version.add", { id: versionId,
+            sourceId, contentHash: fingerprint(content), content, capturedAt: confirmedAt });
+          applyKnowledge("itinerary", "entity.create", { id: itineraryId,
+            type: "travel.day_itinerary", label: "사용자가 확정한 하루 여행 일정" });
+          const areaEvidenceId = `${stem}:area-evidence`;
+          applyKnowledge("area-evidence", "evidence.add", { id: areaEvidenceId,
+            sourceVersionId: versionId, quote: `${area} · ${startAt}`,
+            locator: { kind: "user_confirmation", jsonPointer: "/area" } });
+          const assertion = (role, subjectId, predicate, evidenceId,
+            objectEntityId = null, typedValue = null) => applyKnowledge(`assertion:${role}`,
+            "assertion.add", { id: `${stem}:${role}`, subjectId, predicate,
+              scope: { type: "activity", id: activityId }, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+              observedAt: confirmedAt,
+              ...(objectEntityId ? { objectEntityId } : { typedValue }),
+            });
+          assertion("area", itineraryId, "travel.area", areaEvidenceId,
+            null, { type: "core.text", value: area });
+          const stops = [];
+          for (const [index, selection] of selections.entries()) {
+            const candidate = candidates.get(selection.importId);
+            const mention = state.knowledge.entityMentions.find((item) =>
+              item.ownerId === ownerId && item.id === candidate.mentionId &&
+              item.entityType === "travel.place" && item.status === "active");
+            if (!mention) throw new AppError("CONTEXT_STALE", "장소 캡처 근거가 변경됐어요.",
+              { httpStatus: 409 });
+            const role = fingerprint(selection.importId).slice(0, 16);
+            const evidenceId = `${stem}:confirmation-evidence:${role}`;
+            applyKnowledge(`evidence:${role}`, "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId, quote: `${candidate.name} · ${selection.plannedAt}`,
+              locator: { kind: "user_confirmation", jsonPointer: `/selections/${index}` } });
+            const accepted = state.knowledge.identityDecisions.find((item) =>
+              item.ownerId === ownerId && item.mentionId === mention.id && item.status === "accepted");
+            const placeId = accepted?.entityId ?? `${stem}:place:${role}`;
+            if (!accepted) {
+              applyKnowledge(`place:${role}`, "entity.create", { id: placeId,
+                type: "travel.place", label: "사용자가 확인한 여행 장소" });
+              const decisionId = `${stem}:identity:${role}`;
+              applyKnowledge(`identity-propose:${role}`, "identity.propose", { id: decisionId,
+                mentionId: mention.id, entityId: placeId, evidenceIds: mention.evidenceIds,
+                reason: "사용자가 여행 일정에 넣을 장소 캡처를 확인함" });
+              applyKnowledge(`identity-accept:${role}`, "identity.accept", {
+                decisionId, expectedRevision: 1 });
+            }
+            const stopId = `${stem}:stop:${index + 1}`;
+            applyKnowledge(`stop:${index + 1}`, "entity.create", { id: stopId,
+              type: "travel.stop", label: "사용자가 확인한 여행 방문 순서" });
+            assertion(`has-stop:${index + 1}`, itineraryId, "travel.has_stop",
+              evidenceId, stopId);
+            assertion(`stop-order:${index + 1}`, stopId, "travel.stop_order",
+              evidenceId, null, { type: "core.revision", value: index + 1 });
+            assertion(`planned-at:${index + 1}`, stopId, "travel.planned_at",
+              evidenceId, null, { type: "core.timestamp", value: selection.plannedAt });
+            assertion(`stop-at:${index + 1}`, stopId, "travel.stop_at",
+              evidenceId, placeId);
+            stops.push({ id: stopId, placeId, title: candidate.name,
+              plannedAt: selection.plannedAt });
+          }
+          const itinerary = { id: itineraryId, revision: 1, area, startAt, stops };
+          registry.validate("travel.day_itinerary", itinerary);
+          recordAffectedConsumers(state, beforeSequence);
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:confirmed`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "confirm_itinerary", expectedTaskRevision: task.revision,
+              to: "completed", output: { itineraryId, itinerary, confirmedAt } } },
+          activityOptions(state));
+          state.activities = applied.state;
+          const result = { activityId, itineraryId, revision: applied.result.revision };
+          state.travelCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          scenario.result.confirmationSourceId = sourceId;
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async recordTravelStopOutcomes(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "stops"].includes(key)) || !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 0 || !Array.isArray(input.stops) ||
+          input.stops.length < 1 || input.stops.length > 8 ||
+          input.stops.some((item) => !item || typeof item !== "object" ||
+            Array.isArray(item) || Object.keys(item).some((key) =>
+              !["stopId", "status"].includes(key)) ||
+            typeof item.stopId !== "string" || !item.stopId.trim() ||
+            !["visited", "skipped", "unknown"].includes(item.status))) {
+          throw new AppError("INVALID_REQUEST", "각 장소의 방문 여부를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const stops = input.stops.map((item) => ({
+          stopId: safeId(item.stopId, "stopId"), status: item.status,
+        }));
+        if (new Set(stops.map((item) => item.stopId)).size !== stops.length) {
+          throw new AppError("INVALID_REQUEST", "같은 장소를 중복 기록할 수 없어요.",
+            { httpStatus: 400 });
+        }
+        const requestHash = requestFingerprint({ activityId,
+          expectedRevision: input.expectedRevision, stops });
+        return await store.transact((state) => {
+          assertState(state);
+          state.travelCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.travelCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 여행 결과에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.",
+              { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.entries(state.travelScenarioReceipts ?? {}).find(([key, item]) =>
+            key.startsWith(`${ownerId}:`) && item.result?.activityId === activityId && !item.deleted)?.[1];
+          if (!scenario) throw new AppError("NOT_FOUND", "여행 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "record_stop_outcomes" &&
+            item.capabilityId === "travel.record_stop_outcomes");
+          if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
+            "지금은 방문 결과를 기록할 수 없어요.", { httpStatus: 409 });
+          const itinerary = task.readiness.inputs.itinerary;
+          const confirmTask = current.tasks.find((item) => item.id === "confirm_itinerary" &&
+            item.capabilityId === "travel.confirm_itinerary" &&
+            item.executionStatus === "completed");
+          const confirmed = current.results.find((item) =>
+            item.id === confirmTask?.latestOutputRef)?.value;
+          const expectedId = `travel:${fingerprint([ownerId, activityId]).slice(0, 32)}:itinerary`;
+          if (!itinerary || itinerary.id !== expectedId ||
+              confirmed?.itineraryId !== expectedId ||
+              requestFingerprint(itinerary) !== requestFingerprint(confirmed.itinerary) ||
+              !state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+                item.id === itinerary.id && item.type === "travel.day_itinerary" &&
+                item.status === "active") ||
+              !state.knowledge.sources.some((item) => item.ownerId === ownerId &&
+                item.id === scenario.result.confirmationSourceId && item.status === "active")) {
+            throw new AppError("CONTEXT_STALE", "확정한 여행 일정을 찾지 못했어요.",
+              { httpStatus: 409 });
+          }
+          const itineraryStops = new Map(itinerary.stops.map((item) => [item.id, item]));
+          if (stops.length !== itineraryStops.size ||
+              stops.some((item) => !itineraryStops.has(item.stopId))) {
+            throw new AppError("INVALID_REQUEST", "모든 장소의 방문 여부를 기록해 주세요.",
+              { httpStatus: 400 });
+          }
+          const stem = `travel:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const reportedAt = new Date().toISOString();
+          const outcome = { itineraryId: itinerary.id, stops, reportedAt };
+          registry.validate("travel.day_outcome", outcome);
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:stop-outcomes`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "record_stop_outcomes", expectedTaskRevision: task.revision,
+              to: "completed", output: outcome } },
+          activityOptions(state));
+          state.activities = applied.state;
+          const visited = stops.filter((item) => item.status === "visited");
+          const visitIds = [];
+          if (visited.length) {
+            const beforeSequence = state.knowledge.sequence;
+            const sourceId = `${stem}:outcome-source`;
+            const versionId = `${stem}:outcome-version`;
+            const reportContent = { itineraryId: itinerary.id,
+              visitedStops: visited, reportedAt };
+            const applyKnowledge = (role, type, payload) => {
+              if (type === "assertion.add") validateAssertionRelation(state, payload);
+              state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+                commandId: `${stem}:outcome:${role}`, type, payload }, { predicates }).state;
+            };
+            applyKnowledge("source", "source.create", { id: sourceId, kind: "user_report",
+              title: "사용자가 기록한 여행 방문", provenance: { scenario: "travel", activityId } });
+            applyKnowledge("version", "source.version.add", { id: versionId,
+              sourceId, contentHash: fingerprint(reportContent), content: reportContent,
+              capturedAt: reportedAt });
+            for (const [index, item] of visited.entries()) {
+              const stop = itineraryStops.get(item.stopId);
+              if (!state.knowledge.entities.some((entry) => entry.ownerId === ownerId &&
+                  entry.id === stop.id && entry.type === "travel.stop" && entry.status === "active") ||
+                  !state.knowledge.entities.some((entry) => entry.ownerId === ownerId &&
+                    entry.id === stop.placeId && entry.type === "travel.place" &&
+                    entry.status === "active") ||
+                  !state.knowledge.assertions.some((entry) => entry.ownerId === ownerId &&
+                    entry.subjectId === stop.id && entry.predicate === "travel.stop_at" &&
+                    entry.objectEntityId === stop.placeId && entry.status === "active")) {
+                throw new AppError("CONTEXT_STALE", "확정한 방문 장소를 찾지 못했어요.",
+                  { httpStatus: 409 });
+              }
+              const role = fingerprint(stop.id).slice(0, 16);
+              const evidenceId = `${stem}:outcome-evidence:${role}`;
+              const visitId = `${stem}:visit:${role}`;
+              applyKnowledge(`evidence:${role}`, "evidence.add", { id: evidenceId,
+                sourceVersionId: versionId, quote: `${stop.title} · 방문했어요`,
+                locator: { kind: "user_report", jsonPointer: `/visitedStops/${index}` } });
+              applyKnowledge(`visit:${role}`, "entity.create", { id: visitId,
+                type: "travel.visit", label: "사용자가 보고한 여행 장소 방문" });
+              const assertion = (suffix, predicate, objectEntityId) =>
+                applyKnowledge(`${suffix}:${role}`, "assertion.add", {
+                  id: `${stem}:${suffix}:${role}`, subjectId: visitId,
+                  predicate, objectEntityId,
+                  scope: { type: "activity", id: activityId }, origin: "user_reported",
+                  assertedBy: { type: "user", id: ownerId },
+                  evidenceIds: [evidenceId], observedAt: reportedAt,
+                });
+              assertion("visit-of-stop", "travel.visit_of_stop", stop.id);
+              assertion("visit-at-place", "travel.visit_at_place", stop.placeId);
+              visitIds.push(visitId);
+            }
+            recordAffectedConsumers(state, beforeSequence);
+          }
+          const result = { activityId, itineraryId: itinerary.id,
+            visitedStopIds: visited.map((item) => item.stopId), visitIds,
+            revision: applied.result.revision };
+          state.travelCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "place",
+  "tags": [
+    {
+      "value": "장소",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "\"관광 명소\"",
+        "\"바다 전망과 산책로\""
+      ],
+      "citations": []
+    },
+    {
+      "value": "제주",
+      "facet": "area",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e3"
+      ],
+      "quotes": [
+        "\"제주\""
+      ],
+      "citations": []
+    },
+    {
+      "value": "관광지",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e2"
+      ],
+      "quotes": [
+        "\"관광 명소\""
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "바람언덕 전망대",
+    "status": "observed",
+    "confidence": 1,
+    "evidenceIds": [
+      "e4"
+    ]
+  },
+  "place": {
+    "name": "바람언덕 전망대",
+    "address": null,
+    "searchArea": "제주",
+    "category": "activity",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e3",
+      "e4"
+    ]
+  },
+  "summary": "제주의 푸른 바다를 바라보며 산책하기 좋은 전망대입니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "바다 전망과 산책로",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e2",
+      "text": "관광 명소",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e3",
+      "text": "제주",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e4",
+      "text": "바람언덕 전망대",
+      "region": "image_text",
+      "confidence": 1
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [],
+  "conflicts": [],
+  "warnings": []
+}

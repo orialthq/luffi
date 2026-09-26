@@ -537,3 +537,22 @@ npm run test:beauty-image-live
 
 검증에 성공한 새 응답으로 fixture를 교체할 때만 `--record`를 전달합니다.
 현재 구현 범위는 `docs/BEAUTY_FIRST_SCENARIO.md`에 적었습니다.
+
+### 이미지 기반 여행 시나리오 검증
+
+`test/fixtures/travel_a_viewpoint.png`와 `travel_b_coastwalk.png`는 가상 제주
+관광 장소의 합성 화면입니다. 두 장을 실제 `POST /v1/analyze`에 각각 전송해
+받은 응답을 `*_live_analysis.json`에 보관했습니다. `npm test`는 이미지
+해시·응답 계약과 승인 대기 계획, 사용자 순서·시각 확정, 장소별 방문 기록 및
+출처 삭제를 외부 호출 없이 재생·검사합니다. 방문 예정은 실제 방문이나
+영업·이동 가능성의 근거가 아닙니다.
+
+```sh
+cd server
+npm run dev
+# 다른 터미널에서; 모델 호출 비용이 발생할 수 있음
+npm run test:travel-image-live
+```
+
+검증에 성공한 새 응답으로 fixture를 교체할 때만 `--record`를 전달합니다.
+범위와 미구현 항목은 `docs/TRAVEL_FIRST_SCENARIO.md`에 적었습니다.

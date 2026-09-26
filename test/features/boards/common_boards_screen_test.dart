@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/data/common_kernel_client.dart';
 import 'package:ori_beauty/features/boards/common_boards_screen.dart';
+import 'package:ori_beauty/features/boards/travel_scenario_dialogs.dart';
 
 KernelJson _board() => {
   'id': 'activity-1',
@@ -112,6 +113,22 @@ final class FakeBeautyIntentStore implements BeautyScenarioIntentStore {
   @override
   Future<void> save(KernelJson request) async {
     if (pending != null) throw StateError('pending beauty intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async => pending = null;
+}
+
+final class FakeTravelIntentStore implements TravelScenarioIntentStore {
+  KernelJson? pending;
+
+  @override
+  Future<KernelJson?> load() async => pending;
+
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending travel intent exists');
     pending = Map<String, Object?>.from(request);
   }
 
@@ -510,6 +527,93 @@ final class FakeKernelClient implements CommonKernelClient {
     return {
       'activityId': request['activityId'],
       'occurrenceId': 'occurrence-a',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> createTravelScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    if (scenarioFailure case final error?) throw error;
+    final activityId = request['activityId'];
+    if (board['id'] == activityId) {
+      return {
+        'activityId': activityId,
+        'proposalId': 'travel-proposal',
+        'revision': 1,
+        'replayed': true,
+      };
+    }
+    board = {
+      'id': activityId,
+      'title': '${request['area']} 하루 여행',
+      'goal': {'description': '저장한 여행 장소로 하루 계획 만들기'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'travel-proposal',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'confirm_itinerary',
+                'title': '장소 순서와 시각 확인',
+                'capabilityId': 'travel.confirm_itinerary',
+                'inputBindings': {
+                  'area': request['area'],
+                  'startAt': request['startAt'],
+                  'candidates': [
+                    for (final importId in request['importIds'] as List)
+                      {
+                        'importId': importId,
+                        'name': '캡처 장소',
+                        'searchArea': request['area'],
+                        'mentionId': 'mention-$importId',
+                        'evidenceIds': ['evidence-$importId'],
+                      },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    if (commitThenTimeout) {
+      throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 초과됐어요.');
+    }
+    return {
+      'activityId': activityId,
+      'proposalId': 'travel-proposal',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> confirmTravelItinerary(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'itineraryId': 'itinerary-a',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> recordTravelStopOutcomes(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'itineraryId': 'itinerary-a',
       'revision': board['revision'],
     };
   }
@@ -1190,6 +1294,249 @@ void main() {
       ]);
     },
   );
+
+  testWidgets('reviewed travel places create an approval-gated day plan', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    final intentStore = FakeTravelIntentStore();
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          diningIntentStore: FakeDiningIntentStore(),
+          fashionIntentStore: FakeFashionIntentStore(),
+          beautyIntentStore: FakeBeautyIntentStore(),
+          travelIntentStore: intentStore,
+          travelImportOptions: const [
+            TravelImportOption(
+              importId: 'view',
+              name: '바람언덕 전망대',
+              searchArea: '제주',
+            ),
+            TravelImportOption(
+              importId: 'coast',
+              name: '푸른곶 해안길',
+              searchArea: '제주',
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('kernel-create-travel')));
+    await tester.tap(find.byKey(const Key('kernel-create-travel')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('travel-import-view')));
+    await tester.tap(find.byKey(const ValueKey('travel-import-coast')));
+    await tester.tap(find.byKey(const Key('travel-create-submit')));
+    await tester.pumpAndSettle();
+    expect(client.scenarioRequests, hasLength(1));
+    final request = client.scenarioRequests.single;
+    expect(request['confirmed'], true);
+    expect(request['importIds'], ['view', 'coast']);
+    expect(request['area'], '제주');
+    expect(request['startAt'], isA<String>());
+    expect(intentStore.pending, isNull);
+    expect(client.board['tasks'], isEmpty);
+    expect(find.text('계획 제안'), findsOneWidget);
+  });
+
+  testWidgets('travel board sends user-confirmed order and times', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    final startAt = DateTime(2026, 9, 28, 9).toUtc().toIso8601String();
+    client.contract = {
+      'capabilities': [
+        {'id': 'travel.confirm_itinerary', 'actor': 'user', 'effect': 'none'},
+      ],
+    };
+    client.board = {
+      'id': 'trip-test',
+      'title': '제주 하루 여행',
+      'goal': {'description': '장소 순서 정하기'},
+      'revision': 2,
+      'lifecycle': 'active',
+      'nextActions': ['confirm_itinerary'],
+      'tasks': [
+        {
+          'id': 'confirm_itinerary',
+          'title': '장소 순서와 시각 확인',
+          'revision': 1,
+          'capabilityId': 'travel.confirm_itinerary',
+          'executionStatus': 'not_started',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {
+              'area': '제주',
+              'startAt': startAt,
+              'candidates': [
+                {
+                  'importId': 'view',
+                  'name': '바람언덕 전망대',
+                  'searchArea': '제주',
+                  'mentionId': 'mention-view',
+                  'evidenceIds': ['e1'],
+                },
+                {
+                  'importId': 'coast',
+                  'name': '푸른곶 해안길',
+                  'searchArea': '제주',
+                  'mentionId': 'mention-coast',
+                  'evidenceIds': ['e2'],
+                },
+              ],
+            },
+            'reasons': <Object?>[],
+          },
+        },
+      ],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': <Object?>[],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardScreen(
+          client: client,
+          activityId: 'trip-test',
+          contracts: client.contract,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('kernel-complete-confirm_itinerary')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('travel-stop-up-coast')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('travel-stop-time-coast')),
+      '10:00',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('travel-stop-time-view')),
+      '13:00',
+    );
+    await tester.tap(find.byKey(const Key('travel-confirm-submit')));
+    await tester.pumpAndSettle();
+    expect(client.commands.single['activityId'], 'trip-test');
+    expect(client.commands.single['expectedRevision'], 2);
+    final selections = (client.commands.single['selections'] as List)
+        .cast<Map>();
+    expect(selections.map((item) => item['importId']).toList(), [
+      'coast',
+      'view',
+    ]);
+  });
+
+  testWidgets('travel board sends a status for every confirmed stop', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.contract = {
+      'capabilities': [
+        {
+          'id': 'travel.record_stop_outcomes',
+          'actor': 'user',
+          'effect': 'none',
+        },
+      ],
+    };
+    client.board = {
+      'id': 'trip-test',
+      'title': '제주 하루 여행',
+      'goal': {'description': '방문 결과 기록'},
+      'revision': 3,
+      'lifecycle': 'active',
+      'nextActions': ['record_stop_outcomes'],
+      'tasks': [
+        {
+          'id': 'record_stop_outcomes',
+          'title': '장소별 방문 결과 기록',
+          'revision': 1,
+          'capabilityId': 'travel.record_stop_outcomes',
+          'executionStatus': 'not_started',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {
+              'itinerary': {
+                'id': 'itinerary-a',
+                'revision': 1,
+                'area': '제주',
+                'startAt': '2026-09-28T00:00:00Z',
+                'stops': [
+                  {
+                    'id': 'coast-stop',
+                    'placeId': 'coast-place',
+                    'title': '푸른곶 해안길',
+                    'plannedAt': '2026-09-28T01:00:00Z',
+                  },
+                  {
+                    'id': 'view-stop',
+                    'placeId': 'view-place',
+                    'title': '바람언덕 전망대',
+                    'plannedAt': '2026-09-28T04:00:00Z',
+                  },
+                ],
+              },
+            },
+            'reasons': <Object?>[],
+          },
+        },
+      ],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': <Object?>[],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardScreen(
+          client: client,
+          activityId: 'trip-test',
+          contracts: client.contract,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('kernel-complete-record_stop_outcomes')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('travel-outcome-coast-stop')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('다녀왔어요').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('travel-outcome-view-stop')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('못 갔어요').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('travel-outcome-submit')));
+    await tester.pumpAndSettle();
+    expect(client.commands.single['stops'], [
+      {'stopId': 'coast-stop', 'status': 'visited'},
+      {'stopId': 'view-stop', 'status': 'skipped'},
+    ]);
+  });
 
   testWidgets('reviewed beauty captures create an approval-gated routine', (
     tester,
