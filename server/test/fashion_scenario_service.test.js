@@ -10,6 +10,7 @@ import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
 import { makeValidAnalysis, makeFiling, makeTag } from "./fixtures.js";
+import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const cases = [
   ["a_blazer", "차콜 싱글 재킷", "33a5db2639a0125196de6ccfb64cd668c8d5066eceeffe8676303a14e423643d"],
@@ -131,6 +132,51 @@ test("duplicate slots and unconfirmed wear cannot invent ownership or wearing", 
   assert.equal(snapshot.knowledge.assertions.filter((item) =>
     ["fashion.ownership", "fashion.wore_outfit"].includes(item.predicate) &&
     item.status === "active").length, 0);
+});
+
+test("corrected product title produces a reviewed fashion patch", async (t) => {
+  const { service, store, imports } = await fixture(t);
+  const created = await service.createFashionScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-title-correction" });
+  const before = await service.getBoard("outfit-1");
+  await correctExtractedField({ service, store,
+    materialId: imports.a_blazer.materialId, path: "/title/value",
+    value: "차콜 싱글 블레이저", ownerId: "stylist",
+    commandId: "correct-fashion-title" });
+  const report = await service.getBoardReview("outfit-1");
+  assert.equal(report.status, "ready");
+  assert.deepEqual(report.affectedTasks.map((item) => item.id), ["confirm_outfit"]);
+  const proposed = await service.proposeBoardReview({ activityId: "outfit-1",
+    commandId: "propose-fashion-correction", expectedRevision: before.revision,
+    confirmed: true });
+  assert.equal((await service.getBoard("outfit-1")).tasks[0]
+    .readiness.inputs.candidates[0].name, "차콜 싱글 재킷");
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "approve-fashion-correction" });
+  const after = await service.getBoard("outfit-1");
+  assert.equal(after.tasks[0].readiness.inputs.candidates[0].name,
+    "차콜 싱글 블레이저");
+  assert.equal(after.pendingChanges.length, 0);
+});
+
+test("confirmed outfit remains unchanged when its source title is corrected", async (t) => {
+  const { service, store, imports } = await fixture(t);
+  const created = await service.createFashionScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-protected-outfit" });
+  const board = await service.getBoard("outfit-1");
+  await service.confirmFashionOutfit({ commandId: "confirm-protected-outfit",
+    activityId: "outfit-1", expectedRevision: board.revision, selections });
+  const resultBefore = (await service.getBoard("outfit-1")).results;
+  await correctExtractedField({ service, store,
+    materialId: imports.a_blazer.materialId, path: "/title/value",
+    value: "차콜 싱글 블레이저", ownerId: "stylist",
+    commandId: "correct-confirmed-fashion-title" });
+  const review = await service.getBoardReview("outfit-1");
+  assert.equal(review.status, "blocked");
+  assert.equal(review.reasonCode, "STARTED_TASK_PROTECTED");
+  assert.deepEqual((await service.getBoard("outfit-1")).results, resultBefore);
 });
 
 test("source deletion removes the dependent fashion activity and blocks replay", async (t) => {

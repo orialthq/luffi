@@ -6,6 +6,7 @@ import test from "node:test";
 import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
 import { makeFiling, makeTag, makeValidAnalysis } from "./fixtures.js";
+import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 async function fixture(t) {
   const folder = await fs.mkdtemp(join(tmpdir(), "luffi-dining-scenario-"));
@@ -139,6 +140,34 @@ test("unconfirmed visit creates no visited assertion and direct task bypass is r
   const snapshot = await store.snapshot();
   assert.equal(snapshot.knowledge.assertions.filter((item) =>
     item.predicate === "dining.visited" && item.status === "active").length, 0);
+});
+
+test("corrected restaurant name changes a reviewed candidate before selection", async (t) => {
+  const { service, store } = await fixture(t);
+  const source = await imported(service, "a", "모퉁이식당 성수점", "성수");
+  const created = await service.createDiningScenario({ commandId: "create-review",
+    activityId: "dinner-review", confirmed: true, importIds: ["a"],
+    scheduledAt: "2026-09-27T19:00:00+09:00", area: "성수", partySize: 2 });
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-name-correction" });
+  const before = await service.getBoard("dinner-review");
+  await correctExtractedField({ service, store, materialId: source.materialId,
+    path: "/place/name", value: "모퉁이식당 성수 본점", ownerId: "diner",
+    commandId: "correct-dining-name" });
+  const review = await service.getBoardReview("dinner-review");
+  assert.equal(review.status, "ready");
+  assert.ok(review.changes.some((item) =>
+    item.before.includes("모퉁이식당 성수점") &&
+    item.after.includes("모퉁이식당 성수 본점")));
+  const proposed = await service.proposeBoardReview({ activityId: "dinner-review",
+    commandId: "propose-dining-correction", expectedRevision: before.revision,
+    confirmed: true });
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "approve-dining-correction" });
+  const after = await service.getBoard("dinner-review");
+  assert.equal(after.tasks[0].readiness.inputs.candidates[0].name,
+    "모퉁이식당 성수 본점");
+  assert.equal(after.tasks[1].inputBindings.partySize, 2);
 });
 
 test("deleting a captured source redacts the derived board and tombstones retries", async (t) => {

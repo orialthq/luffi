@@ -9,6 +9,7 @@ import { createCommonKernelService, createCommonKernelState } from "../src/commo
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const imagePath = fileURLToPath(new URL("./fixtures/life_tip_receipts.png", import.meta.url));
 const analysisPath = fileURLToPath(new URL(
@@ -186,6 +187,31 @@ test("changed fact invalidates a pending plan and non-tip content is refused", a
   await assert.rejects(service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-stale-tip" }),
   (error) => error.code === "CONTEXT_STALE");
+});
+
+test("corrected tip text reaches the confirmed checklist after review", async (t) => {
+  const { service, store, imported } = await fixture(t);
+  const created = await service.createLifeTipScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-tip-correction" });
+  const before = await service.getBoard("tip-1");
+  await correctExtractedField({ service, store, materialId: imported.materialId,
+    path: "/facts/0/value", value: "영수증을 날짜별로 먼저 분류한다",
+    ownerId: "reader", commandId: "correct-tip-step" });
+  const review = await service.getBoardReview("tip-1");
+  assert.equal(review.status, "ready");
+  const proposed = await service.proposeBoardReview({ activityId: "tip-1",
+    commandId: "propose-tip-correction", expectedRevision: before.revision,
+    confirmed: true });
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "approve-tip-correction" });
+  const board = await service.getBoard("tip-1");
+  assert.equal(board.tasks[0].readiness.inputs.candidates[0].text,
+    "영수증을 날짜별로 먼저 분류한다");
+  await service.confirmLifeTipActions({ commandId: "confirm-corrected-tip",
+    activityId: "tip-1", expectedRevision: board.revision, factIndexes: [1] });
+  const plan = resultValue(await service.getBoard("tip-1"), "confirm_actions").plan;
+  assert.equal(plan.actions[0].text, "영수증을 날짜별로 먼저 분류한다");
 });
 
 test("same-title captures do not automatically become one tip identity", async (t) => {

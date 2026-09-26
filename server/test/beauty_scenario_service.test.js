@@ -10,6 +10,7 @@ import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
 import { makeFiling, makeTag, makeValidAnalysis } from "./fixtures.js";
+import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const cases = [
   ["a_cleanser", "데일리 클렌징 젤", "114e7964624233360d5e46a97ca825383737e9c193efa46a044a7ae9c8c17dda"],
@@ -262,6 +263,33 @@ test("a changed capture title invalidates the pending beauty plan", async (t) =>
   await assert.rejects(service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-stale-beauty" }), (error) => error.code === "CONTEXT_STALE");
   assert.equal((await service.getBoard("beauty-1")).tasks.length, 0);
+  const review = await service.getBoardReview("beauty-1");
+  assert.equal(review.status, "blocked");
+  assert.equal(review.reasonCode, "CONTEXT_STALE");
+});
+
+test("a corrected beauty title replaces an unapproved draft", async (t) => {
+  const { service, store, imports } = await fixture(t);
+  const created = await service.createBeautyScenario(scenario);
+  await correctExtractedField({ service, store,
+    materialId: imports.a_cleanser.materialId, path: "/title/value",
+    value: "데일리 클렌징 젤 플러스", ownerId: "beauty-user",
+    commandId: "correct-beauty-title" });
+  const review = await service.getBoardReview("beauty-1");
+  assert.equal(review.status, "ready");
+  assert.equal(review.planKind, "draft");
+  const proposed = await service.proposeBoardReview({ activityId: "beauty-1",
+    commandId: "propose-beauty-correction", expectedRevision: review.revision,
+    confirmed: true });
+  await assert.rejects(service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-superseded-beauty" }),
+  (error) => error.code === "PROPOSAL_CONFLICT");
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "approve-corrected-beauty" });
+  const board = await service.getBoard("beauty-1");
+  assert.equal(board.tasks[0].readiness.inputs.candidates[0].name,
+    "데일리 클렌징 젤 플러스");
+  assert.equal(board.tasks[1].inputBindings.scheduledAt, scenario.scheduledAt);
 });
 
 test("deleting an imported beauty capture removes its dependent activity and report", async (t) => {

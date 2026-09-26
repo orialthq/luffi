@@ -9,6 +9,7 @@ import { createCommonKernelService, createCommonKernelState } from "../src/commo
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const imagePath = fileURLToPath(new URL("./fixtures/health_home_workout.png", import.meta.url));
 const analysisPath = fileURLToPath(new URL(
@@ -188,4 +189,30 @@ test("changed exercise text invalidates approval; a non-exercise capture is refu
   await assert.rejects(service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-stale-health" }),
   (error) => error.code === "CONTEXT_STALE");
+});
+
+test("corrected exercise text reaches the confirmed workout after review", async (t) => {
+  const { service, store, imported } = await fixture(t);
+  const created = await service.createHealthScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-exercise-correction" });
+  const before = await service.getBoard("workout-1");
+  await correctExtractedField({ service, store, materialId: imported.materialId,
+    path: "/facts/0/value", value: "스쿼트 12회씩 3세트",
+    ownerId: "exerciser", commandId: "correct-exercise-step" });
+  const review = await service.getBoardReview("workout-1");
+  assert.equal(review.status, "ready");
+  const proposed = await service.proposeBoardReview({ activityId: "workout-1",
+    commandId: "propose-exercise-correction", expectedRevision: before.revision,
+    confirmed: true });
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "approve-exercise-correction" });
+  const board = await service.getBoard("workout-1");
+  assert.equal(board.tasks[0].readiness.inputs.candidates[0].text,
+    "스쿼트 12회씩 3세트");
+  await service.confirmHealthExercises({ commandId: "confirm-corrected-health",
+    activityId: "workout-1", expectedRevision: board.revision,
+    factIndexes: [1] });
+  const plan = output(await service.getBoard("workout-1"), "confirm_exercises").plan;
+  assert.equal(plan.exercises[0].text, "스쿼트 12회씩 3세트");
 });

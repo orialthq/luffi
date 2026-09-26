@@ -9,6 +9,7 @@ import { createCommonKernelService, createCommonKernelState } from "../src/commo
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const cases = [
   ["a_viewpoint", "바람언덕 전망대", "07ddb947d3d725a1cd0737346f8a5817a7bd63e67301a88277cad4cbce483099"],
@@ -193,6 +194,33 @@ test("a changed place field invalidates a pending travel plan", async (t) => {
     payload: { assertionId: field.id } });
   await assert.rejects(service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-stale-travel" }), (error) => error.code === "CONTEXT_STALE");
+});
+
+test("a corrected place name reaches the approved itinerary", async (t) => {
+  const { service, store, imports } = await fixture(t);
+  const created = await service.createTravelScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-place-correction" });
+  const before = await service.getBoard("trip-1");
+  await correctExtractedField({ service, store,
+    materialId: imports.a_viewpoint.materialId, path: "/place/name",
+    value: "바람언덕 전망 쉼터", ownerId: "traveler",
+    commandId: "correct-travel-name" });
+  const review = await service.getBoardReview("trip-1");
+  assert.equal(review.status, "ready");
+  const proposed = await service.proposeBoardReview({ activityId: "trip-1",
+    commandId: "propose-travel-correction", expectedRevision: before.revision,
+    confirmed: true });
+  await service.acceptProposal({ proposalId: proposed.proposalId,
+    commandId: "approve-travel-correction" });
+  const board = await service.getBoard("trip-1");
+  assert.equal(board.tasks[0].readiness.inputs.candidates[0].name,
+    "바람언덕 전망 쉼터");
+  await service.confirmTravelItinerary({ commandId: "confirm-corrected-travel",
+    activityId: "trip-1", expectedRevision: board.revision, selections });
+  const itinerary = resultValue(await service.getBoard("trip-1"),
+    "confirm_itinerary").itinerary;
+  assert.equal(itinerary.stops[1].title, "바람언덕 전망 쉼터");
 });
 
 test("same-name captures remain separate places until a user resolves identity", async (t) => {

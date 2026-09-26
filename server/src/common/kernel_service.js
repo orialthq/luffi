@@ -1073,6 +1073,27 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return { contextId, ...context };
   }
 
+  function extractedField(state, receipt, path, { optional = false,
+    originalValue = null } = {}) {
+    const fields = state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.subjectId === receipt.result?.materialId &&
+      item.predicate === "ingestion.extracted_field" &&
+      item.typedValue?.type === "ingestion.field" &&
+      item.typedValue.value?.path === path);
+    if (optional && !originalValue && fields.length === 0) return null;
+    if (fields.length !== 1 || typeof fields[0].typedValue.value.value !== "string" ||
+        !fields[0].typedValue.value.value.trim() ||
+        fields[0].evidenceIds.length === 0 ||
+        fields[0].evidenceIds.some((id) => !state.knowledge.evidence.some((evidence) =>
+          evidence.ownerId === ownerId && evidence.id === id &&
+          evidence.status === "active"))) {
+      throw new AppError("CONTEXT_STALE", "캡처에서 확인한 필드의 최신 근거가 부족해요.",
+        { httpStatus: 409 });
+    }
+    return fields[0];
+  }
+
   function diningCandidates(state, importIds, area) {
     const groups = new Map();
     const contextQueries = [];
@@ -1090,8 +1111,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         throw new AppError("IMPORT_NOT_DINING", "식당·카페로 확인한 자료만 사용할 수 있어요.",
           { httpStatus: 400 });
       }
-      const searchArea = place.searchArea?.trim() || "";
-      const address = place.address?.trim() || "";
+      const nameField = extractedField(state, receipt, "/place/name");
+      const areaField = extractedField(state, receipt, "/place/searchArea",
+        { optional: true, originalValue: place.searchArea });
+      const addressField = extractedField(state, receipt, "/place/address",
+        { optional: true, originalValue: place.address });
+      const name = nameField.typedValue.value.value.trim();
+      const searchArea = areaField?.typedValue.value.value.trim() || "";
+      const address = addressField?.typedValue.value.value.trim() || "";
       if (searchArea && placeKey(searchArea) !== placeKey(area) &&
           !placeKey(address).includes(placeKey(area))) continue;
       if (!searchArea && address && !placeKey(address).includes(placeKey(area))) continue;
@@ -1099,20 +1126,18 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         item.ownerId === ownerId && item.sourceVersionId === version.id &&
         item.entityType === "dining.place" && item.status === "active");
       if (!mention) continue;
-      const key = [placeKey(place.name), placeKey(searchArea), placeKey(address)].join("|");
+      const key = [placeKey(name), placeKey(searchArea), placeKey(address)].join("|");
       const id = `dining-candidate:${fingerprint([ownerId, key]).slice(0, 24)}`;
-      const group = groups.get(key) ?? { id, name: place.name.trim(),
+      const group = groups.get(key) ?? { id, name,
         searchArea: searchArea || area, importIds: [], mentionIds: [], evidenceIds: [] };
       group.importIds.push(importId);
       group.mentionIds.push(mention.id);
-      group.evidenceIds.push(...mention.evidenceIds);
+      group.evidenceIds.push(...mention.evidenceIds, ...nameField.evidenceIds);
       groups.set(key, group);
-      const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
-        item.subjectId === receipt.result?.materialId &&
-        item.predicate === "ingestion.extracted_field" &&
-        item.typedValue?.value?.path === "/place/name" && item.status === "active");
-      if (field) contextQueries.push({ subjectId: field.subjectId,
-        predicate: field.predicate, scope: field.scope });
+      for (const field of [nameField, areaField, addressField].filter(Boolean)) {
+        contextQueries.push({ subjectId: field.subjectId,
+          predicate: field.predicate, scope: field.scope });
+      }
     }
     const candidates = [...groups.values()].map((item) => ({ ...item,
       evidenceIds: [...new Set(item.evidenceIds)] }));
@@ -1145,13 +1170,10 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         item.entityType === "core.product" && item.status === "active");
       if (!mention) throw new AppError("IMPORT_NOT_FASHION", "상품 근거를 확인할 수 없어요.",
         { httpStatus: 400 });
-      candidates.push({ importId, name: analysis.title.value.trim(), mentionId: mention.id,
-        evidenceIds: [...mention.evidenceIds] });
-      const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
-        item.subjectId === receipt.result?.materialId &&
-        item.predicate === "ingestion.extracted_field" &&
-        item.typedValue?.value?.path === "/title/value" && item.status === "active");
-      if (!field) throw new AppError("CONTEXT_STALE", "상품명 근거가 변경됐어요.", { httpStatus: 409 });
+      const field = extractedField(state, receipt, "/title/value");
+      candidates.push({ importId, name: field.typedValue.value.value.trim(),
+        mentionId: mention.id,
+        evidenceIds: [...new Set([...mention.evidenceIds, ...field.evidenceIds])] });
       contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
         scope: field.scope });
     }
@@ -1179,14 +1201,10 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         item.entityType === "core.product" && item.status === "active");
       if (!mention) throw new AppError("IMPORT_NOT_BEAUTY", "상품 근거를 확인할 수 없어요.",
         { httpStatus: 400 });
-      candidates.push({ importId, name: analysis.title.value.trim(), mentionId: mention.id,
-        evidenceIds: [...mention.evidenceIds] });
-      const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
-        item.subjectId === receipt.result?.materialId &&
-        item.predicate === "ingestion.extracted_field" &&
-        item.typedValue?.value?.path === "/title/value" && item.status === "active");
-      if (!field) throw new AppError("CONTEXT_STALE", "상품명 근거가 변경됐어요.",
-        { httpStatus: 409 });
+      const field = extractedField(state, receipt, "/title/value");
+      candidates.push({ importId, name: field.typedValue.value.value.trim(),
+        mentionId: mention.id,
+        evidenceIds: [...new Set([...mention.evidenceIds, ...field.evidenceIds])] });
       contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
         scope: field.scope });
     }
@@ -1207,7 +1225,6 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       if (!analysis || analysis.contentKind !== "place" ||
           analysis.place?.category !== "activity" || !analysis.place.name?.trim() ||
           !analysis.place.searchArea?.trim() ||
-          placeKey(analysis.place.searchArea) !== placeKey(area) ||
           !analysis.place.evidenceIds?.length) {
         throw new AppError("IMPORT_NOT_TRAVEL", "지역과 장소명이 보이는 여행 장소만 사용할 수 있어요.",
           { httpStatus: 400 });
@@ -1217,16 +1234,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         item.entityType === "travel.place" && item.status === "active");
       if (!mention) throw new AppError("IMPORT_NOT_TRAVEL", "여행 장소 근거를 확인할 수 없어요.",
         { httpStatus: 400 });
-      candidates.push({ importId, name: analysis.place.name.trim(),
-        searchArea: analysis.place.searchArea.trim(), mentionId: mention.id,
-        evidenceIds: [...mention.evidenceIds] });
+      const nameField = extractedField(state, receipt, "/place/name");
+      const areaField = extractedField(state, receipt, "/place/searchArea");
+      const searchArea = areaField.typedValue.value.value.trim();
+      if (placeKey(searchArea) !== placeKey(area)) {
+        throw new AppError("IMPORT_NOT_TRAVEL", "선택한 지역과 장소 근거가 달라요.",
+          { httpStatus: 400 });
+      }
+      candidates.push({ importId, name: nameField.typedValue.value.value.trim(),
+        searchArea, mentionId: mention.id,
+        evidenceIds: [...new Set([...mention.evidenceIds,
+          ...nameField.evidenceIds, ...areaField.evidenceIds])] });
       for (const path of ["/place/name", "/place/searchArea"]) {
-        const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
-          item.subjectId === receipt.result?.materialId &&
-          item.predicate === "ingestion.extracted_field" &&
-          item.typedValue?.value?.path === path && item.status === "active");
-        if (!field) throw new AppError("CONTEXT_STALE", "여행 장소 근거가 변경됐어요.",
-          { httpStatus: 409 });
+        const field = path === "/place/name" ? nameField : areaField;
         contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
           scope: field.scope });
       }
@@ -1271,31 +1291,18 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       item.entityType === "life_tip.tip" && item.status === "active");
     if (!mention) throw new AppError("IMPORT_NOT_LIFE_TIP",
       "꿀팁 제목 근거를 확인할 수 없어요.", { httpStatus: 400 });
+    const titleField = extractedField(state, receipt, "/title/value");
+    const stepFields = entries.map((entry) => extractedField(state, receipt, entry.path));
     const contextQueries = [];
-    for (const path of ["/title/value", ...entries.map((item) => item.path)]) {
-      const field = state.knowledge.assertions.find((item) =>
-        item.ownerId === ownerId && item.subjectId === receipt.result?.materialId &&
-        item.predicate === "ingestion.extracted_field" &&
-        item.typedValue?.value?.path === path && item.status === "active");
-      const expectedValue = path === "/title/value" ? analysis.title.value :
-        entries.find((item) => item.path === path).text;
-      if (!field || field.typedValue?.value?.value !== expectedValue) {
-        throw new AppError("CONTEXT_STALE", "꿀팁 근거가 변경됐어요.",
-          { httpStatus: 409 });
-      }
+    for (const field of [titleField, ...stepFields]) {
       contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
         scope: field.scope });
     }
-    const candidates = entries.map((entry, index) => {
-      const evidenceIds = entry.evidenceIds.map((legacyId) =>
-        state.knowledge.evidence.find((item) => item.ownerId === ownerId &&
-          item.sourceVersionId === version.id && item.status === "active" &&
-          item.locator?.legacyEvidenceId === legacyId)?.id);
-      if (evidenceIds.some((id) => !id)) throw new AppError("CONTEXT_STALE",
-        "꿀팁 단계의 화면 근거를 찾지 못했어요.", { httpStatus: 409 });
-      return { factIndex: index + 1, text: entry.text.trim(), evidenceIds };
-    });
-    return { candidate: { importId, title: analysis.title.value.trim(),
+    const candidates = stepFields.map((field, index) => ({
+      factIndex: index + 1, text: field.typedValue.value.value.trim(),
+      evidenceIds: [...field.evidenceIds],
+    }));
+    return { candidate: { importId, title: titleField.typedValue.value.value.trim(),
       mentionId: mention.id, candidates }, contextQueries };
   }
 
@@ -1330,33 +1337,26 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       item.entityType === "health.workout" && item.status === "active");
     if (!mention) throw new AppError("IMPORT_NOT_HEALTH",
       "운동 제목 근거를 확인할 수 없어요.", { httpStatus: 400 });
+    const titleField = extractedField(state, receipt, "/title/value");
+    const stepFields = analysis.facts.map((_, index) => ({
+      label: extractedField(state, receipt, `/facts/${index}/label`),
+      value: extractedField(state, receipt, `/facts/${index}/value`),
+    }));
     const contextQueries = [];
-    for (const path of ["/title/value", ...analysis.facts.flatMap((_, index) =>
-      [`/facts/${index}/label`, `/facts/${index}/value`])]) {
-      const field = state.knowledge.assertions.find((item) =>
-        item.ownerId === ownerId && item.subjectId === receipt.result?.materialId &&
-        item.predicate === "ingestion.extracted_field" &&
-        item.typedValue?.value?.path === path && item.status === "active");
-      const pieces = path.split("/");
-      const expected = pieces[1] === "title" ? analysis.title.value :
-        analysis.facts[Number(pieces[2])][pieces[3]];
-      if (!field || field.typedValue?.value?.value !== expected) {
-        throw new AppError("CONTEXT_STALE", "운동 화면 근거가 변경됐어요.",
-          { httpStatus: 409 });
-      }
+    for (const field of [titleField, ...stepFields.flatMap((item) =>
+      [item.label, item.value])]) {
       contextQueries.push({ subjectId: field.subjectId,
         predicate: field.predicate, scope: field.scope });
     }
-    const candidates = analysis.facts.map((fact, index) => {
-      const evidenceIds = fact.evidenceIds.map((legacyId) =>
-        state.knowledge.evidence.find((item) => item.ownerId === ownerId &&
-          item.sourceVersionId === version.id && item.status === "active" &&
-          item.locator?.legacyEvidenceId === legacyId)?.id);
-      if (evidenceIds.some((id) => !id)) throw new AppError("CONTEXT_STALE",
-        "운동 항목의 화면 근거가 변경됐어요.", { httpStatus: 409 });
-      return { factIndex: index + 1, text: fact.value.trim(), evidenceIds };
+    const candidates = stepFields.map(({ label, value }, index) => {
+      if (label.typedValue.value.value !== `${index + 1}단계`) {
+        throw new AppError("CONTEXT_STALE", "운동 단계의 순서가 달라졌어요.",
+          { httpStatus: 409 });
+      }
+      return { factIndex: index + 1,
+        text: value.typedValue.value.value.trim(), evidenceIds: [...value.evidenceIds] };
     });
-    return { candidate: { importId, title: analysis.title.value.trim(),
+    return { candidate: { importId, title: titleField.typedValue.value.value.trim(),
       mentionId: mention.id, candidates }, contextQueries };
   }
 
@@ -1572,6 +1572,31 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     });
   }
 
+  function reviewScenarioReceipt(state, activityId, receipts) {
+    const receipt = Object.values(receipts ?? {}).find((item) =>
+      !item.deleted && item.result?.activityId === activityId);
+    if (!receipt) throw new AppError("SCENARIO_DELETED",
+      "활동의 원본 요청을 찾지 못했어요.", { httpStatus: 410 });
+    return receipt;
+  }
+
+  function reviewInputPlan(state, activityId, current) {
+    if (current.currentPlanRevision > 0) return current;
+    const proposal = Object.values(state.proposals).find((item) =>
+      item.ownerId === ownerId && item.activityId === activityId &&
+      item.kind === "draft");
+    if (!proposal) throw new AppError("REPLAN_UNAVAILABLE",
+      "이전 계획 입력을 찾지 못했어요.", { httpStatus: 409 });
+    return proposal.plan;
+  }
+
+  function reviewTask(plan, taskId) {
+    const task = plan.tasks.find((item) => item.id === taskId);
+    if (!task) throw new AppError("REPLAN_UNAVAILABLE",
+      "작업 구성을 다시 확인해 주세요.", { httpStatus: 409 });
+    return task;
+  }
+
   function recoveryDraft(state, activityId, current) {
     if (current.pendingChanges.some((item) => item.resourceId ||
         item.retrievalReasons?.length) ||
@@ -1664,6 +1689,71 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         includeCookTask: tasks.some((item) => item.id === "cook"),
         evidenceIds: [...confirmed.evidenceIds] }, { registry });
       return { scenario, contextQueries, draft };
+    }
+    if (scenario === "dining") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.diningScenarioReceipts);
+      const plan = reviewInputPlan(state, activityId, current);
+      const details = reviewTask(plan, "review_visit_details");
+      const area = receipt.area ?? (current.title.endsWith(" 식사")
+        ? current.title.slice(0, -3) : null);
+      if (!area || !details.inputBindings.scheduledAt ||
+          !Number.isSafeInteger(details.inputBindings.partySize)) {
+        throw new AppError("REPLAN_UNAVAILABLE",
+          "식사 일정 입력을 찾지 못했어요.", { httpStatus: 409 });
+      }
+      const { candidates, contextQueries } = diningCandidates(state, receipt.importIds,
+        area);
+      return { scenario, contextQueries, draft: buildDiningPlanDraft({ candidates,
+        scheduledAt: details.inputBindings.scheduledAt,
+        partySize: details.inputBindings.partySize }, { registry }) };
+    }
+    if (scenario === "fashion") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.fashionScenarioReceipts);
+      const plan = reviewInputPlan(state, activityId, current);
+      const occasion = reviewTask(plan, "confirm_outfit").inputBindings.occasion;
+      const { candidates, contextQueries } = fashionCandidates(state, receipt.importIds);
+      return { scenario, contextQueries,
+        draft: buildFashionPlanDraft({ candidates, occasion }, { registry }) };
+    }
+    if (scenario === "beauty") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.beautyScenarioReceipts);
+      const plan = reviewInputPlan(state, activityId, current);
+      const confirmation = reviewTask(plan, "confirm_routine");
+      const instance = reviewTask(plan, "instantiate_routine");
+      const { candidates, contextQueries } = beautyCandidates(state, receipt.importIds);
+      return { scenario, contextQueries, draft: buildBeautyPlanDraft({ candidates,
+        occasion: confirmation.inputBindings.occasion,
+        scheduledAt: instance.inputBindings.scheduledAt,
+        occurrenceId: instance.inputBindings.occurrenceId }, { registry }) };
+    }
+    if (scenario === "travel") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.travelScenarioReceipts);
+      const plan = reviewInputPlan(state, activityId, current);
+      const confirmation = reviewTask(plan, "confirm_itinerary");
+      const area = receipt.area ?? confirmation.inputBindings.area;
+      const startAt = receipt.startAt ?? confirmation.inputBindings.startAt;
+      const { candidates, contextQueries } = travelCandidates(state, receipt.importIds,
+        area);
+      return { scenario, contextQueries,
+        draft: buildTravelPlanDraft({ candidates, area, startAt }, { registry }) };
+    }
+    if (scenario === "life_tip") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.lifeTipScenarioReceipts);
+      const { candidate, contextQueries } = lifeTipCandidate(state, receipt.importId);
+      return { scenario, contextQueries,
+        draft: buildLifeTipPlanDraft({ candidate }, { registry }) };
+    }
+    if (scenario === "health") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.healthScenarioReceipts);
+      const { candidate, contextQueries } = healthCandidate(state, receipt.importId);
+      return { scenario, contextQueries,
+        draft: buildHealthPlanDraft({ candidate }, { registry }) };
     }
     throw new AppError("REPLAN_UNAVAILABLE",
       "이 분야는 자동 계획 수정 대신 새 활동에서 다시 확인해 주세요.",
@@ -2700,7 +2790,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, revision: created.result.revision, proposalId,
             contextId: issued.contextId, candidateCount: candidates.length };
           state.diningScenarioReceipts[receiptKey] = { hash: requestHash,
-            importIds: [...importIds], result };
+            importIds: [...importIds], area, result };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
