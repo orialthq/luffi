@@ -145,6 +145,60 @@ test("recipe ingredient correction creates an approval-gated patch without rewri
   assert.equal((await service.getBoardReview(created.activityId)).status, "current");
 });
 
+test("started recipe keeps its result while a corrected recipe starts a new activity", async (t) => {
+  const { service, store } = await fixture(t);
+  const created = await service.createRecipeScenario(scenario());
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "accept-recipe-before-continuation" });
+  let board = await service.getBoard(created.activityId);
+  await service.runTask({ activityId: created.activityId, taskId: "scale_servings",
+    expectedRevision: board.revision, commandId: "scale-before-continuation" });
+  board = await service.getBoard(created.activityId);
+  const oldResults = structuredClone(board.results);
+  const snapshot = await store.snapshot();
+  const confirmed = snapshot.knowledge.assertions.find((item) =>
+    item.status === "active" && item.subjectId === created.recipeEntityId &&
+    item.predicate === "recipe.confirmed_recipe");
+  const correctedRecipe = structuredClone(confirmed.typedValue.value);
+  correctedRecipe.ingredients[0].quantity.amount = 450;
+  await service.knowledgeCommand({ commandId: "correct-started-recipe",
+    type: "assertion.correct", payload: { assertionId: confirmed.id,
+      expectedRevision: confirmed.revision,
+      assertion: { id: "corrected-started-recipe", subjectId: confirmed.subjectId,
+        predicate: confirmed.predicate, scope: confirmed.scope,
+        origin: "user_reported", assertedBy: { type: "user", id: "person-1" },
+        evidenceIds: confirmed.evidenceIds, observedAt: new Date().toISOString(),
+        typedValue: { type: "recipe.recipe", value: correctedRecipe } } } });
+  const requirement = snapshot.knowledge.assertions.find((item) =>
+    item.status === "active" && item.predicate === "recipe.requirement_value" &&
+    item.typedValue?.value?.id === "tofu-line");
+  await service.knowledgeCommand({ commandId: "correct-started-requirement",
+    type: "assertion.correct", payload: { assertionId: requirement.id,
+      expectedRevision: requirement.revision,
+      assertion: { id: "corrected-started-requirement",
+        subjectId: requirement.subjectId, predicate: requirement.predicate,
+        scope: requirement.scope, origin: "user_reported",
+        assertedBy: { type: "user", id: "person-1" },
+        evidenceIds: requirement.evidenceIds, observedAt: new Date().toISOString(),
+        typedValue: { type: requirement.typedValue.type,
+          value: correctedRecipe.ingredients[0] } } } });
+  assert.equal((await service.getBoardReview(created.activityId)).reasonCode,
+    "STARTED_TASK_PROTECTED");
+  const request = { activityId: created.activityId, expectedRevision: board.revision,
+    commandId: "continue-started-recipe", confirmed: true };
+  const next = await service.createReviewSuccessor(request);
+  const pending = await service.getBoard(next.activityId);
+  assert.equal(pending.continuedFrom, created.activityId);
+  assert.equal(pending.tasks.length, 0);
+  assert.notEqual(next.recipeEntityId, created.recipeEntityId);
+  await service.acceptProposal({ proposalId: next.proposalId,
+    commandId: "accept-continued-recipe" });
+  const continued = await service.getBoard(next.activityId);
+  assert.equal(continued.tasks[0].inputBindings.recipe.ingredients[0].quantity.amount,
+    450);
+  assert.deepEqual((await service.getBoard(created.activityId)).results, oldResults);
+});
+
 test("unconfirmed, missing imports, and invalid recipes leave no partial scenario", async (t) => {
   const { service, store } = await fixture(t);
   const initial = await store.snapshot();

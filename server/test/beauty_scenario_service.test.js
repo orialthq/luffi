@@ -292,6 +292,37 @@ test("a corrected beauty title replaces an unapproved draft", async (t) => {
   assert.equal(board.tasks[1].inputBindings.scheduledAt, scenario.scheduledAt);
 });
 
+test("a started routine continues with a new occurrence and leaves the old result intact", async (t) => {
+  const { service, store, imports } = await fixture(t);
+  const created = await service.createBeautyScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-beauty-continuation" });
+  let old = await service.getBoard("beauty-1");
+  await service.confirmBeautyRoutine({ commandId: "confirm-before-beauty-continuation",
+    activityId: "beauty-1", expectedRevision: old.revision, selections });
+  old = await service.getBoard("beauty-1");
+  const oldResults = structuredClone(old.results);
+  const oldOccurrenceId = old.tasks.find((item) => item.id === "instantiate_routine")
+    .inputBindings.occurrenceId;
+  await correctExtractedField({ service, store,
+    materialId: imports.a_cleanser.materialId, path: "/title/value",
+    value: "데일리 클렌징 젤 플러스", ownerId: "beauty-user",
+    commandId: "correct-started-beauty-title" });
+  assert.equal((await service.getBoardReview("beauty-1")).reasonCode,
+    "STARTED_TASK_PROTECTED");
+  const next = await service.createReviewSuccessor({ activityId: "beauty-1",
+    commandId: "continue-beauty-routine", expectedRevision: old.revision,
+    confirmed: true });
+  await service.acceptProposal({ proposalId: next.proposalId,
+    commandId: "approve-continued-beauty" });
+  const continued = await service.getBoard(next.activityId);
+  assert.equal(continued.tasks[0].readiness.inputs.candidates[0].name,
+    "데일리 클렌징 젤 플러스");
+  assert.notEqual(continued.tasks.find((item) => item.id === "instantiate_routine")
+    .inputBindings.occurrenceId, oldOccurrenceId);
+  assert.deepEqual((await service.getBoard("beauty-1")).results, oldResults);
+});
+
 test("deleting an imported beauty capture removes its dependent activity and report", async (t) => {
   const { service, store, imports } = await fixture(t);
   const created = await service.createBeautyScenario(scenario);

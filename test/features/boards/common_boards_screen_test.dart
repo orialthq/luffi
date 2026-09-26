@@ -186,8 +186,10 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   KernelJson board = _board();
+  KernelJson? successorBoard;
   KernelJson? boardReview;
   final boardReviewRequests = <KernelJson>[];
+  final successorRequests = <KernelJson>[];
   final commands = <KernelJson>[];
   final runs = <KernelJson>[];
   final scenarioRequests = <KernelJson>[];
@@ -256,19 +258,30 @@ final class FakeKernelClient implements CommonKernelClient {
     if (failRead) {
       throw const CommonKernelException('NETWORK_UNAVAILABLE', '보드 연결 실패');
     }
-    return Map<String, Object?>.from(jsonDecode(jsonEncode(board)) as Map);
+    final selected = successorBoard?['id'] == activityId
+        ? successorBoard!
+        : board;
+    return Map<String, Object?>.from(jsonDecode(jsonEncode(selected)) as Map);
   }
 
   @override
   Future<KernelJson> getBoardReview(String activityId) async =>
-      boardReview ??
-      {
-        'activityId': activityId,
-        'status': 'current',
-        'revision': board['revision'],
-        'changes': [],
-        'affectedTasks': [],
-      };
+      activityId == successorBoard?['id']
+      ? {
+          'activityId': activityId,
+          'status': 'current',
+          'revision': successorBoard?['revision'],
+          'changes': [],
+          'affectedTasks': [],
+        }
+      : boardReview ??
+            {
+              'activityId': activityId,
+              'status': 'current',
+              'revision': board['revision'],
+              'changes': [],
+              'affectedTasks': [],
+            };
 
   @override
   Future<KernelJson> proposeBoardReview(KernelJson request) async {
@@ -296,6 +309,26 @@ final class FakeKernelClient implements CommonKernelClient {
       'revision': board['revision'],
       'planKind': 'patch',
       'affectedTasks': [],
+    };
+  }
+
+  @override
+  Future<KernelJson> createReviewSuccessor(KernelJson request) async {
+    successorRequests.add(request);
+    board['continuations'] = ['review-new'];
+    successorBoard = {
+      ..._board(),
+      'id': 'review-new',
+      'title': '새 활동',
+      'continuedFrom': request['activityId'],
+      'continuations': <String>[],
+      'pendingChanges': <Object?>[],
+    };
+    return {
+      'activityId': 'review-new',
+      'proposalId': 'review-new-proposal',
+      'continuedFrom': request['activityId'],
+      'replayed': false,
     };
   }
 
@@ -1190,6 +1223,13 @@ void main() {
         find.byKey(const Key('kernel-propose-board-review')),
         findsNothing,
       );
+      await tester.tap(find.byKey(const Key('kernel-create-review-successor')));
+      await tester.pumpAndSettle();
+      expect(client.successorRequests, hasLength(1));
+      expect(client.successorRequests.single['activityId'], 'activity-1');
+      expect(client.successorRequests.single['expectedRevision'], 7);
+      expect(find.text('새 활동'), findsOneWidget);
+      expect(find.text('이전 활동 보기'), findsOneWidget);
     },
   );
 

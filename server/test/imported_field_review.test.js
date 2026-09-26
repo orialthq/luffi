@@ -146,6 +146,9 @@ test("price correction explains the change and a reviewed patch restores the sam
   assert.ok(report.changes.some((item) => item.before.includes("19,900원") &&
     item.after.includes("12,900원")));
   assert.deepEqual(report.affectedTasks.map((item) => item.id), ["confirm_choice"]);
+  await assert.rejects(service.createReviewSuccessor({ activityId: "shopping-board",
+    commandId: "not-started-continuation", expectedRevision: before.revision,
+    confirmed: true }), (error) => error.code === "CONTINUATION_UNAVAILABLE");
   const request = { activityId: "shopping-board", commandId: "propose-correction",
     expectedRevision: before.revision, confirmed: true };
   const proposed = await service.proposeBoardReview(request);
@@ -222,7 +225,7 @@ test("a recovery proposal cannot be approved after its evidence changes again", 
 });
 
 test("completed shopping choice is historical and cannot be rewritten by recovery", async (t) => {
-  const { service } = await fixture(t, (analysis) => {
+  const { service, store, imported } = await fixture(t, (analysis) => {
     analysis.facts[3].label = "판매가";
   });
   await service.reviewImportedField(review({ commandId: "initial-price",
@@ -245,6 +248,37 @@ test("completed shopping choice is historical and cannot be rewritten by recover
     commandId: "reject-rewrite", expectedRevision: board.revision,
     confirmed: true }), (error) => error.code === "STARTED_TASK_PROTECTED");
   assert.deepEqual((await service.getBoard("shopping-board")).results, originalResult);
+  const request = { activityId: "shopping-board", commandId: "continue-shopping",
+    expectedRevision: board.revision, confirmed: true };
+  const foreign = createCommonKernelService({ ownerId: "other-user", store });
+  await assert.rejects(foreign.createReviewSuccessor(request),
+    (error) => error.code === "FORBIDDEN");
+  await assert.rejects(service.createShoppingScenario({
+    commandId: "forge-continued-shopping", activityId: "forged-review-board",
+    confirmed: true, importIds: ["ambiguous-price"], purpose: "다른 목적",
+    continuationOf: { activityId: "shopping-board",
+      expectedRevision: board.revision },
+  }), (error) => error.code === "CONTINUATION_INPUT_CONFLICT");
+  const next = await service.createReviewSuccessor(request);
+  assert.equal((await service.createReviewSuccessor(request)).replayed, true);
+  assert.equal((await service.getBoard("shopping-board")).continuations[0],
+    next.activityId);
+  const pending = await service.getBoard(next.activityId);
+  assert.equal(pending.continuedFrom, "shopping-board");
+  assert.equal(pending.tasks.length, 0);
+  assert.equal(pending.pendingProposals.length, 1);
+  await service.acceptProposal({ proposalId: next.proposalId,
+    commandId: "approve-continued-shopping" });
+  const continued = await service.getBoard(next.activityId);
+  assert.equal(continued.tasks[0].readiness.inputs.candidates[0].displayedPriceText,
+    "12,900원");
+  assert.deepEqual((await service.getBoard("shopping-board")).results, originalResult);
+  await service.knowledgeCommand({ commandId: "delete-continued-shopping-source",
+    type: "source.delete", payload: { sourceId: imported.sourceId } });
+  await assert.rejects(service.getBoard("shopping-board"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.getBoard(next.activityId),
+    (error) => error.code === "NOT_FOUND");
 });
 
 test("a customized task graph is not silently rebound to new evidence", async (t) => {

@@ -404,6 +404,7 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/activities/run-task", "runTask"],
     ["/planning/proposals", "proposePlan"],
     ["/planning/review-proposals", "proposeBoardReview"],
+    ["/planning/review-successors", "createReviewSuccessor"],
     ["/planning/accept", "acceptProposal"],
     ["/recipe/scenarios", "createRecipeScenario"],
     ["/dining/scenarios", "createDiningScenario"],

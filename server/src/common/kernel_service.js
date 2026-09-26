@@ -43,6 +43,7 @@ export function createCommonKernelState() {
     resourceWatches: {},
     proposals: {},
     reviewProposalReceipts: {},
+    reviewContinuations: {},
     importReceipts: {},
     fieldReviews: {},
     fieldReviewReceipts: {},
@@ -306,9 +307,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const value = getActivityBoard(state.activities, activityId, { ownerId });
     const resourceClaims = state.resources.claims.filter((claim) =>
       claim.ownerId === ownerId && claim.activityId === activityId);
+    const continuedFrom = state.reviewContinuations?.[activityId];
     return {
       ...value,
       scenario: scenarioForActivity(state, activityId),
+      continuedFrom: continuedFrom?.ownerId === ownerId ? continuedFrom.fromActivityId : null,
+      continuations: Object.entries(state.reviewContinuations ?? {})
+        .filter(([nextId, entry]) => entry.ownerId === ownerId &&
+          entry.fromActivityId === activityId && state.activities.activities[nextId])
+        .map(([nextId]) => nextId),
       resourceClaims,
       pendingChanges: state.reviewEvents.filter((event) => event.activityId === activityId),
       pendingProposals: Object.values(state.proposals).filter((proposal) =>
@@ -610,6 +617,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         if (item.ownerId === ownerId && item.result?.activityId === activityId) {
           item.deleted = true;
           item.result = { activityId };
+        }
+      }
+      for (const [nextId, entry] of Object.entries(state.reviewContinuations ?? {})) {
+        if (nextId === activityId || entry.fromActivityId === activityId) {
+          delete state.reviewContinuations[nextId];
         }
       }
       for (const [key, item] of Object.entries(state.issuedContexts)) {
@@ -1803,7 +1815,174 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     affectedTasks };
   }
 
+  function reviewSuccessorDetails(state, activityId, scenario, current, draft) {
+    const task = (id) => reviewTask(draft, id).inputBindings;
+    if (scenario === "recipe") {
+      const source = Object.values(state.proposals).find((item) =>
+        item.ownerId === ownerId && item.activityId === activityId &&
+        item.kind === "draft" && item.run?.scenario === "recipe");
+      const requirements = task("calculate_requirements");
+      return { recipe: task("scale_servings").recipe,
+        targetServings: task("scale_servings").targetServings,
+        inventory: [], collectInventory: true,
+        includeOptionalIngredientIds: requirements.includeOptionalIngredientIds ?? [],
+        includeCookTask: draft.tasks.some((item) => item.id === "cook"),
+        ...(source?.run?.importId ? { importId: source.run.importId } : {}),
+        ...(source?.run?.synthetic ? { synthetic: true } : {}) };
+    }
+    if (scenario === "dining") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.diningScenarioReceipts);
+      return { importIds: [...receipt.importIds],
+        area: receipt.area ?? current.title.slice(0, -3),
+        scheduledAt: task("review_visit_details").scheduledAt,
+        partySize: task("review_visit_details").partySize };
+    }
+    if (scenario === "fashion") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.fashionScenarioReceipts);
+      return { importIds: [...receipt.importIds],
+        occasion: task("confirm_outfit").occasion,
+        scheduledAt: receipt.scheduledAt ??
+          current.goal.description?.split(" · ")[0] };
+    }
+    if (scenario === "beauty") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.beautyScenarioReceipts);
+      return { importIds: [...receipt.importIds],
+        occasion: task("confirm_routine").occasion,
+        scheduledAt: task("instantiate_routine").scheduledAt };
+    }
+    if (scenario === "travel") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.travelScenarioReceipts);
+      return { importIds: [...receipt.importIds],
+        area: task("confirm_itinerary").area,
+        startAt: task("confirm_itinerary").startAt };
+    }
+    if (scenario === "life_tip") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.lifeTipScenarioReceipts);
+      return { importId: receipt.importId };
+    }
+    if (scenario === "shopping") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.shoppingScenarioReceipts);
+      return { importIds: [...receipt.importIds], purpose: receipt.purpose };
+    }
+    if (scenario === "health") {
+      const receipt = reviewScenarioReceipt(state, activityId,
+        state.healthScenarioReceipts);
+      return { importId: receipt.importId };
+    }
+    throw new AppError("CONTINUATION_UNAVAILABLE",
+      "이 활동은 이어 만들 수 없어요.", { httpStatus: 409 });
+  }
+
+  function continuationSource(state, raw, scenario, nextActivityId,
+    requested = null) {
+    if (raw === undefined) return null;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+        Object.keys(raw).some((key) => !["activityId", "expectedRevision"].includes(key)) ||
+        !Number.isSafeInteger(raw.expectedRevision) || raw.expectedRevision < 0) {
+      throw new AppError("INVALID_REQUEST", "이전 활동 정보를 확인해 주세요.",
+        { httpStatus: 400 });
+    }
+    const activityId = safeId(raw.activityId, "continuationOf.activityId");
+    if (activityId === nextActivityId) throw new AppError("INVALID_REQUEST",
+      "새 활동 ID는 이전 활동과 달라야 해요.", { httpStatus: 400 });
+    const current = board(state, activityId);
+    if (current.revision !== raw.expectedRevision) throw new AppError(
+      "REVISION_CONFLICT", "이전 활동이 변경됐어요. 다시 불러와 주세요.",
+      { httpStatus: 409 });
+    if (current.lifecycle !== "active" || scenarioForActivity(state, activityId) !== scenario ||
+        !boardNeedsReview(state, activityId, current)) {
+      throw new AppError("CONTINUATION_UNAVAILABLE",
+        "현재 활동은 새 활동으로 이어갈 대상이 아니에요.", { httpStatus: 409 });
+    }
+    const recovered = recoveryDraft(state, activityId, current);
+    try {
+      recoveryPlan(current, recovered.draft);
+    } catch (error) {
+      if (error instanceof AppError && error.code === "STARTED_TASK_PROTECTED") {
+        if (requested) {
+          const expected = reviewSuccessorDetails(state, activityId,
+            scenario, current, recovered.draft);
+          const allowed = new Set(["commandId", "activityId", "confirmed",
+            "continuationOf", ...Object.keys(expected)]);
+          if (Object.keys(requested).some((key) => !allowed.has(key)) ||
+              Object.entries(expected).some(([key, value]) =>
+                requestFingerprint({ value: requested[key] }) !==
+                  requestFingerprint({ value }))) {
+            throw new AppError("CONTINUATION_INPUT_CONFLICT",
+              "새 활동의 입력이 변경된 근거와 달라요.", { httpStatus: 409 });
+          }
+        }
+        return activityId;
+      }
+      throw error;
+    }
+    throw new AppError("CONTINUATION_UNAVAILABLE",
+      "기존 보드에서 계획을 수정할 수 있어요.", { httpStatus: 409 });
+  }
+
+  function recordContinuation(state, nextActivityId, fromActivityId,
+    fromRevision, result) {
+    if (!fromActivityId) return;
+    state.reviewContinuations ??= {};
+    state.reviewContinuations[nextActivityId] = { ownerId, fromActivityId,
+      fromRevision, result: structuredClone(result),
+      createdAt: new Date().toISOString() };
+  }
+
   return {
+    async createReviewSuccessor(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["activityId", "commandId",
+          "expectedRevision", "confirmed"].includes(key)) ||
+          input.confirmed !== true || !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 0) {
+          throw new AppError("INVALID_REQUEST", "새 활동 요청을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const activityId = safeId(input.activityId, "activityId");
+        const commandId = safeId(input.commandId, "commandId");
+        const key = fingerprint([ownerId, commandId]);
+        const nextActivityId = `review-${key.slice(0, 24)}`;
+        const nextCommandId = `review-successor:${key.slice(0, 32)}`;
+        const continuationOf = { activityId, expectedRevision: input.expectedRevision };
+        const prepared = await read((state) => {
+          const existing = state.reviewContinuations?.[nextActivityId];
+          if (existing) {
+            if (existing.ownerId !== ownerId ||
+                existing.fromActivityId !== activityId ||
+                existing.fromRevision !== input.expectedRevision) {
+              throw new AppError("COMMAND_CONFLICT",
+                "명령 ID가 다른 새 활동에 사용됐어요.", { httpStatus: 409 });
+            }
+            return { replay: { ...existing.result, continuedFrom: activityId,
+              replayed: true } };
+          }
+          const current = board(state, activityId);
+          const scenario = scenarioForActivity(state, activityId);
+          continuationSource(state, continuationOf, scenario, nextActivityId);
+          const { draft } = recoveryDraft(state, activityId, current);
+          return { scenario, details: reviewSuccessorDetails(state,
+            activityId, scenario, current, draft) };
+        });
+        if (prepared.replay) return prepared.replay;
+        const creators = { recipe: "createRecipeScenario", dining: "createDiningScenario",
+          fashion: "createFashionScenario", beauty: "createBeautyScenario",
+          travel: "createTravelScenario", life_tip: "createLifeTipScenario",
+          shopping: "createShoppingScenario", health: "createHealthScenario" };
+        const result = await this[creators[prepared.scenario]]({
+          commandId: nextCommandId, activityId: nextActivityId, confirmed: true,
+          continuationOf, ...prepared.details,
+        });
+        return { ...result, continuedFrom: activityId };
+      } catch (error) { throw toHttpError(error); }
+    },
     async getBoardReview(activityId) {
       try {
         safeId(activityId, "activityId");
@@ -2558,7 +2737,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         const allowed = new Set(["commandId", "activityId", "confirmed", "recipe", "targetServings",
-          "inventory", "includeOptionalIngredientIds", "collectInventory", "includeCookTask", "importId", "synthetic"]);
+          "inventory", "includeOptionalIngredientIds", "collectInventory", "includeCookTask", "importId", "synthetic", "continuationOf"]);
         if (Object.keys(input).some((key) => !allowed.has(key)) || input.confirmed !== true ||
             (input.synthetic !== undefined && input.synthetic !== true) ||
             (input.synthetic === true && input.importId != null)) {
@@ -2586,7 +2765,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           targetServings: input.targetServings, inventory: input.inventory ?? [],
           includeOptionalIngredientIds: input.includeOptionalIngredientIds ?? [],
           collectInventory: input.collectInventory ?? null, includeCookTask: input.includeCookTask ?? true,
-          importId, synthetic: input.synthetic === true });
+          importId, synthetic: input.synthetic === true,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.recipeScenarioReceipts ??= {};
@@ -2601,6 +2781,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             }
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "recipe", activityId, input);
           const imported = importId === null ? null : state.importReceipts[importId];
           if (importId !== null && (imported?.ownerId !== ownerId ||
               !state.knowledge.sources.some((item) => item.ownerId === ownerId &&
@@ -2714,6 +2896,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, revision: created.result.revision, proposalId,
             contextId: issued.contextId, recipeEntityId, confirmationSourceId };
           state.recipeScenarioReceipts[receiptKey] = { hash: requestHash, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -2722,7 +2906,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         const allowed = new Set(["commandId", "activityId", "confirmed", "importIds",
-          "scheduledAt", "area", "partySize"]);
+          "scheduledAt", "area", "partySize", "continuationOf"]);
         if (Object.keys(input).some((key) => !allowed.has(key)) || input.confirmed !== true ||
             !Array.isArray(input.importIds) || input.importIds.length < 1 ||
             input.importIds.length > 20 || !Number.isInteger(input.partySize) ||
@@ -2739,7 +2923,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         registry.validate("core.timestamp", input.scheduledAt);
         const area = input.area.trim();
         const requestHash = requestFingerprint({ activityId, importIds, scheduledAt: input.scheduledAt,
-          area, partySize: input.partySize });
+          area, partySize: input.partySize,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.diningScenarioReceipts ??= {};
@@ -2756,6 +2941,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             }
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "dining", activityId, input);
           const { candidates, contextQueries } = diningCandidates(state, importIds, area);
           const plan = buildDiningPlanDraft({ candidates, scheduledAt: input.scheduledAt,
             partySize: input.partySize }, { registry });
@@ -2791,6 +2978,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             contextId: issued.contextId, candidateCount: candidates.length };
           state.diningScenarioReceipts[receiptKey] = { hash: requestHash,
             importIds: [...importIds], area, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -2976,7 +3165,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
-          "importIds", "occasion", "scheduledAt"].includes(key)) || input.confirmed !== true ||
+          "importIds", "occasion", "scheduledAt", "continuationOf"].includes(key)) || input.confirmed !== true ||
           !Array.isArray(input.importIds) || input.importIds.length < 1 ||
           input.importIds.length > 5 || typeof input.occasion !== "string" ||
           !input.occasion.trim() || input.occasion.length > 120) {
@@ -2991,7 +3180,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         registry.validate("core.timestamp", input.scheduledAt);
         const occasion = input.occasion.trim();
         const requestHash = requestFingerprint({ activityId, importIds, occasion,
-          scheduledAt: input.scheduledAt });
+          scheduledAt: input.scheduledAt,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.fashionScenarioReceipts ??= {};
@@ -3004,6 +3194,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "삭제한 패션 활동이에요.", { httpStatus: 410 });
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "fashion", activityId, input);
           const { candidates, contextQueries } = fashionCandidates(state, importIds);
           const plan = buildFashionPlanDraft({ candidates, occasion }, { registry });
           const stem = `fashion:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
@@ -3035,7 +3227,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, revision: created.result.revision, proposalId,
             contextId: issued.contextId, candidateCount: candidates.length };
           state.fashionScenarioReceipts[receiptKey] = { hash: requestHash,
-            importIds: [...importIds], result };
+            importIds: [...importIds], scheduledAt: input.scheduledAt, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -3279,7 +3473,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
-          "importIds", "occasion", "scheduledAt"].includes(key)) || input.confirmed !== true ||
+          "importIds", "occasion", "scheduledAt", "continuationOf"].includes(key)) || input.confirmed !== true ||
           !Array.isArray(input.importIds) || input.importIds.length < 1 ||
           input.importIds.length > 5 || typeof input.occasion !== "string" ||
           !input.occasion.trim() || input.occasion.length > 120) {
@@ -3294,7 +3488,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         registry.validate("core.timestamp", input.scheduledAt);
         const occasion = input.occasion.trim();
         const requestHash = requestFingerprint({ activityId, importIds, occasion,
-          scheduledAt: input.scheduledAt });
+          scheduledAt: input.scheduledAt,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.beautyScenarioReceipts ??= {};
@@ -3307,6 +3502,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "삭제한 뷰티 활동이에요.", { httpStatus: 410 });
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "beauty", activityId, input);
           const { candidates, contextQueries } = beautyCandidates(state, importIds);
           const stem = `beauty:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
           const plan = buildBeautyPlanDraft({ candidates, occasion,
@@ -3340,6 +3537,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             contextId: issued.contextId, candidateCount: candidates.length };
           state.beautyScenarioReceipts[receiptKey] = { hash: requestHash,
             importIds: [...importIds], occasion, scheduledAt: input.scheduledAt, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -3698,7 +3897,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
-          "importIds", "area", "startAt"].includes(key)) || input.confirmed !== true ||
+          "importIds", "area", "startAt", "continuationOf"].includes(key)) || input.confirmed !== true ||
           !Array.isArray(input.importIds) || input.importIds.length < 1 ||
           input.importIds.length > 8 || typeof input.area !== "string" ||
           !input.area.trim() || input.area.length > 120) {
@@ -3713,7 +3912,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         registry.validate("core.timestamp", input.startAt);
         const area = input.area.trim();
         const requestHash = requestFingerprint({ activityId, importIds, area,
-          startAt: input.startAt });
+          startAt: input.startAt,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.travelScenarioReceipts ??= {};
@@ -3726,6 +3926,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "삭제한 여행 활동이에요.", { httpStatus: 410 });
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "travel", activityId, input);
           const { candidates, contextQueries } = travelCandidates(state, importIds, area);
           const stem = `travel:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
           const plan = buildTravelPlanDraft({ candidates, area, startAt: input.startAt },
@@ -3759,6 +3961,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             contextId: issued.contextId, candidateCount: candidates.length };
           state.travelScenarioReceipts[receiptKey] = { hash: requestHash,
             importIds: [...importIds], area, startAt: input.startAt, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -4081,14 +4285,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
-          "importId"].includes(key)) || input.confirmed !== true) {
+          "importId", "continuationOf"].includes(key)) || input.confirmed !== true) {
           throw new AppError("INVALID_REQUEST", "생활 꿀팁 입력을 확인해 주세요.",
             { httpStatus: 400 });
         }
         const commandId = safeId(input.commandId, "commandId");
         const activityId = safeId(input.activityId, "activityId");
         const importId = safeId(input.importId, "importId");
-        const requestHash = requestFingerprint({ activityId, importId });
+        const requestHash = requestFingerprint({ activityId, importId,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.lifeTipScenarioReceipts ??= {};
@@ -4101,6 +4306,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "삭제한 꿀팁 활동이에요.", { httpStatus: 410 });
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "life_tip", activityId, input);
           const { candidate, contextQueries } = lifeTipCandidate(state, importId);
           const stem = `life-tip:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
           const plan = buildLifeTipPlanDraft({ candidate }, { registry });
@@ -4133,6 +4340,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             contextId: issued.contextId, candidateCount: candidate.candidates.length };
           state.lifeTipScenarioReceipts[receiptKey] = { hash: requestHash,
             importId, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -4429,14 +4638,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
-          "importId"].includes(key)) || input.confirmed !== true) {
+          "importId", "continuationOf"].includes(key)) || input.confirmed !== true) {
           throw new AppError("INVALID_REQUEST", "운동 캡처 입력을 확인해 주세요.",
             { httpStatus: 400 });
         }
         const commandId = safeId(input.commandId, "commandId");
         const activityId = safeId(input.activityId, "activityId");
         const importId = safeId(input.importId, "importId");
-        const requestHash = requestFingerprint({ activityId, importId });
+        const requestHash = requestFingerprint({ activityId, importId,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.healthScenarioReceipts ??= {};
@@ -4449,6 +4659,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "삭제한 운동 활동이에요.", { httpStatus: 410 });
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "health", activityId, input);
           const { candidate, contextQueries } = healthCandidate(state, importId);
           const stem = `health:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
           const plan = buildHealthPlanDraft({ candidate }, { registry });
@@ -4480,6 +4692,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, revision: created.result.revision, proposalId,
             contextId: issued.contextId, candidateCount: candidate.candidates.length };
           state.healthScenarioReceipts[receiptKey] = { hash: requestHash, importId, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -4816,7 +5030,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
-          "importIds", "purpose"].includes(key)) || input.confirmed !== true ||
+          "importIds", "purpose", "continuationOf"].includes(key)) || input.confirmed !== true ||
           !Array.isArray(input.importIds) || input.importIds.length < 1 ||
           input.importIds.length > 8 || typeof input.purpose !== "string" ||
           !input.purpose.trim() || input.purpose.length > 120) {
@@ -4831,7 +5045,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             { httpStatus: 400 });
         }
         const purpose = input.purpose.trim();
-        const requestHash = requestFingerprint({ activityId, importIds, purpose });
+        const requestHash = requestFingerprint({ activityId, importIds, purpose,
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.shoppingScenarioReceipts ??= {};
@@ -4844,6 +5059,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "삭제한 쇼핑 활동이에요.", { httpStatus: 410 });
             return { state, result: { ...previous.result, replayed: true } };
           }
+          const continuedFrom = continuationSource(state, input.continuationOf,
+            "shopping", activityId, input);
           const { candidates, contextQueries } = shoppingCandidates(state, importIds);
           const stem = `shopping:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
           const plan = buildShoppingPlanDraft({ candidates, purpose }, { registry });
@@ -4876,6 +5093,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             proposalId, contextId: issued.contextId, candidateCount: candidates.length };
           state.shoppingScenarioReceipts[receiptKey] = { hash: requestHash,
             importIds: [...importIds], purpose, result };
+          recordContinuation(state, activityId, continuedFrom,
+            input.continuationOf?.expectedRevision, result);
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

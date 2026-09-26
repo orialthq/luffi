@@ -2397,6 +2397,22 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     });
   });
 
+  Future<void> _continueAfterReview() async {
+    String? nextActivityId;
+    await _mutate((revision, commandId) async {
+      final result = await widget.client.createReviewSuccessor({
+        'activityId': widget.activityId,
+        'commandId': commandId,
+        'expectedRevision': revision,
+        'confirmed': true,
+      });
+      nextActivityId = result['activityId'] as String?;
+    });
+    if (mounted && !_needsRefresh && nextActivityId != null) {
+      await _openConnectedBoard(nextActivityId!);
+    }
+  }
+
   Future<void> _resolveReview(KernelJson task) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -3563,6 +3579,17 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           key: const Key('kernel-goal'),
           style: Theme.of(context).textTheme.titleMedium,
         ),
+        if (board['continuedFrom'] is String)
+          TextButton(
+            onPressed: () =>
+                _openConnectedBoard(board['continuedFrom'] as String),
+            child: const Text('이전 활동 보기'),
+          ),
+        for (final nextId in _strings(board['continuations']))
+          TextButton(
+            onPressed: () => _openConnectedBoard(nextId),
+            child: const Text('이어 만든 활동 보기'),
+          ),
         for (final proposal in proposals) _proposalCard(proposal, needsReview),
         const SizedBox(height: 20),
         Text('다음 행동', style: Theme.of(context).textTheme.titleMedium),
@@ -3597,6 +3624,16 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                     ),
                   if (reviewStatus == 'blocked')
                     Text(_text(review['reason'], '새 활동에서 다시 확인해 주세요.')),
+                  if (review['reasonCode'] == 'STARTED_TASK_PROTECTED') ...[
+                    const Text('이전 작업과 결과를 보존하고, 최신 근거로 새 활동을 만들 수 있어요.'),
+                    FilledButton.tonal(
+                      key: const Key('kernel-create-review-successor'),
+                      onPressed: _busy || _needsRefresh
+                          ? null
+                          : _continueAfterReview,
+                      child: const Text('새 활동으로 이어가기'),
+                    ),
+                  ],
                   if (reviewStatus == 'ready' && !hasRecoveryProposal)
                     FilledButton(
                       key: const Key('kernel-propose-board-review'),

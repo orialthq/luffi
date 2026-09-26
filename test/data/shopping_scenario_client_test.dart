@@ -152,6 +152,9 @@ void main() {
           request.method == 'GET'
               ? '{"activityId":"shop-1","status":"ready","revision":3,'
                     '"changes":[],"affectedTasks":[]}'
+              : request.uri.path.endsWith('review-successors')
+              ? '{"activityId":"review-new","proposalId":"proposal-2",'
+                    '"continuedFrom":"shop-1","replayed":false}'
               : '{"activityId":"shop-1","proposalId":"proposal-1",'
                     '"revision":3,"planKind":"patch","affectedTasks":[]}',
         );
@@ -171,9 +174,19 @@ void main() {
         }))['proposalId'],
         'proposal-1',
       );
+      expect(
+        (await client.createReviewSuccessor({
+          'activityId': 'shop-1',
+          'commandId': 'continue-1',
+          'expectedRevision': 3,
+          'confirmed': true,
+        }))['activityId'],
+        'review-new',
+      );
       expect(paths, [
         '/v1/kernel/boards/shop-1/review',
         '/v1/kernel/planning/review-proposals',
+        '/v1/kernel/planning/review-successors',
       ]);
     },
   );

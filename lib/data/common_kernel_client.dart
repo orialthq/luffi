@@ -492,6 +492,7 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> getBoard(String activityId);
   Future<KernelJson> getBoardReview(String activityId);
   Future<KernelJson> proposeBoardReview(KernelJson request);
+  Future<KernelJson> createReviewSuccessor(KernelJson request);
   Future<List<KernelJson>> listScenarioConnections(String activityId);
   Future<KernelJson> createScenarioConnection(KernelJson request);
   Future<KernelJson> deleteScenarioConnection(KernelJson request);
@@ -630,6 +631,10 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> proposeBoardReview(KernelJson request) =>
       _request('POST', '/v1/kernel/planning/review-proposals', request);
+
+  @override
+  Future<KernelJson> createReviewSuccessor(KernelJson request) =>
+      _request('POST', '/v1/kernel/planning/review-successors', request);
 
   @override
   Future<List<KernelJson>> listScenarioConnections(String activityId) async {

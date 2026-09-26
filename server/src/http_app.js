@@ -23,6 +23,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/activities/run-task": "runTask",
   "/planning/proposals": "proposePlan",
   "/planning/review-proposals": "proposeBoardReview",
+  "/planning/review-successors": "createReviewSuccessor",
   "/planning/accept": "acceptProposal",
   "/recipe/scenarios": "createRecipeScenario",
   "/dining/scenarios": "createDiningScenario",
