@@ -58,12 +58,14 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/ingestion/reviewed-capture": "importReviewedCapture",
   "/ingestion/reviewed-capture/delete": "deleteReviewedCapture",
   "/ingestion/field-reviews": "reviewImportedField",
+  "/ingestion/field-corrections": "correctImportedField",
   "/domains/execute": "executeCapability",
   "/resources/commands": "resourceCommand",
   "/resources/availability": "resourceAvailability",
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
-  "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview"];
+  "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
+  "getEditableCaptureFields"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -190,6 +192,15 @@ export function createHttpServer({
           return sendJson(response, 200, await kernelService.listScenarioConnections(activityId));
         }
         const fieldReviewMatch = /^\/ingestion\/field-reviews\/([^/]+)$/.exec(route);
+        const editableFieldsMatch = /^\/ingestion\/editable-fields\/([^/]+)$/.exec(route);
+        if (editableFieldsMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let importId;
+          try { importId = decodeURIComponent(editableFieldsMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "importId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableCaptureFields(importId));
+        }
         if (fieldReviewMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");
           let importId;

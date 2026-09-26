@@ -4,12 +4,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
+import '../../data/common_kernel_client.dart';
 import '../../data/place_reminder_service.dart';
 import '../../domain/models.dart';
 import '../../state/app_controller.dart';
 import '../common/capture_action_ui.dart';
 import '../common/tag_ui.dart';
 import '../sharing/share_tip_screen.dart';
+import 'imported_field_correction_screen.dart';
 
 typedef MapOpenedCallback =
     FutureOr<void> Function({
@@ -50,6 +52,16 @@ final class _StructuredReviewScreenState extends State<StructuredReviewScreen> {
     final isOrganized = capture.status == CaptureStatus.organized;
     final isPortableTip = capture.raw.origin == CaptureOrigin.portableTip;
     final selectedTags = _selectedTags ?? capture.contentTags;
+    String? syncedImportId;
+    if (commonKernelDebugEnabled) {
+      for (final imported
+          in widget.controller.allSyncedReviewedCaptureImports) {
+        if (imported.captureId == widget.captureId) {
+          syncedImportId = imported.importId;
+          break;
+        }
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -143,6 +155,24 @@ final class _StructuredReviewScreenState extends State<StructuredReviewScreen> {
           if (capture.raw.attachments.isNotEmpty) ...[
             const SizedBox(height: 24),
             _SourceGallery(attachments: capture.raw.attachments),
+          ],
+          if (syncedImportId != null) ...[
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              key: const Key('open-imported-field-correction'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ImportedFieldCorrectionScreen(
+                    importId: syncedImportId!,
+                    attachments: capture.raw.attachments,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.edit_note_rounded),
+              label: const Text('캡처에서 읽은 내용 정정'),
+            ),
+            const SizedBox(height: 6),
+            const Text('이 화면은 원래 분석을 보여줘요. 활동에서 쓰는 현재 값은 정정 화면에서 확인할 수 있어요.'),
           ],
           const SizedBox(height: 32),
           _SectionTitle(title: isPortableTip ? '받은 태그' : '태그', editable: true),

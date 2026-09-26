@@ -47,6 +47,7 @@ export function createCommonKernelState() {
     importReceipts: {},
     fieldReviews: {},
     fieldReviewReceipts: {},
+    fieldCorrectionReceipts: {},
     recipeScenarioReceipts: {},
     diningScenarioReceipts: {},
     diningCommandReceipts: {},
@@ -125,6 +126,47 @@ function requestObject(value) {
 
 function placeKey(value) {
   return typeof value === "string" ? value.normalize("NFKC").replace(/\s+/g, "").toLowerCase() : "";
+}
+
+function editableCapturePath(analysis, path) {
+  const tags = analysis?.tags ?? [];
+  const tagged = (facet, value) => tags.some((item) =>
+    item.facet === facet && item.value === value && item.evidenceIds?.length);
+  if (analysis?.contentKind === "place") {
+    if (["restaurant", "cafe"].includes(analysis.place?.category)) {
+      return ["/place/name", "/place/searchArea", "/place/address"].includes(path);
+    }
+    return analysis.place?.category === "activity" &&
+      ["/place/name", "/place/searchArea"].includes(path);
+  }
+  if (analysis?.contentKind === "commerce_product" && tagged("kind", "패션")) {
+    return path === "/title/value";
+  }
+  if (analysis?.contentKind === "beauty_product") return path === "/title/value";
+  if (analysis?.contentKind !== "unknown" || analysis.completeness !== "complete") return false;
+  const factIndex = /^\/facts\/(0|[1-9]\d*)\/value$/.exec(path)?.[1];
+  const stepIndex = /^\/steps\/(0|[1-9]\d*)\/instruction$/.exec(path)?.[1];
+  const numberedFact = factIndex !== undefined &&
+    analysis.facts?.[Number(factIndex)]?.label === `${Number(factIndex) + 1}단계`;
+  const orderedStep = stepIndex !== undefined &&
+    analysis.steps?.[Number(stepIndex)]?.order === Number(stepIndex) + 1;
+  if (tagged("field", "생활·팁")) {
+    return path === "/title/value" || numberedFact || orderedStep;
+  }
+  if (tagged("field", "건강·운동") && tagged("kind", "운동")) {
+    return path === "/title/value" || numberedFact;
+  }
+  return false;
+}
+
+function analysisValueAtPath(analysis, path) {
+  const segments = path.split("/").slice(1);
+  let value = analysis;
+  for (const segment of segments) {
+    if (value == null || !Object.hasOwn(value, segment)) return null;
+    value = value[segment];
+  }
+  return typeof value === "string" ? value : null;
 }
 
 /** Coordinates pure domain kernels within one durable state-store transaction.
@@ -733,6 +775,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         receipt.result = { importId: receipt.importId, fieldKey: receipt.fieldKey };
       }
     }
+    for (const receipt of Object.values(state.fieldCorrectionReceipts ?? {})) {
+      if (receipt.ownerId === ownerId && receipt.importedSourceId === sourceId) {
+        receipt.deleted = true;
+        receipt.result = { importId: receipt.importId, path: receipt.path };
+      }
+    }
   }
 
   function purgeIssuedContextsFromSource(state, sourceId) {
@@ -815,6 +863,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "health" &&
           healthActivityIds.has(item.provenance.activityId)) ||
           (item.provenance?.scenario === "field_review" &&
+          item.provenance.importedSourceId === source.id) ||
+          (item.provenance?.scenario === "field_correction" &&
           item.provenance.importedSourceId === source.id))).map((item) => item.id) : [];
     const linkedFashionSources = state.knowledge.sources.filter((item) =>
       item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
@@ -873,6 +923,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
           receipt.deleted = true;
           receipt.result = { importId: receipt.importId, fieldKey: receipt.fieldKey };
+        }
+      }
+    }
+    if (source?.provenance?.scenario === "field_correction") {
+      for (const receipt of Object.values(state.fieldCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { importId: receipt.importId, path: receipt.path };
         }
       }
     }
@@ -1104,6 +1162,42 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         { httpStatus: 409 });
     }
     return fields[0];
+  }
+
+  function editableCaptureFields(state, importId) {
+    const receipt = state.importReceipts[importId];
+    if (receipt?.ownerId !== ownerId || receipt.deleted) {
+      throw new AppError("IMPORT_NOT_FOUND", "확인한 캡처를 찾지 못했어요.", { httpStatus: 404 });
+    }
+    const version = state.knowledge.sourceVersions.find((item) =>
+      item.ownerId === ownerId && item.id === receipt.sourceVersionId && item.status === "active");
+    const analysis = version?.content?.analysis;
+    if (!analysis) throw new AppError("CONTEXT_STALE", "원본 캡처 근거가 없어요.",
+      { httpStatus: 409 });
+    const evidence = state.knowledge.evidence.filter((item) =>
+      item.ownerId === ownerId && item.sourceVersionId === version.id && item.status === "active");
+    const fields = state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.subjectId === receipt.result?.materialId &&
+      item.predicate === "ingestion.extracted_field" &&
+      item.typedValue?.type === "ingestion.field" &&
+      item.typedValue.value?.sourceVersionId === version.id &&
+      editableCapturePath(analysis, item.typedValue.value.path) &&
+      typeof item.typedValue.value.value === "string" &&
+      analysisValueAtPath(analysis, item.typedValue.value.path) !== null &&
+      (item.evidenceIds ?? []).some((id) => evidence.some((entry) => entry.id === id)));
+    return { receipt, version, analysis, evidence, fields };
+  }
+
+  function captureFieldRevision(state, field) {
+    let revision = 0;
+    let current = field;
+    while (current) {
+      revision += 1;
+      current = current.supersedesId ? state.knowledge.assertions.find((item) =>
+        item.ownerId === ownerId && item.id === current.supersedesId) : null;
+    }
+    return revision;
   }
 
   function diningCandidates(state, importIds, area) {
@@ -2083,6 +2177,119 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, proposalId, revision: current.revision,
             planKind: planned.kind, affectedTasks: planned.affectedTasks };
           state.reviewProposalReceipts[receiptKey] = { ownerId, hash, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async getEditableCaptureFields(importId) {
+      try {
+        safeId(importId, "importId");
+        return await read((state) => {
+          const { receipt, version, analysis, evidence, fields } =
+            editableCaptureFields(state, importId);
+          return { importId, sourceVersionId: version.id,
+            captureId: receipt.legacyCaptureId,
+            fields: fields.map((field) => {
+              const path = field.typedValue.value.path;
+              return { path, value: field.typedValue.value.value,
+                originalValue: analysisValueAtPath(analysis, path),
+                revision: captureFieldRevision(state, field),
+                evidence: evidence.filter((entry) => field.evidenceIds.includes(entry.id))
+                  .map((entry) => ({ id: entry.id, quote: entry.quote,
+                    region: entry.locator?.region ?? null })) };
+            }).sort((a, b) => a.path.localeCompare(b.path)) };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctImportedField(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "importId", "path", "value",
+          "expectedRevision", "confirmed"].includes(key)) || input.confirmed !== true ||
+          typeof input.path !== "string" || typeof input.value !== "string" ||
+          !input.value.trim() || input.value.trim().length > 512 ||
+          /[\u0000-\u001f\u007f]/.test(input.value) ||
+          !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+          throw new AppError("INVALID_REQUEST", "정정할 필드를 다시 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const importId = safeId(input.importId, "importId");
+        const value = input.value.trim();
+        const hash = requestFingerprint({ importId, path: input.path, value,
+          expectedRevision: input.expectedRevision });
+        return await store.transact((state) => {
+          assertState(state);
+          state.fieldCorrectionReceipts ??= {};
+          const imported = state.importReceipts[importId];
+          if (imported?.ownerId !== ownerId || imported.deleted) {
+            throw new AppError("IMPORT_NOT_FOUND", "확인한 캡처를 찾지 못했어요.",
+              { httpStatus: 404 });
+          }
+          const receiptKey = requestFingerprint([ownerId, commandId]);
+          const prior = state.fieldCorrectionReceipts[receiptKey];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 정정은 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const { version, evidence, fields } = editableCaptureFields(state, importId);
+          const matches = fields.filter((item) => item.typedValue.value.path === input.path);
+          if (matches.length !== 1) throw new AppError("FIELD_NOT_EDITABLE",
+            "정정할 수 있는 캡처 필드가 아니에요.", { httpStatus: 400 });
+          const previous = matches[0];
+          if (captureFieldRevision(state, previous) !== input.expectedRevision) {
+            throw new AppError("FIELD_REVISION_CONFLICT", "다른 정정이 먼저 반영됐어요.",
+              { httpStatus: 409 });
+          }
+          if (previous.typedValue.value.value === value) throw new AppError("UNCHANGED_FIELD",
+            "현재 값과 다른 내용을 입력해 주세요.", { httpStatus: 400 });
+          const originalEvidenceIds = previous.evidenceIds.filter((id) =>
+            evidence.some((item) => item.id === id));
+          if (originalEvidenceIds.length === 0) throw new AppError("CONTEXT_STALE",
+            "원본 근거가 변경됐어요.", { httpStatus: 409 });
+          const stem = `field-correction:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const newVersionId = `${stem}:version`;
+          const evidenceId = `${stem}:evidence`;
+          const assertionId = `${stem}:assertion`;
+          const now = new Date().toISOString();
+          const content = { importId, path: input.path, previousValue:
+            previous.typedValue.value.value, value, importedSourceId: imported.sourceId,
+            originalEvidenceIds };
+          const before = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 정정한 캡처 필드", provenance: { scenario: "field_correction",
+              importId, importedSourceId: imported.sourceId, path: input.path } });
+          apply("version", "source.version.add", { id: newVersionId, sourceId,
+            contentHash: fingerprint(content), content, capturedAt: now });
+          apply("evidence", "evidence.add", { id: evidenceId,
+            sourceVersionId: newVersionId, quote: value,
+            locator: { kind: "user_confirmation", jsonPointer: "/value" } });
+          const evidenceIds = [...originalEvidenceIds, evidenceId];
+          apply("assertion", "assertion.correct", { assertionId: previous.id,
+            expectedRevision: previous.revision,
+            assertion: { id: assertionId, subjectId: previous.subjectId,
+              predicate: previous.predicate, scope: previous.scope,
+              origin: "user_reported", assertedBy: { type: "user", id: ownerId },
+              evidenceIds, supportSets: [evidenceIds], observedAt: now,
+              typedValue: { type: "ingestion.field", value: {
+                sourceVersionId: version.id, path: input.path, value } } } });
+          recordAffectedConsumers(state, before);
+          const result = { importId, path: input.path, value, previousValue:
+            previous.typedValue.value.value,
+            revision: input.expectedRevision + 1, sourceId,
+            knowledgeSequence: state.knowledge.sequence };
+          state.fieldCorrectionReceipts[receiptKey] = { ownerId, commandId,
+            importedSourceId: imported.sourceId, importId, path: input.path,
+            sourceId, hash, result };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

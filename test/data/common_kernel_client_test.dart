@@ -6,6 +6,55 @@ import 'package:ori_beauty/data/common_kernel_client.dart';
 
 void main() {
   test(
+    'capture correction uses an encoded import id and sends the confirmed field',
+    () async {
+      final requests = <String>[];
+      final bodies = <Map<String, dynamic>>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        requests.add('${request.method} ${request.uri}');
+        if (request.method == 'POST') {
+          bodies.add(
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>,
+          );
+        } else {
+          await request.drain<void>();
+        }
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode(
+            request.method == 'GET'
+                ? {'importId': 'a/b', 'fields': <Object>[]}
+                : {'importId': 'a/b', 'revision': 2},
+          ),
+        );
+        await request.response.close();
+      });
+      final client = HttpCommonKernelClient(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        token: 'development-token',
+      );
+      expect((await client.getEditableCaptureFields('a/b'))['fields'], isEmpty);
+      final correction = {
+        'commandId': 'fix-1',
+        'importId': 'a/b',
+        'path': '/place/name',
+        'value': '새 이름',
+        'expectedRevision': 1,
+        'confirmed': true,
+      };
+      expect((await client.correctImportedField(correction))['revision'], 2);
+      expect(requests, [
+        'GET /v1/kernel/ingestion/editable-fields/a%2Fb',
+        'POST /v1/kernel/ingestion/field-corrections',
+      ]);
+      expect(bodies.single, correction);
+    },
+  );
+
+  test(
     'recipe create intent survives a new file-store instance until cleared',
     () async {
       final directory = await Directory.systemTemp.createTemp(

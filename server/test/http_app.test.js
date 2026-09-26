@@ -438,6 +438,7 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/knowledge/watch", "watchContext"],
     ["/ingestion/reviewed-capture", "importReviewedCapture"],
     ["/ingestion/field-reviews", "reviewImportedField"],
+    ["/ingestion/field-corrections", "correctImportedField"],
     ["/ingestion/reviewed-capture/delete", "deleteReviewedCapture"],
     ["/domains/execute", "executeCapability"],
     ["/resources/commands", "resourceCommand"],
@@ -461,6 +462,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "listScenarioConnections", activityId });
   kernelService.getImportedFieldReview = async (importId, fieldKey) =>
     ({ method: "getImportedFieldReview", importId, fieldKey });
+  kernelService.getEditableCaptureFields = async (importId) =>
+    ({ method: "getEditableCaptureFields", importId });
   const token = "t".repeat(32);
   const baseUrl = await startServer(t, { kernelService, kernelToken: token });
   const authorization = { Authorization: `Bearer ${token}` };
@@ -489,6 +492,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/ingestion/field-reviews/item-1?fieldKey=shopping.displayed_price",
       { method: "getImportedFieldReview", importId: "item-1",
         fieldKey: "shopping.displayed_price" }],
+    ["/ingestion/editable-fields/item-1",
+      { method: "getEditableCaptureFields", importId: "item-1" }],
     ["/boards/meal%20plan", { method: "getBoard", activityId: "meal plan" }],
     ["/boards/meal%20plan/review", { method: "getBoardReview",
       activityId: "meal plan" }],

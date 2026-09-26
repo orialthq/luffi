@@ -185,6 +185,15 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 }
 
 final class FakeKernelClient implements CommonKernelClient {
+  @override
+  Future<KernelJson> getEditableCaptureFields(String importId) async => {
+    'importId': importId,
+    'fields': <Object>[],
+  };
+
+  @override
+  Future<KernelJson> correctImportedField(KernelJson request) async => request;
+
   KernelJson board = _board();
   KernelJson? successorBoard;
   KernelJson? boardReview;
