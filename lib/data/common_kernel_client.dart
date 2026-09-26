@@ -36,6 +36,61 @@ abstract interface class FashionScenarioIntentStore {
   Future<void> clear();
 }
 
+abstract interface class BeautyScenarioIntentStore {
+  Future<KernelJson?> load();
+  Future<void> save(KernelJson request);
+  Future<void> clear();
+}
+
+final class FileBeautyScenarioIntentStore implements BeautyScenarioIntentStore {
+  const FileBeautyScenarioIntentStore({this.directoryPath});
+
+  final String? directoryPath;
+
+  Future<File> _file() async {
+    final directory = directoryPath == null
+        ? await getApplicationSupportDirectory()
+        : Directory(directoryPath!);
+    await directory.create(recursive: true);
+    return File('${directory.path}/luffi_beauty_scenario_intent.json');
+  }
+
+  @override
+  Future<KernelJson?> load() async {
+    final file = await _file();
+    if (!await file.exists()) return null;
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, dynamic> ||
+        !_nonEmptyText(decoded['commandId']) ||
+        !_nonEmptyText(decoded['activityId']) ||
+        decoded['confirmed'] != true ||
+        decoded['importIds'] is! List ||
+        !(decoded['importIds'] as List).every(_nonEmptyText) ||
+        !_nonEmptyText(decoded['occasion']) ||
+        !_nonEmptyText(decoded['scheduledAt'])) {
+      throw const FormatException('저장된 뷰티 생성 요청 형식이 올바르지 않아요.');
+    }
+    return Map<String, Object?>.from(decoded);
+  }
+
+  @override
+  Future<void> save(KernelJson request) async {
+    final file = await _file();
+    if (await file.exists()) {
+      throw StateError('An unconfirmed beauty creation intent already exists');
+    }
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(request), flush: true);
+    await temporary.rename(file.path);
+  }
+
+  @override
+  Future<void> clear() async {
+    final file = await _file();
+    if (await file.exists()) await file.delete();
+  }
+}
+
 final class FileFashionScenarioIntentStore
     implements FashionScenarioIntentStore {
   const FileFashionScenarioIntentStore({this.directoryPath});
@@ -211,6 +266,9 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> createFashionScenario(KernelJson request);
   Future<KernelJson> confirmFashionOutfit(KernelJson request);
   Future<KernelJson> recordFashionWearOutcome(KernelJson request);
+  Future<KernelJson> createBeautyScenario(KernelJson request);
+  Future<KernelJson> confirmBeautyRoutine(KernelJson request);
+  Future<KernelJson> recordBeautyRoutineOutcome(KernelJson request);
   Future<KernelJson> acceptProposal({
     required String proposalId,
     required String commandId,
@@ -343,6 +401,18 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> recordFashionWearOutcome(KernelJson request) =>
       _request('POST', '/v1/kernel/fashion/wear-outcome', request);
+
+  @override
+  Future<KernelJson> createBeautyScenario(KernelJson request) =>
+      _request('POST', '/v1/kernel/beauty/scenarios', request);
+
+  @override
+  Future<KernelJson> confirmBeautyRoutine(KernelJson request) =>
+      _request('POST', '/v1/kernel/beauty/confirm-routine', request);
+
+  @override
+  Future<KernelJson> recordBeautyRoutineOutcome(KernelJson request) =>
+      _request('POST', '/v1/kernel/beauty/routine-outcome', request);
 
   @override
   Future<KernelJson> acceptProposal({

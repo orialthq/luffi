@@ -103,6 +103,22 @@ final class FakeFashionIntentStore implements FashionScenarioIntentStore {
   Future<void> clear() async => pending = null;
 }
 
+final class FakeBeautyIntentStore implements BeautyScenarioIntentStore {
+  KernelJson? pending;
+
+  @override
+  Future<KernelJson?> load() async => pending;
+
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending beauty intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async => pending = null;
+}
+
 final class FakeKernelClient implements CommonKernelClient {
   KernelJson board = _board();
   final commands = <KernelJson>[];
@@ -408,6 +424,92 @@ final class FakeKernelClient implements CommonKernelClient {
     return {
       'activityId': request['activityId'],
       'status': request['status'],
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> createBeautyScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    if (scenarioFailure case final error?) throw error;
+    final activityId = request['activityId'];
+    if (board['id'] == activityId) {
+      return {
+        'activityId': activityId,
+        'proposalId': 'beauty-proposal',
+        'revision': 1,
+        'replayed': true,
+      };
+    }
+    board = {
+      'id': activityId,
+      'title': '${request['occasion']} 루틴',
+      'goal': {'description': '저장한 뷰티 제품으로 루틴 만들기'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'beauty-proposal',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'confirm_routine',
+                'title': '루틴 순서와 제품 옵션 확인',
+                'capabilityId': 'beauty.confirm_routine',
+                'inputBindings': {
+                  'occasion': request['occasion'],
+                  'candidates': [
+                    for (final importId in request['importIds'] as List)
+                      {
+                        'importId': importId,
+                        'name': '캡처 제품',
+                        'mentionId': 'mention-$importId',
+                        'evidenceIds': ['evidence-$importId'],
+                      },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    if (commitThenTimeout) {
+      throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 초과됐어요.');
+    }
+    return {
+      'activityId': activityId,
+      'proposalId': 'beauty-proposal',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> confirmBeautyRoutine(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'templateId': 'template-a',
+      'occurrenceId': 'occurrence-a',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> recordBeautyRoutineOutcome(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'occurrenceId': 'occurrence-a',
       'revision': board['revision'],
     };
   }
@@ -1088,6 +1190,367 @@ void main() {
       ]);
     },
   );
+
+  testWidgets('reviewed beauty captures create an approval-gated routine', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    final intentStore = FakeBeautyIntentStore();
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          diningIntentStore: FakeDiningIntentStore(),
+          fashionIntentStore: FakeFashionIntentStore(),
+          beautyIntentStore: intentStore,
+          beautyImportOptions: const [
+            BeautyImportOption(importId: 'cleanser', title: '데일리 클렌징 젤'),
+            BeautyImportOption(importId: 'cream', title: '수분 장벽 크림'),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('kernel-create-beauty')));
+    await tester.tap(find.byKey(const Key('kernel-create-beauty')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('beauty-import-cleanser')));
+    await tester.tap(find.byKey(const ValueKey('beauty-import-cream')));
+    await tester.enterText(
+      find.widgetWithText(TextField, '루틴 이름·상황'),
+      '저녁 스킨케어',
+    );
+    await tester.tap(find.byKey(const Key('beauty-create-submit')));
+    await tester.pumpAndSettle();
+    expect(client.scenarioRequests, hasLength(1));
+    final request = client.scenarioRequests.single;
+    expect(request['confirmed'], true);
+    expect(request['importIds'], ['cleanser', 'cream']);
+    expect(request['occasion'], '저녁 스킨케어');
+    expect(request['scheduledAt'], isA<String>());
+    expect(intentStore.pending, isNull);
+    expect(client.board['tasks'], isEmpty);
+    expect(find.text('계획 제안'), findsOneWidget);
+  });
+
+  testWidgets('beauty confirmation preserves user-selected step order', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.contract = {
+      'capabilities': [
+        {'id': 'beauty.confirm_routine', 'actor': 'user', 'effect': 'none'},
+      ],
+    };
+    client.board = {
+      'id': 'beauty-test',
+      'title': '저녁 루틴',
+      'goal': {'description': '저녁 스킨케어'},
+      'revision': 2,
+      'lifecycle': 'active',
+      'nextActions': ['confirm_routine'],
+      'tasks': [
+        {
+          'id': 'confirm_routine',
+          'title': '루틴 순서와 제품 옵션 확인',
+          'revision': 1,
+          'capabilityId': 'beauty.confirm_routine',
+          'executionStatus': 'not_started',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {
+              'candidates': [
+                {
+                  'importId': 'cream',
+                  'name': '수분 장벽 크림',
+                  'mentionId': 'mention-cream',
+                  'evidenceIds': ['e1'],
+                },
+                {
+                  'importId': 'cleanser',
+                  'name': '데일리 클렌징 젤',
+                  'mentionId': 'mention-cleanser',
+                  'evidenceIds': ['e2'],
+                },
+              ],
+            },
+            'reasons': <Object?>[],
+          },
+        },
+      ],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': <Object?>[],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardScreen(
+          client: client,
+          activityId: 'beauty-test',
+          contracts: client.contract,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('kernel-complete-confirm_routine')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('beauty-step-up-cleanser')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('beauty-confirm-include-cream')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('1. 데일리 클렌징 젤'), findsOneWidget);
+    expect(find.text('수분 장벽 크림 · 제외'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('beauty-confirm-include-cream')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('2. 수분 장벽 크림'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('beauty-variant-cleanser')),
+      '150 mL',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('beauty-step-title-cleanser')),
+      '저녁 세안',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('beauty-variant-cream')),
+      '50 mL',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('beauty-step-title-cream')),
+      '저녁 보습',
+    );
+    await tester.tap(find.byKey(const Key('beauty-confirm-submit')));
+    await tester.pumpAndSettle();
+    expect(client.commands.single['activityId'], 'beauty-test');
+    expect(client.commands.single['expectedRevision'], 2);
+    expect(client.commands.single['selections'], [
+      {'importId': 'cleanser', 'variantLabel': '150 mL', 'stepTitle': '저녁 세안'},
+      {'importId': 'cream', 'variantLabel': '50 mL', 'stepTitle': '저녁 보습'},
+    ]);
+  });
+
+  testWidgets('beauty outcome sends an explicit status for every step', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.contract = {
+      'capabilities': [
+        {
+          'id': 'beauty.record_routine_outcome',
+          'actor': 'user',
+          'effect': 'none',
+        },
+      ],
+    };
+    client.board = {
+      'id': 'beauty-test',
+      'title': '저녁 루틴',
+      'goal': {'description': '저녁 스킨케어'},
+      'revision': 4,
+      'lifecycle': 'active',
+      'nextActions': ['record_routine_outcome'],
+      'tasks': [
+        {
+          'id': 'record_routine_outcome',
+          'title': '실제 사용 기록',
+          'revision': 1,
+          'capabilityId': 'beauty.record_routine_outcome',
+          'executionStatus': 'not_started',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {
+              'occurrence': {
+                'id': 'occurrence-a',
+                'templateId': 'template-a',
+                'templateRevision': 1,
+                'scheduledAt': '2026-09-27T12:00:00.000Z',
+                'steps': [
+                  {
+                    'templateStepId': 'cleanse',
+                    'title': '저녁 세안',
+                    'variantId': 'variant-a',
+                    'status': 'pending',
+                  },
+                  {
+                    'templateStepId': 'moisturize',
+                    'title': '저녁 보습',
+                    'variantId': 'variant-b',
+                    'status': 'pending',
+                  },
+                ],
+              },
+            },
+            'reasons': <Object?>[],
+          },
+        },
+      ],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': <Object?>[],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardScreen(
+          client: client,
+          activityId: 'beauty-test',
+          contracts: client.contract,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('kernel-complete-record_routine_outcome')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('beauty-outcome-submit')));
+    await tester.pumpAndSettle();
+    expect(client.commands, isEmpty);
+    expect(find.text('모든 단계의 실제 사용 여부를 선택해 주세요.'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('beauty-outcome-cleanse')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('사용했어요').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('beauty-outcome-moisturize')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('건너뛰었어요').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('beauty-outcome-submit')));
+    await tester.pumpAndSettle();
+    expect(client.commands.single['steps'], [
+      {'templateStepId': 'cleanse', 'status': 'completed'},
+      {'templateStepId': 'moisturize', 'status': 'skipped'},
+    ]);
+  });
+
+  testWidgets('beauty board shows reported usage instead of creation status', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    client.contract = {
+      'capabilities': [
+        {
+          'id': 'beauty.instantiate_routine',
+          'actor': 'system',
+          'effect': 'none',
+        },
+        {
+          'id': 'beauty.record_routine_outcome',
+          'actor': 'user',
+          'effect': 'none',
+        },
+      ],
+    };
+    const occurrence = {
+      'id': 'occurrence-a',
+      'templateId': 'template-a',
+      'templateRevision': 1,
+      'scheduledAt': '2026-09-27T12:00:00.000Z',
+      'steps': [
+        {
+          'templateStepId': 'cleanse',
+          'title': '저녁 세안',
+          'variantId': 'variant-a',
+          'status': 'pending',
+        },
+        {
+          'templateStepId': 'moisturize',
+          'title': '저녁 보습',
+          'variantId': 'variant-b',
+          'status': 'pending',
+        },
+      ],
+    };
+    client.board = {
+      'id': 'beauty-test',
+      'title': '저녁 루틴',
+      'goal': {'description': '저녁 스킨케어'},
+      'revision': 5,
+      'lifecycle': 'active',
+      'nextActions': <Object?>[],
+      'tasks': [
+        {
+          'id': 'instantiate_routine',
+          'title': '루틴 회차 만들기',
+          'revision': 2,
+          'capabilityId': 'beauty.instantiate_routine',
+          'executionStatus': 'completed',
+          'readiness': {'status': 'ready', 'inputs': {}, 'reasons': []},
+          'latestOutputRef': 'result-occurrence',
+        },
+        {
+          'id': 'record_routine_outcome',
+          'title': '실제 사용 기록',
+          'revision': 2,
+          'capabilityId': 'beauty.record_routine_outcome',
+          'executionStatus': 'completed',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {'occurrence': occurrence},
+            'reasons': [],
+          },
+          'latestOutputRef': 'result-outcome',
+        },
+      ],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': <Object?>[],
+      'results': [
+        {'id': 'result-occurrence', 'value': occurrence},
+        {
+          'id': 'result-outcome',
+          'value': {
+            'occurrenceId': 'occurrence-a',
+            'steps': [
+              {'templateStepId': 'cleanse', 'status': 'completed'},
+              {'templateStepId': 'moisturize', 'status': 'skipped'},
+            ],
+          },
+        },
+      ],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardScreen(
+          client: client,
+          activityId: 'beauty-test',
+          contracts: client.contract,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('• 저녁 세안 · 사용했어요'), findsOneWidget);
+    expect(find.text('• 저녁 보습 · 건너뛰었어요'), findsOneWidget);
+    expect(find.textContaining('사용 대기'), findsNothing);
+    expect(find.textContaining('미기록'), findsNothing);
+  });
 
   testWidgets('a synced capture links only after manual recipe review', (
     tester,

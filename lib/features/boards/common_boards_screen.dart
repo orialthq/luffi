@@ -81,22 +81,28 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.intentStore,
     this.diningIntentStore,
     this.fashionIntentStore,
+    this.beautyIntentStore,
     this.importOptions = const [],
     this.diningImportOptions = const [],
     this.fashionImportOptions = const [],
+    this.beautyImportOptions = const [],
     this.onOpenDiningImport,
     this.onOpenFashionImport,
+    this.onOpenBeautyImport,
     super.key,
   });
   final CommonKernelClient? client;
   final RecipeScenarioIntentStore? intentStore;
   final DiningScenarioIntentStore? diningIntentStore;
   final FashionScenarioIntentStore? fashionIntentStore;
+  final BeautyScenarioIntentStore? beautyIntentStore;
   final List<RecipeImportOption> importOptions;
   final List<DiningImportOption> diningImportOptions;
   final List<FashionImportOption> fashionImportOptions;
+  final List<BeautyImportOption> beautyImportOptions;
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
+  final void Function(String importId)? onOpenBeautyImport;
 
   @override
   State<CommonBoardsScreen> createState() => _CommonBoardsScreenState();
@@ -132,6 +138,13 @@ final class FashionImportOption {
   final String title;
 }
 
+final class BeautyImportOption {
+  const BeautyImportOption({required this.importId, required this.title});
+
+  final String importId;
+  final String title;
+}
+
 final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   late final CommonKernelClient _client =
       widget.client ?? const HttpCommonKernelClient();
@@ -141,6 +154,8 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       widget.diningIntentStore ?? const FileDiningScenarioIntentStore();
   late final FashionScenarioIntentStore _fashionIntentStore =
       widget.fashionIntentStore ?? const FileFashionScenarioIntentStore();
+  late final BeautyScenarioIntentStore _beautyIntentStore =
+      widget.beautyIntentStore ?? const FileBeautyScenarioIntentStore();
   List<KernelJson> _boards = [];
   KernelJson _contracts = {};
   bool _contractsUnavailable = false;
@@ -153,15 +168,19 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _creatingRecipe = false;
   bool _creatingDining = false;
   bool _creatingFashion = false;
+  bool _creatingBeauty = false;
   bool _intentLoading = true;
   bool _diningIntentLoading = true;
   bool _fashionIntentLoading = true;
+  bool _beautyIntentLoading = true;
   KernelJson? _pendingRecipeIntent;
   KernelJson? _pendingDiningIntent;
   KernelJson? _pendingFashionIntent;
+  KernelJson? _pendingBeautyIntent;
   Object? _intentError;
   Object? _diningIntentError;
   Object? _fashionIntentError;
+  Object? _beautyIntentError;
   int _loadGeneration = 0;
 
   @override
@@ -171,6 +190,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     unawaited(_loadRecipeIntent());
     unawaited(_loadDiningIntent());
     unawaited(_loadFashionIntent());
+    unawaited(_loadBeautyIntent());
+  }
+
+  Future<void> _loadBeautyIntent() async {
+    setState(() {
+      _beautyIntentLoading = true;
+      _beautyIntentError = null;
+    });
+    try {
+      final pending = await _beautyIntentStore.load();
+      if (mounted) setState(() => _pendingBeautyIntent = pending);
+    } catch (error) {
+      if (mounted) setState(() => _beautyIntentError = error);
+    } finally {
+      if (mounted) setState(() => _beautyIntentLoading = false);
+    }
   }
 
   Future<void> _loadDiningIntent() async {
@@ -292,6 +327,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
           contracts: _contracts,
           onOpenDiningImport: widget.onOpenDiningImport,
           onOpenFashionImport: widget.onOpenFashionImport,
+          onOpenBeautyImport: widget.onOpenBeautyImport,
         ),
       ),
     );
@@ -591,6 +627,125 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
         setState(() {
           _pendingFashionIntent = null;
           _fashionIntentError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    }
+  }
+
+  Future<void> _createReviewedBeauty() async {
+    final draft = await showDialog<KernelJson>(
+      context: context,
+      builder: (_) =>
+          _BeautyScenarioDialog(options: widget.beautyImportOptions),
+    );
+    if (draft == null ||
+        !mounted ||
+        _pendingBeautyIntent != null ||
+        _beautyIntentLoading ||
+        _beautyIntentError != null) {
+      return;
+    }
+    setState(() => _creatingBeauty = true);
+    try {
+      final request = <String, Object?>{
+        'commandId': newKernelCommandId(),
+        'activityId': 'beauty-${newKernelCommandId()}',
+        'confirmed': true,
+        ...draft,
+      };
+      await _beautyIntentStore.save(request);
+      if (mounted) setState(() => _pendingBeautyIntent = request);
+      await _sendBeautyIntent(request);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingBeauty = false);
+    }
+  }
+
+  Future<void> _retryBeautyIntent() async {
+    final pending = _pendingBeautyIntent;
+    if (pending == null || _creatingBeauty) return;
+    setState(() => _creatingBeauty = true);
+    try {
+      await _sendBeautyIntent(pending);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingBeauty = false);
+    }
+  }
+
+  Future<void> _sendBeautyIntent(KernelJson request) async {
+    KernelJson result;
+    try {
+      result = await _client.createBeautyScenario(request);
+    } on CommonKernelException catch (error) {
+      if (const {
+        'INVALID_REQUEST',
+        'INVALID_DOMAIN_VALUE',
+        'IMPORT_NOT_FOUND',
+        'IMPORT_NOT_BEAUTY',
+        'SCENARIO_DELETED',
+      }.contains(error.code)) {
+        await _beautyIntentStore.clear();
+        if (mounted) setState(() => _pendingBeautyIntent = null);
+      }
+      rethrow;
+    }
+    final activityId = result['activityId'];
+    if (activityId is! String || activityId != request['activityId']) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '만든 뷰티 활동의 ID를 확인할 수 없어요. 같은 요청으로 다시 확인해 주세요.',
+      );
+    }
+    await _beautyIntentStore.clear();
+    if (mounted) {
+      setState(() => _pendingBeautyIntent = null);
+      await _open(activityId);
+    }
+  }
+
+  Future<void> _discardBeautyIntent() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이전 뷰티 활동 요청 지우기'),
+        content: const Text('서버에 활동이 이미 만들어졌을 수 있어요. 목록을 확인한 뒤 지워 주세요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('요청 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _beautyIntentStore.clear();
+      if (mounted) {
+        setState(() {
+          _pendingBeautyIntent = null;
+          _beautyIntentError = null;
         });
       }
     } catch (error) {
@@ -974,6 +1129,72 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
                     message: '저장된 패션 활동 요청을 읽지 못했어요.',
                     onRefresh: _loadFashionIntent,
                   ),
+                if (widget.beautyImportOptions.isNotEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '첫 뷰티 시나리오',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '저장한 스킨케어 제품으로 루틴을 만들고, 순서·제품 옵션과 실제 사용을 직접 기록해요.',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            key: const Key('kernel-create-beauty'),
+                            onPressed:
+                                _creatingBeauty ||
+                                    _beautyIntentLoading ||
+                                    _beautyIntentError != null ||
+                                    _pendingBeautyIntent != null
+                                ? null
+                                : _createReviewedBeauty,
+                            icon: const Icon(Icons.spa_outlined),
+                            label: Text(
+                              _creatingBeauty ? '만드는 중' : '저장한 제품으로 시작',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_pendingBeautyIntent != null)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('완료 여부를 확인할 뷰티 활동 요청이 있어요.'),
+                          const Text('같은 요청 ID로 재전송하면 중복 생성되지 않아요.'),
+                          FilledButton(
+                            key: const Key('kernel-retry-beauty-create'),
+                            onPressed: _creatingBeauty
+                                ? null
+                                : _retryBeautyIntent,
+                            child: const Text('이전 생성 이어하기'),
+                          ),
+                          TextButton(
+                            key: const Key('kernel-discard-beauty-create'),
+                            onPressed: _creatingBeauty
+                                ? null
+                                : _discardBeautyIntent,
+                            child: const Text('이전 요청 지우기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_beautyIntentError != null)
+                  _ErrorPanel(
+                    message: '저장된 뷰티 활동 요청을 읽지 못했어요.',
+                    onRefresh: _loadBeautyIntent,
+                  ),
                 if (_pendingRecipeIntent != null)
                   Card(
                     child: Padding(
@@ -1074,6 +1295,7 @@ final class CommonBoardScreen extends StatefulWidget {
     this.contracts = const {},
     this.onOpenDiningImport,
     this.onOpenFashionImport,
+    this.onOpenBeautyImport,
     super.key,
   });
   final CommonKernelClient client;
@@ -1081,6 +1303,7 @@ final class CommonBoardScreen extends StatefulWidget {
   final KernelJson contracts;
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
+  final void Function(String importId)? onOpenBeautyImport;
 
   @override
   State<CommonBoardScreen> createState() => _CommonBoardScreenState();
@@ -1278,6 +1501,43 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
 
   Future<void> _complete(KernelJson task) async {
     final capabilityId = _text(task['capabilityId']);
+    if (capabilityId == 'beauty.confirm_routine') {
+      final selections = await showDialog<List<KernelJson>>(
+        context: context,
+        builder: (_) => _BeautyConfirmDialog(
+          candidates: _objects(_object(_taskInputs(task))['candidates']),
+          onOpenImport: widget.onOpenBeautyImport,
+        ),
+      );
+      if (selections == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.confirmBeautyRoutine({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'selections': selections,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'beauty.record_routine_outcome') {
+      final occurrence = _object(_object(_taskInputs(task))['occurrence']);
+      final steps = await showDialog<List<KernelJson>>(
+        context: context,
+        builder: (_) =>
+            _BeautyOutcomeDialog(steps: _objects(occurrence['steps'])),
+      );
+      if (steps == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordBeautyRoutineOutcome({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'steps': steps,
+        });
+      });
+      return;
+    }
     if (capabilityId == 'fashion.confirm_outfit') {
       final selections = await showDialog<List<KernelJson>>(
         context: context,
@@ -1424,6 +1684,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final isRecipe = _text(task['capabilityId']).startsWith('recipe.');
     final isDining = _text(task['capabilityId']).startsWith('dining.');
     final isFashion = _text(task['capabilityId']).startsWith('fashion.');
+    final isBeauty = _text(task['capabilityId']).startsWith('beauty.');
     final selectedDiningCandidate = isDining
         ? _selectedDiningCandidate()
         : null;
@@ -1502,6 +1763,29 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               )
             else if (isFashion)
               const Text('코디를 만들었다고 입은 것은 아니에요. 실제 착용 여부를 기록해 주세요.')
+            else if (isBeauty && task['id'] == 'confirm_routine')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    Text('• ${_text(candidate['name'])} · 캡처 후보'),
+                  const Text('제품 순서·선택한 옵션·단계 이름은 직접 확인해 주세요.'),
+                ],
+              )
+            else if (isBeauty && task['id'] == 'record_routine_outcome')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final step in _objects(
+                    _object(_object(_taskInputs(task))['occurrence'])['steps'],
+                  ))
+                    Text('• ${_text(step['title'])}'),
+                ],
+              )
+            else if (isBeauty)
+              const Text('확정한 루틴의 실행 회차를 만듭니다. 실제 사용은 다음 단계에서 기록해요.')
             else
               _JsonDetails(title: '입력과 연결 정보', value: _taskInputs(task)),
             if (task['latestOutputRef'] != null)
@@ -1516,6 +1800,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 )
               else if (isFashion)
                 _fashionResult(task)
+              else if (isBeauty)
+                _beautyResult(task)
               else
                 _JsonDetails(
                   title: '최근 결과',
@@ -1549,6 +1835,22 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                     OutlinedButton.icon(
                       key: ValueKey('kernel-open-dining-source-$importId'),
                       onPressed: () => widget.onOpenDiningImport!(importId),
+                      icon: const Icon(Icons.image_outlined),
+                      label: const Text('저장한 원본 보기'),
+                    ),
+                if (isBeauty &&
+                    task['id'] == 'confirm_routine' &&
+                    widget.onOpenBeautyImport != null)
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    OutlinedButton.icon(
+                      key: ValueKey(
+                        'kernel-open-beauty-source-${candidate['importId']}',
+                      ),
+                      onPressed: () => widget.onOpenBeautyImport!(
+                        _text(candidate['importId']),
+                      ),
                       icon: const Icon(Icons.image_outlined),
                       label: const Text('저장한 원본 보기'),
                     ),
@@ -1650,6 +1952,58 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           ),
       ],
     );
+  }
+
+  Widget _beautyResult(KernelJson task) {
+    final result = _objects(
+      _board?['results'],
+    ).where((item) => item['id'] == task['latestOutputRef']).firstOrNull;
+    final value = _object(result?['value']);
+    if (task['id'] == 'confirm_routine') {
+      final steps = _objects(_object(value['template'])['steps']);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('확정한 루틴 순서'),
+          for (var index = 0; index < steps.length; index++)
+            Text('${index + 1}. ${_text(steps[index]['title'])}'),
+        ],
+      );
+    }
+    if (task['id'] == 'instantiate_routine') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('생성한 루틴 회차'),
+          for (final step in _objects(value['steps']))
+            Text('• ${_text(step['title'])}'),
+        ],
+      );
+    }
+    if (task['id'] == 'record_routine_outcome') {
+      final occurrence = _object(_object(_taskInputs(task))['occurrence']);
+      final titles = {
+        for (final step in _objects(occurrence['steps']))
+          _text(step['templateStepId']): _text(step['title']),
+      };
+      const statuses = {
+        'completed': '사용했어요',
+        'skipped': '건너뛰었어요',
+        'unknown': '아직 몰라요',
+      };
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('실제 사용 기록'),
+          for (final step in _objects(value['steps']))
+            Text(
+              '• ${titles[_text(step['templateStepId'])] ?? '단계'} · '
+              '${statuses[_text(step['status'])] ?? '상태 미확인'}',
+            ),
+        ],
+      );
+    }
+    return _JsonDetails(title: '최근 결과', value: result);
   }
 
   Widget _proposalCard(KernelJson proposal, bool hasPendingChanges) {
@@ -1918,6 +2272,414 @@ final class _ErrorPanel extends StatelessWidget {
         TextButton(onPressed: onRefresh, child: const Text('새로고침')),
       ],
     ),
+  );
+}
+
+final class _BeautyScenarioDialog extends StatefulWidget {
+  const _BeautyScenarioDialog({required this.options});
+
+  final List<BeautyImportOption> options;
+
+  @override
+  State<_BeautyScenarioDialog> createState() => _BeautyScenarioDialogState();
+}
+
+final class _BeautyScenarioDialogState extends State<_BeautyScenarioDialog> {
+  final _selected = <String>{};
+  final _occasion = TextEditingController();
+  final _date = TextEditingController();
+  final _time = TextEditingController(text: '21:00');
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final day = DateTime.now().add(const Duration(days: 1));
+    _date.text =
+        '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  void dispose() {
+    _occasion.dispose();
+    _date.dispose();
+    _time.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final occasion = _occasion.text.trim();
+    final date = _date.text.trim();
+    final time = _time.text.trim();
+    final when =
+        RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date) &&
+            RegExp(r'^\d{2}:\d{2}$').hasMatch(time)
+        ? DateTime.tryParse('${date}T$time:00')
+        : null;
+    if (_selected.isEmpty ||
+        _selected.length > 5 ||
+        occasion.isEmpty ||
+        occasion.length > 120 ||
+        when == null) {
+      setState(() => _error = '캡처 1~5개, 루틴 이름과 날짜·시각을 확인해 주세요.');
+      return;
+    }
+    Navigator.pop(context, <String, Object?>{
+      'importIds': widget.options
+          .where((item) => _selected.contains(item.importId))
+          .map((item) => item.importId)
+          .toList(),
+      'occasion': occasion,
+      'scheduledAt': when.toUtc().toIso8601String(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('저장한 제품으로 스킨케어 루틴'),
+    content: SizedBox(
+      width: 430,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('제품 캡처를 고르세요. 사용 순서와 실제 선택한 제품 옵션은 계획 승인 후 직접 확인합니다.'),
+            for (final option in widget.options)
+              CheckboxListTile(
+                key: ValueKey('beauty-import-${option.importId}'),
+                contentPadding: EdgeInsets.zero,
+                value: _selected.contains(option.importId),
+                title: Text(option.title),
+                onChanged: (checked) => setState(() {
+                  if (checked == true) {
+                    _selected.add(option.importId);
+                  } else {
+                    _selected.remove(option.importId);
+                  }
+                }),
+              ),
+            TextField(
+              controller: _occasion,
+              decoration: const InputDecoration(labelText: '루틴 이름·상황'),
+            ),
+            TextField(
+              controller: _date,
+              decoration: const InputDecoration(labelText: '날짜 (YYYY-MM-DD)'),
+            ),
+            TextField(
+              controller: _time,
+              decoration: const InputDecoration(labelText: '시각 (HH:mm)'),
+            ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(
+        key: const Key('beauty-create-submit'),
+        onPressed: _submit,
+        child: const Text('계획 제안 받기'),
+      ),
+    ],
+  );
+}
+
+final class _BeautyConfirmDialog extends StatefulWidget {
+  const _BeautyConfirmDialog({required this.candidates, this.onOpenImport});
+
+  final List<KernelJson> candidates;
+  final void Function(String importId)? onOpenImport;
+
+  @override
+  State<_BeautyConfirmDialog> createState() => _BeautyConfirmDialogState();
+}
+
+final class _BeautyConfirmDialogState extends State<_BeautyConfirmDialog> {
+  final _included = <String>{};
+  final _orderedIds = <String>[];
+  final _variant = <String, TextEditingController>{};
+  final _stepTitle = <String, TextEditingController>{};
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final candidate in widget.candidates) {
+      final id = _text(candidate['importId']);
+      if (id.isEmpty) continue;
+      _orderedIds.add(id);
+      _included.add(id);
+      _variant[id] = TextEditingController();
+      _stepTitle[id] = TextEditingController();
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final controller in [..._variant.values, ..._stepTitle.values]) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  void _move(int index, int offset) {
+    var target = index + offset;
+    while (target >= 0 &&
+        target < _orderedIds.length &&
+        !_included.contains(_orderedIds[target])) {
+      target += offset;
+    }
+    if (target < 0 || target >= _orderedIds.length) return;
+    setState(() {
+      final id = _orderedIds[index];
+      _orderedIds[index] = _orderedIds[target];
+      _orderedIds[target] = id;
+    });
+  }
+
+  void _submit() {
+    final selectedIds = _orderedIds.where(_included.contains).toList();
+    if (selectedIds.isEmpty ||
+        selectedIds.any((id) {
+          final variant = _variant[id]?.text.trim() ?? '';
+          final title = _stepTitle[id]?.text.trim() ?? '';
+          return variant.isEmpty ||
+              variant.length > 80 ||
+              title.isEmpty ||
+              title.length > 80;
+        })) {
+      setState(() => _error = '선택한 단계마다 실제 제품 옵션과 단계 이름을 1~80자로 입력해 주세요.');
+      return;
+    }
+    Navigator.pop(context, [
+      for (final id in selectedIds)
+        <String, Object?>{
+          'importId': id,
+          'variantLabel': _variant[id]!.text.trim(),
+          'stepTitle': _stepTitle[id]!.text.trim(),
+        },
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final candidates = {
+      for (final candidate in widget.candidates)
+        _text(candidate['importId']): candidate,
+    };
+    return AlertDialog(
+      title: const Text('루틴 단계와 순서 확인'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '이미지에서 읽은 상품명은 후보입니다. 사용할 제품 옵션과 순서를 직접 확인해 주세요. 저장만으로 소유나 사용이 기록되지는 않아요.',
+              ),
+              for (var index = 0; index < _orderedIds.length; index++)
+                Builder(
+                  builder: (context) {
+                    final id = _orderedIds[index];
+                    final candidate = candidates[id] ?? {};
+                    final included = _included.contains(id);
+                    final selectedOrdinal = _orderedIds
+                        .take(index + 1)
+                        .where(_included.contains)
+                        .length;
+                    return Card(
+                      key: ValueKey('beauty-step-card-$id'),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CheckboxListTile(
+                              key: ValueKey('beauty-confirm-include-$id'),
+                              value: included,
+                              title: Text(
+                                included
+                                    ? '$selectedOrdinal. ${_text(candidate['name'])}'
+                                    : '${_text(candidate['name'])} · 제외',
+                              ),
+                              onChanged: (checked) => setState(() {
+                                if (checked == true) {
+                                  _included.add(id);
+                                } else {
+                                  _included.remove(id);
+                                }
+                              }),
+                            ),
+                            if (included) ...[
+                              Wrap(
+                                children: [
+                                  IconButton(
+                                    key: ValueKey('beauty-step-up-$id'),
+                                    tooltip: '앞 단계로 이동',
+                                    onPressed:
+                                        !_orderedIds
+                                            .take(index)
+                                            .any(_included.contains)
+                                        ? null
+                                        : () => _move(index, -1),
+                                    icon: const Icon(Icons.arrow_upward),
+                                  ),
+                                  IconButton(
+                                    key: ValueKey('beauty-step-down-$id'),
+                                    tooltip: '뒤 단계로 이동',
+                                    onPressed:
+                                        !_orderedIds
+                                            .skip(index + 1)
+                                            .any(_included.contains)
+                                        ? null
+                                        : () => _move(index, 1),
+                                    icon: const Icon(Icons.arrow_downward),
+                                  ),
+                                  if (widget.onOpenImport != null)
+                                    TextButton.icon(
+                                      key: ValueKey('beauty-source-$id'),
+                                      onPressed: () => widget.onOpenImport!(id),
+                                      icon: const Icon(Icons.image_outlined),
+                                      label: const Text('원본 캡처 보기'),
+                                    ),
+                                ],
+                              ),
+                              TextField(
+                                key: ValueKey('beauty-variant-$id'),
+                                controller: _variant[id],
+                                decoration: const InputDecoration(
+                                  labelText: '실제 사용할 제품 옵션',
+                                  hintText: '예: 150 mL',
+                                ),
+                              ),
+                              TextField(
+                                key: ValueKey('beauty-step-title-$id'),
+                                controller: _stepTitle[id],
+                                decoration: const InputDecoration(
+                                  labelText: '루틴 단계 이름',
+                                  hintText: '예: 저녁 세안',
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              if (_error != null)
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('beauty-confirm-submit'),
+          onPressed: _submit,
+          child: const Text('루틴 확정'),
+        ),
+      ],
+    );
+  }
+}
+
+final class _BeautyOutcomeDialog extends StatefulWidget {
+  const _BeautyOutcomeDialog({required this.steps});
+
+  final List<KernelJson> steps;
+
+  @override
+  State<_BeautyOutcomeDialog> createState() => _BeautyOutcomeDialogState();
+}
+
+final class _BeautyOutcomeDialogState extends State<_BeautyOutcomeDialog> {
+  final _statusByStep = <String, String>{};
+  String? _error;
+
+  void _submit() {
+    if (widget.steps.isEmpty ||
+        widget.steps.any(
+          (step) => !_statusByStep.containsKey(_text(step['templateStepId'])),
+        )) {
+      setState(() => _error = '모든 단계의 실제 사용 여부를 선택해 주세요.');
+      return;
+    }
+    Navigator.pop(context, [
+      for (final step in widget.steps)
+        <String, Object?>{
+          'templateStepId': step['templateStepId'],
+          'status': _statusByStep[_text(step['templateStepId'])],
+        },
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('실제 루틴 사용 기록'),
+    content: SizedBox(
+      width: 430,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('계획에 넣은 제품과 실제 사용은 별도예요. 각 단계를 직접 기록해 주세요.'),
+            for (final step in widget.steps)
+              DropdownButtonFormField<String>(
+                key: ValueKey('beauty-outcome-${step['templateStepId']}'),
+                initialValue: _statusByStep[_text(step['templateStepId'])],
+                decoration: InputDecoration(labelText: _text(step['title'])),
+                items: const [
+                  DropdownMenuItem(value: 'completed', child: Text('사용했어요')),
+                  DropdownMenuItem(value: 'skipped', child: Text('건너뛰었어요')),
+                  DropdownMenuItem(value: 'unknown', child: Text('아직 몰라요')),
+                ],
+                onChanged: (value) => setState(() {
+                  if (value != null) {
+                    _statusByStep[_text(step['templateStepId'])] = value;
+                  }
+                }),
+              ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(
+        key: const Key('beauty-outcome-submit'),
+        onPressed: _submit,
+        child: const Text('사용 결과 저장'),
+      ),
+    ],
   );
 }
 

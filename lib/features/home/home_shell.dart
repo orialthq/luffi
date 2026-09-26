@@ -310,12 +310,28 @@ final class _HomeShellState extends State<HomeShell>
             title: imported.title,
           ),
     ];
+    final beautyImportOptions = [
+      for (final imported in widget.controller.syncedReviewedCaptureImports)
+        if (widget.controller
+                .captureById(imported.captureId)
+                ?.analysis
+                ?.structuredContent
+            case final structured?
+            when structured.contentKind == ContentKind.beautyProduct &&
+                structured.title.status == ObservedStatus.observed &&
+                structured.title.value?.trim().isNotEmpty == true)
+          BeautyImportOption(
+            importId: imported.importId,
+            title: structured.title.value!.trim(),
+          ),
+    ];
     Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => CommonBoardsScreen(
           importOptions: importOptions,
           diningImportOptions: diningImportOptions,
           fashionImportOptions: fashionImportOptions,
+          beautyImportOptions: beautyImportOptions,
           onOpenDiningImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
@@ -326,6 +342,15 @@ final class _HomeShellState extends State<HomeShell>
             }
           },
           onOpenFashionImport: (importId) {
+            for (final imported
+                in widget.controller.syncedReviewedCaptureImports) {
+              if (imported.importId != importId) continue;
+              final capture = widget.controller.captureById(imported.captureId);
+              if (capture != null) _openCapture(capture);
+              return;
+            }
+          },
+          onOpenBeautyImport: (importId) {
             for (final imported
                 in widget.controller.syncedReviewedCaptureImports) {
               if (imported.importId != importId) continue;

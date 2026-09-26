@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "beauty",
+  "contentKind": "beauty_product",
+  "tags": [
+    {
+      "value": "뷰티",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "제품 상세 화면에 표시된 보습 크림"
+      ],
+      "citations": []
+    },
+    {
+      "value": "스킨케어",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e1",
+        "e3"
+      ],
+      "quotes": [
+        "제품명이 ‘수분 장벽 크림’으로 표시됨",
+        "사용 단계가 ‘보습’으로 표시됨"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "수분 장벽 크림",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "e1"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "건조한 피부에 촉촉함을 더하는 데일리 보습 크림입니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "수분 장벽 크림",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "MOISTURIZING CREAM",
+      "region": "image_text",
+      "confidence": 0.98
+    },
+    {
+      "id": "e3",
+      "text": "사용 단계  보습",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e4",
+      "text": "50 mL",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "e5",
+      "text": "건조한 피부에 촉촉함을 더해주는 데일리 보습 크림입니다.",
+      "region": "product_panel",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "용량",
+      "value": "50 mL",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "label": "사용 단계",
+      "value": "보습",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "상품 설명",
+      "value": "건조한 피부에 촉촉함을 더해주는 데일리 보습 크림입니다.",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e5"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

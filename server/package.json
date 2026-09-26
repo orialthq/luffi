@@ -13,6 +13,7 @@
     "test:image-live": "node scripts/verify-recipe-image.mjs",
     "test:dining-image-live": "node scripts/verify-dining-images.mjs",
     "test:fashion-image-live": "node scripts/verify-fashion-images.mjs",
+    "test:beauty-image-live": "node scripts/verify-beauty-images.mjs",
     "test:watch": "node --test --watch test/*.test.js"
   }
 }

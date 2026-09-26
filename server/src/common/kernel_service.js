@@ -17,6 +17,7 @@ import { retrieveKnowledge, validateRetrievalResult } from "../retrieval/index.j
 import { buildRecipePlanDraft } from "../scenarios/recipe_plan.js";
 import { buildDiningPlanDraft } from "../scenarios/dining_plan.js";
 import { buildFashionPlanDraft } from "../scenarios/fashion_plan.js";
+import { buildBeautyPlanDraft } from "../scenarios/beauty_plan.js";
 import {
   applyResourceCommand, createResourceState,
   getResourceAvailability as projectResourceAvailability,
@@ -42,6 +43,8 @@ export function createCommonKernelState() {
     diningCommandReceipts: {},
     fashionScenarioReceipts: {},
     fashionCommandReceipts: {},
+    beautyScenarioReceipts: {},
+    beautyCommandReceipts: {},
   };
 }
 
@@ -435,7 +438,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       state.knowledge = unregisterKnowledgeWatch(state.knowledge, { ownerId, consumerId: activityId });
       delete state.retrievalWatches[activityId];
       delete state.resourceWatches[activityId];
-      for (const receipts of [state.diningCommandReceipts, state.fashionCommandReceipts]) {
+      for (const receipts of [state.diningCommandReceipts, state.fashionCommandReceipts,
+        state.beautyCommandReceipts]) {
         for (const item of Object.values(receipts ?? {})) {
           if (item.activityId === activityId) {
             item.deleted = true;
@@ -462,6 +466,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
 
   function redactFashionScenario(state, sourceId, activityId = null) {
     redactScenarioReceipts(state, Object.values(state.fashionScenarioReceipts ?? {}).filter((entry) =>
+      !entry.deleted && (entry.result?.activityId === activityId ||
+        entry.result?.confirmationSourceId === sourceId || entry.importIds?.some((id) =>
+          state.importReceipts[id]?.sourceId === sourceId))), sourceId);
+  }
+
+  function redactBeautyScenario(state, sourceId, activityId = null) {
+    redactScenarioReceipts(state, Object.values(state.beautyScenarioReceipts ?? {}).filter((entry) =>
       !entry.deleted && (entry.result?.activityId === activityId ||
         entry.result?.confirmationSourceId === sourceId || entry.importIds?.some((id) =>
           state.importReceipts[id]?.sourceId === sourceId))), sourceId);
@@ -514,23 +525,38 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.importReceipts[id]?.sourceId === source.id)).map((item) => item.result.activityId))
       : new Set(source?.provenance?.scenario === "fashion" && source.provenance.activityId
         ? [source.provenance.activityId] : []);
+    const beautyActivityIds = source?.kind === "capture_analysis"
+      ? new Set(Object.values(state.beautyScenarioReceipts ?? {}).filter((item) =>
+        !item.deleted && item.importIds?.some((id) =>
+          state.importReceipts[id]?.sourceId === source.id)).map((item) => item.result.activityId))
+      : new Set(source?.provenance?.scenario === "beauty" && source.provenance.activityId
+        ? [source.provenance.activityId] : []);
     const linkedConfirmations = source?.kind === "capture_analysis"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.kind === "user_confirmation" &&
         ((item.provenance?.scenario === "recipe" &&
           item.provenance?.importedSourceId === source.id) ||
           (item.provenance?.scenario === "fashion" &&
-            fashionActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
+            fashionActivityIds.has(item.provenance.activityId)) ||
+          (item.provenance?.scenario === "beauty" &&
+            beautyActivityIds.has(item.provenance.activityId)))).map((item) => item.id) : [];
     const linkedFashionSources = state.knowledge.sources.filter((item) =>
       item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
       item.provenance?.scenario === "fashion" &&
       fashionActivityIds.has(item.provenance.activityId) &&
       (item.kind === "user_confirmation" || item.kind === "user_report"))
       .map((item) => item.id);
-    return { source, linkedConfirmations, linkedFashionSources };
+    const linkedBeautySources = state.knowledge.sources.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
+      item.provenance?.scenario === "beauty" &&
+      beautyActivityIds.has(item.provenance.activityId) &&
+      (item.kind === "user_confirmation" || item.kind === "user_report"))
+      .map((item) => item.id);
+    return { source, linkedConfirmations, linkedFashionSources, linkedBeautySources };
   }
 
-  function finishSourceDeletion(state, { source, linkedConfirmations, linkedFashionSources }) {
+  function finishSourceDeletion(state, { source, linkedConfirmations, linkedFashionSources,
+    linkedBeautySources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
@@ -538,16 +564,23 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "fashion") {
       redactFashionScenario(state, source.id, source.provenance.activityId);
     }
+    if (source?.kind === "user_confirmation" && source.provenance?.scenario === "beauty") {
+      redactBeautyScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "user_report" && source.provenance?.scenario === "dining") {
       redactDiningScenario(state, source.id, source.provenance.activityId);
     }
     if (source?.kind === "user_report" && source.provenance?.scenario === "fashion") {
       redactFashionScenario(state, source.id, source.provenance.activityId);
     }
+    if (source?.kind === "user_report" && source.provenance?.scenario === "beauty") {
+      redactBeautyScenario(state, source.id, source.provenance.activityId);
+    }
     if (source?.kind === "capture_analysis") {
       redactImportedCapture(state, source.id);
       redactDiningScenario(state, source.id);
       redactFashionScenario(state, source.id);
+      redactBeautyScenario(state, source.id);
       for (const sourceId of linkedConfirmations) {
         state.knowledge = applyKnowledgeCommand(state.knowledge, {
           ownerId, commandId: `kernel:source-cascade:${sourceId}`,
@@ -556,6 +589,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         purgeIssuedContextsFromSource(state, sourceId);
         redactRecipeScenario(state, sourceId);
         redactFashionScenario(state, sourceId);
+        redactBeautyScenario(state, sourceId);
       }
     }
     for (const sourceId of linkedFashionSources) {
@@ -567,6 +601,16 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       redactFashionScenario(state, sourceId);
+    }
+    for (const sourceId of linkedBeautySources) {
+      const linked = state.knowledge.sources.find((item) => item.id === sourceId);
+      if (linked?.status !== "active") continue;
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      redactBeautyScenario(state, sourceId);
     }
   }
 
@@ -730,6 +774,41 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return { candidates, contextQueries };
   }
 
+  function beautyCandidates(state, importIds) {
+    const candidates = [];
+    const contextQueries = [];
+    for (const importId of importIds) {
+      const receipt = state.importReceipts[importId];
+      if (receipt?.ownerId !== ownerId || receipt.deleted) {
+        throw new AppError("IMPORT_NOT_FOUND", "연결할 확인 자료를 찾을 수 없어요.", { httpStatus: 404 });
+      }
+      const version = state.knowledge.sourceVersions.find((item) =>
+        item.ownerId === ownerId && item.id === receipt.sourceVersionId && item.status === "active");
+      const analysis = version?.content?.analysis;
+      if (!analysis || analysis.contentKind !== "beauty_product" ||
+          analysis.title?.status !== "observed" || !analysis.title.value?.trim()) {
+        throw new AppError("IMPORT_NOT_BEAUTY", "상품명이 보이는 뷰티 자료만 사용할 수 있어요.",
+          { httpStatus: 400 });
+      }
+      const mention = state.knowledge.entityMentions.find((item) =>
+        item.ownerId === ownerId && item.sourceVersionId === version.id &&
+        item.entityType === "core.product" && item.status === "active");
+      if (!mention) throw new AppError("IMPORT_NOT_BEAUTY", "상품 근거를 확인할 수 없어요.",
+        { httpStatus: 400 });
+      candidates.push({ importId, name: analysis.title.value.trim(), mentionId: mention.id,
+        evidenceIds: [...mention.evidenceIds] });
+      const field = state.knowledge.assertions.find((item) => item.ownerId === ownerId &&
+        item.subjectId === receipt.result?.materialId &&
+        item.predicate === "ingestion.extracted_field" &&
+        item.typedValue?.value?.path === "/title/value" && item.status === "active");
+      if (!field) throw new AppError("CONTEXT_STALE", "상품명 근거가 변경됐어요.",
+        { httpStatus: 409 });
+      contextQueries.push({ subjectId: field.subjectId, predicate: field.predicate,
+        scope: field.scope });
+    }
+    return { candidates, contextQueries };
+  }
+
   return {
     async contracts() {
       return {
@@ -807,7 +886,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             if (!task) throw new AppError("TASK_NOT_FOUND", "작업을 찾을 수 없어요.", { httpStatus: 404 });
             const spec = registry.getCapability(task.capabilityId);
             if (["dining.select_place", "dining.record_visit_outcome",
-              "fashion.confirm_outfit", "fashion.record_wear_outcome"].includes(spec.id) &&
+              "fashion.confirm_outfit", "fashion.record_wear_outcome",
+              "beauty.confirm_routine", "beauty.record_routine_outcome"].includes(spec.id) &&
                 (command.type === "task.recordResult" || command.payload?.to === "completed" ||
                   Object.hasOwn(command.payload ?? {}, "output"))) {
               throw new AppError("TASK_EXECUTION_RESTRICTED", "확인·결과 작업은 전용 경로로 기록해 주세요.",
@@ -1761,6 +1841,424 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const result = { activityId, outfitId, status: input.status, experienceId,
             revision: applied.result.revision };
           state.fashionCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async createBeautyScenario(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "confirmed",
+          "importIds", "occasion", "scheduledAt"].includes(key)) || input.confirmed !== true ||
+          !Array.isArray(input.importIds) || input.importIds.length < 1 ||
+          input.importIds.length > 5 || typeof input.occasion !== "string" ||
+          !input.occasion.trim() || input.occasion.length > 120) {
+          throw new AppError("INVALID_REQUEST", "뷰티 활동 입력을 확인해 주세요.", { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const importIds = input.importIds.map((id) => safeId(id, "importId"));
+        if (new Set(importIds).size !== importIds.length) {
+          throw new AppError("INVALID_REQUEST", "같은 캡처를 중복 선택했어요.", { httpStatus: 400 });
+        }
+        registry.validate("core.timestamp", input.scheduledAt);
+        const occasion = input.occasion.trim();
+        const requestHash = requestFingerprint({ activityId, importIds, occasion,
+          scheduledAt: input.scheduledAt });
+        return await store.transact((state) => {
+          assertState(state);
+          state.beautyScenarioReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.beautyScenarioReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 뷰티 요청에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 뷰티 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const { candidates, contextQueries } = beautyCandidates(state, importIds);
+          const stem = `beauty:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const plan = buildBeautyPlanDraft({ candidates, occasion,
+            scheduledAt: input.scheduledAt, occurrenceId: `${stem}:occurrence` }, { registry });
+          const created = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:activity`, type: "activity.create", activityId,
+            expectedRevision: 0, payload: { title: `${occasion} 뷰티 루틴`,
+              goal: { description: `${input.scheduledAt} · ${occasion}에 사용할 제품 순서 정하기` } } },
+          activityOptions(state));
+          state.activities = created.state;
+          state.resources = applyResourceCommand(state.resources, { ownerId,
+            commandId: `${stem}:resource-activity`, type: "activity.register",
+            expectedRevision: 0, payload: { activityId } }).state;
+          const issued = issueContext(state, { activityId, queries: contextQueries });
+          if (issued.resolutions.some((item) => item.status !== "resolved")) {
+            throw new AppError("CONTEXT_STALE", "뷰티 캡처 근거를 확인할 수 없어요.",
+              { httpStatus: 409 });
+          }
+          const enriched = enrichPlan("draft", plan);
+          applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:proposal-check`, type: "plan.applyDraft", activityId,
+            expectedRevision: created.result.revision, payload: { draft: enriched } },
+          activityOptions(state));
+          const proposalId = randomUUID();
+          state.proposals[proposalId] = { id: proposalId, ownerId, activityId,
+            contextId: issued.contextId, kind: "draft", plan: structuredClone(enriched),
+            run: { scenario: "beauty", importIds: [...importIds] },
+            baseActivityRevision: created.result.revision, basePlanRevision: 0,
+            status: "pending", createdAt: new Date().toISOString() };
+          const result = { activityId, revision: created.result.revision, proposalId,
+            contextId: issued.contextId, candidateCount: candidates.length };
+          state.beautyScenarioReceipts[receiptKey] = { hash: requestHash,
+            importIds: [...importIds], occasion, scheduledAt: input.scheduledAt, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async confirmBeautyRoutine(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "selections"].includes(key)) || !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 0 || !Array.isArray(input.selections) ||
+          input.selections.length < 1 || input.selections.length > 5 ||
+          input.selections.some((item) => !item || typeof item !== "object" ||
+            Array.isArray(item) || Object.keys(item).some((key) =>
+              !["importId", "variantLabel", "stepTitle"].includes(key)) ||
+            !["importId", "variantLabel", "stepTitle"].every((key) =>
+              typeof item[key] === "string" && item[key].trim() && item[key].length <= 80))) {
+          throw new AppError("INVALID_REQUEST", "루틴 제품·단계 이름을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const selections = input.selections.map((item) => ({
+          importId: safeId(item.importId, "importId"),
+          variantLabel: item.variantLabel.trim(), stepTitle: item.stepTitle.trim(),
+        }));
+        if (new Set(selections.map((item) => item.importId)).size !== selections.length) {
+          throw new AppError("INVALID_REQUEST", "같은 캡처를 중복 사용할 수 없어요.",
+            { httpStatus: 400 });
+        }
+        const requestHash = requestFingerprint({ activityId, expectedRevision: input.expectedRevision,
+          selections });
+        return await store.transact((state) => {
+          assertState(state);
+          state.beautyCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.beautyCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 루틴 확인에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.",
+              { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.values(state.beautyScenarioReceipts ?? {}).find((item) =>
+            item.result?.activityId === activityId && !item.deleted);
+          if (!scenario) throw new AppError("NOT_FOUND", "뷰티 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "confirm_routine" &&
+            item.capabilityId === "beauty.confirm_routine");
+          const instantiate = current.tasks.find((item) => item.id === "instantiate_routine" &&
+            item.capabilityId === "beauty.instantiate_routine");
+          if (task?.readiness?.status !== "ready" || !instantiate) {
+            throw new AppError("TASK_BLOCKED", "지금은 루틴을 확정할 수 없어요.",
+              { httpStatus: 409 });
+          }
+          const candidates = new Map(task.readiness.inputs.candidates.map((item) =>
+            [item.importId, item]));
+          const plannedImports = task.readiness.inputs.candidates.map((item) => item.importId);
+          if (task.readiness.inputs.occasion !== scenario.occasion ||
+              plannedImports.length !== scenario.importIds.length ||
+              new Set(plannedImports).size !== plannedImports.length ||
+              plannedImports.some((id) => !scenario.importIds.includes(id))) {
+            throw new AppError("INVALID_PLAN", "확인할 루틴 후보가 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          if (selections.some((item) => !candidates.has(item.importId) ||
+              !scenario.importIds.includes(item.importId))) {
+            throw new AppError("INVALID_REQUEST", "활동에 제안된 캡처만 사용할 수 있어요.",
+              { httpStatus: 400 });
+          }
+          const stem = `beauty:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const templateId = `${stem}:template`;
+          const occurrenceId = `${stem}:occurrence`;
+          if (instantiate.inputBindings?.occurrenceId !== occurrenceId ||
+              instantiate.inputBindings?.scheduledAt !== scenario.scheduledAt ||
+              !current.tasks.some((item) => item.id === "record_routine_outcome" &&
+                item.capabilityId === "beauty.record_routine_outcome")) {
+            throw new AppError("INVALID_PLAN", "루틴 일정 연결이 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          const scheduledAt = instantiate.inputBindings.scheduledAt;
+          registry.validate("core.timestamp", scheduledAt);
+          const confirmedAt = new Date().toISOString();
+          const content = { occasion: task.readiness.inputs.occasion,
+            scheduledAt, selections };
+          const sourceId = `${stem}:confirmation-source`;
+          const versionId = `${stem}:confirmation-version`;
+          const beforeSequence = state.knowledge.sequence;
+          const applyKnowledge = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:confirm:${role}`, type, payload }, { predicates }).state;
+          };
+          applyKnowledge("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 확인한 뷰티 루틴", provenance: { scenario: "beauty", activityId,
+              importedSourceIds: selections.map((item) =>
+                state.importReceipts[item.importId].sourceId) } });
+          applyKnowledge("version", "source.version.add", { id: versionId,
+            sourceId, contentHash: fingerprint(content), content, capturedAt: confirmedAt });
+          applyKnowledge("template", "entity.create", { id: templateId,
+            type: "beauty.routine_template", label: "사용자가 확정한 뷰티 루틴" });
+          applyKnowledge("occurrence", "entity.create", { id: occurrenceId,
+            type: "beauty.routine_occurrence", label: "예정된 뷰티 루틴" });
+          const scheduleEvidenceId = `${stem}:schedule-evidence`;
+          applyKnowledge("schedule-evidence", "evidence.add", { id: scheduleEvidenceId,
+            sourceVersionId: versionId, quote: `${scheduledAt} · ${content.occasion}`,
+            locator: { kind: "user_confirmation", jsonPointer: "/scheduledAt" } });
+          const assertion = (role, subjectId, predicate, evidenceId,
+            objectEntityId = null, typedValue = null) => applyKnowledge(`assertion:${role}`,
+            "assertion.add", { id: `${stem}:${role}`, subjectId, predicate,
+              scope: { type: "activity", id: activityId }, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+              observedAt: confirmedAt,
+              ...(objectEntityId ? { objectEntityId } : { typedValue }),
+            });
+          assertion("occurrence-of", occurrenceId, "beauty.occurrence_of",
+            scheduleEvidenceId, templateId);
+          const steps = [];
+          for (const [index, selection] of selections.entries()) {
+            const candidate = candidates.get(selection.importId);
+            const mention = state.knowledge.entityMentions.find((item) =>
+              item.ownerId === ownerId && item.id === candidate.mentionId &&
+              item.status === "active");
+            if (!mention) throw new AppError("CONTEXT_STALE", "상품 캡처 근거가 변경됐어요.",
+              { httpStatus: 409 });
+            const role = fingerprint(selection.importId).slice(0, 16);
+            const evidenceId = `${stem}:confirmation-evidence:${role}`;
+            applyKnowledge(`evidence:${role}`, "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId,
+              quote: `${candidate.name} · ${selection.variantLabel} · ${selection.stepTitle}`,
+              locator: { kind: "user_confirmation", jsonPointer: `/selections/${index}` } });
+            const accepted = state.knowledge.identityDecisions.find((item) =>
+              item.ownerId === ownerId && item.mentionId === mention.id && item.status === "accepted");
+            const productId = accepted?.entityId ?? `${stem}:product:${role}`;
+            if (!accepted) {
+              applyKnowledge(`product:${role}`, "entity.create", { id: productId,
+                type: "core.product", label: "사용자가 확인한 뷰티 상품" });
+              const decisionId = `${stem}:identity:${role}`;
+              applyKnowledge(`identity-propose:${role}`, "identity.propose", { id: decisionId,
+                mentionId: mention.id, entityId: productId,
+                evidenceIds: mention.evidenceIds,
+                reason: "사용자가 루틴 제품의 상품 캡처를 확인함" });
+              applyKnowledge(`identity-accept:${role}`, "identity.accept", {
+                decisionId, expectedRevision: 1 });
+            }
+            const variantId = `beauty:variant:${fingerprint([ownerId, productId,
+              selection.variantLabel]).slice(0, 32)}`;
+            if (!state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+                item.id === variantId && item.status === "active")) {
+              applyKnowledge(`variant:${role}`, "entity.create", { id: variantId,
+                type: "core.product_variant", label: "사용자가 선택한 제품 옵션" });
+            }
+            const stepId = `${stem}:step:${index + 1}`;
+            applyKnowledge(`step:${index + 1}`, "entity.create", { id: stepId,
+              type: "beauty.routine_step", label: "사용자가 확인한 루틴 단계" });
+            assertion(`variant-of:${index + 1}`, variantId, "beauty.variant_of",
+              evidenceId, productId);
+            assertion(`variant-label:${index + 1}`, variantId, "beauty.variant_label",
+              evidenceId, null, { type: "core.text", value: selection.variantLabel });
+            assertion(`has-step:${index + 1}`, templateId, "beauty.has_step",
+              evidenceId, stepId);
+            assertion(`step-title:${index + 1}`, stepId, "beauty.step_title",
+              evidenceId, null, { type: "core.text", value: selection.stepTitle });
+            assertion(`step-order:${index + 1}`, stepId, "beauty.step_order",
+              evidenceId, null, { type: "core.revision", value: index + 1 });
+            assertion(`uses-variant:${index + 1}`, stepId, "beauty.uses_variant",
+              evidenceId, variantId);
+            steps.push({ id: stepId, title: selection.stepTitle, variantId });
+          }
+          const template = { id: templateId, revision: 1,
+            title: `${content.occasion} 뷰티 루틴`, steps };
+          registry.validate("beauty.routine_template", template);
+          recordAffectedConsumers(state, beforeSequence);
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:confirmed`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "confirm_routine", expectedTaskRevision: task.revision,
+              to: "completed", output: { templateId, occurrenceId, template,
+                confirmedAt } } }, activityOptions(state));
+          state.activities = applied.state;
+          const result = { activityId, templateId, occurrenceId,
+            revision: applied.result.revision };
+          state.beautyCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
+          scenario.result.confirmationSourceId = sourceId;
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async recordBeautyRoutineOutcome(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId", "expectedRevision",
+          "steps"].includes(key)) || !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 0 || !Array.isArray(input.steps) ||
+          input.steps.length < 1 || input.steps.length > 5 ||
+          input.steps.some((item) => !item || typeof item !== "object" ||
+            Array.isArray(item) || Object.keys(item).some((key) =>
+              !["templateStepId", "status"].includes(key)) ||
+            typeof item.templateStepId !== "string" || !item.templateStepId.trim() ||
+            !["completed", "skipped", "unknown"].includes(item.status))) {
+          throw new AppError("INVALID_REQUEST", "각 루틴 단계의 결과를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const steps = input.steps.map((item) => ({
+          templateStepId: safeId(item.templateStepId, "templateStepId"),
+          status: item.status,
+        }));
+        if (new Set(steps.map((item) => item.templateStepId)).size !== steps.length) {
+          throw new AppError("INVALID_REQUEST", "같은 루틴 단계를 중복 기록할 수 없어요.",
+            { httpStatus: 400 });
+        }
+        const requestHash = requestFingerprint({ activityId, expectedRevision: input.expectedRevision,
+          steps });
+        return await store.transact((state) => {
+          assertState(state);
+          state.beautyCommandReceipts ??= {};
+          const receiptKey = `${ownerId}:${commandId}`;
+          const previous = state.beautyCommandReceipts[receiptKey];
+          if (previous) {
+            if (previous.hash !== requestHash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 사용 결과에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED", "삭제한 활동이에요.",
+              { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const scenario = Object.values(state.beautyScenarioReceipts ?? {}).find((item) =>
+            item.result?.activityId === activityId && !item.deleted);
+          if (!scenario) throw new AppError("NOT_FOUND", "뷰티 활동을 찾지 못했어요.",
+            { httpStatus: 404 });
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError("REVISION_CONFLICT",
+            "활동이 변경됐어요.", { httpStatus: 409 });
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "record_routine_outcome" &&
+            item.capabilityId === "beauty.record_routine_outcome");
+          if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
+            "지금은 사용 결과를 기록할 수 없어요.", { httpStatus: 409 });
+          const occurrence = task.readiness.inputs.occurrence;
+          const expectedOccurrenceId = `beauty:${fingerprint([ownerId, activityId]).slice(0, 32)}:occurrence`;
+          const confirmationTask = current.tasks.find((item) => item.id === "confirm_routine" &&
+            item.capabilityId === "beauty.confirm_routine" &&
+            item.executionStatus === "completed");
+          const confirmed = current.results.find((item) =>
+            item.id === confirmationTask?.latestOutputRef)?.value;
+          const instantiateTask = current.tasks.find((item) =>
+            item.id === "instantiate_routine" &&
+            item.capabilityId === "beauty.instantiate_routine" &&
+            item.executionStatus === "completed");
+          const instantiated = current.results.find((item) =>
+            item.id === instantiateTask?.latestOutputRef)?.value;
+          const expectedOccurrence = confirmed?.template && scenario.scheduledAt
+            ? registry.execute("beauty.instantiate_routine", {
+              template: confirmed.template, occurrenceId: expectedOccurrenceId,
+              scheduledAt: scenario.scheduledAt }) : null;
+          if (occurrence?.id !== expectedOccurrenceId ||
+              confirmed?.templateId !== occurrence.templateId ||
+              !instantiated || !expectedOccurrence ||
+              requestFingerprint(occurrence) !== requestFingerprint(instantiated) ||
+              requestFingerprint(occurrence) !== requestFingerprint(expectedOccurrence) ||
+              !state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+                item.id === occurrence.id && item.type === "beauty.routine_occurrence" &&
+                item.status === "active") ||
+              !state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
+                item.subjectId === occurrence.id && item.predicate === "beauty.occurrence_of" &&
+                item.objectEntityId === confirmed.templateId && item.status === "active") ||
+              !state.knowledge.sources.some((item) => item.ownerId === ownerId &&
+                item.id === scenario.result.confirmationSourceId && item.status === "active")) {
+            throw new AppError("CONTEXT_STALE", "확정한 루틴을 찾지 못했어요.",
+              { httpStatus: 409 });
+          }
+          const occurrenceSteps = new Map(occurrence.steps.map((item) =>
+            [item.templateStepId, item]));
+          if (steps.length !== occurrenceSteps.size ||
+              steps.some((item) => !occurrenceSteps.has(item.templateStepId))) {
+            throw new AppError("INVALID_REQUEST", "모든 루틴 단계의 결과를 기록해 주세요.",
+              { httpStatus: 400 });
+          }
+          const stem = `beauty:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+          const recordedAt = new Date().toISOString();
+          const outcome = { occurrenceId: occurrence.id, steps, recordedAt };
+          registry.validate("beauty.routine_outcome", outcome);
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${stem}:routine-outcome`, type: "task.transition", activityId,
+            expectedRevision: input.expectedRevision,
+            payload: { taskId: "record_routine_outcome",
+              expectedTaskRevision: task.revision, to: "completed", output: outcome } },
+          activityOptions(state));
+          state.activities = applied.state;
+          const completed = steps.filter((item) => item.status === "completed");
+          const experienceIds = [];
+          if (completed.length) {
+            const beforeSequence = state.knowledge.sequence;
+            const sourceId = `${stem}:outcome-source`;
+            const versionId = `${stem}:outcome-version`;
+            const reportContent = { occurrenceId: occurrence.id,
+              completedSteps: completed, recordedAt };
+            const applyKnowledge = (role, type, payload) => {
+              if (type === "assertion.add") validateAssertionRelation(state, payload);
+              state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+                commandId: `${stem}:outcome:${role}`, type, payload }, { predicates }).state;
+            };
+            applyKnowledge("source", "source.create", { id: sourceId, kind: "user_report",
+              title: "뷰티 루틴 사용 기록", provenance: { scenario: "beauty", activityId } });
+            applyKnowledge("version", "source.version.add", { id: versionId,
+              sourceId, contentHash: fingerprint(reportContent), content: reportContent,
+              capturedAt: recordedAt });
+            for (const [index, step] of completed.entries()) {
+              const role = fingerprint(step.templateStepId).slice(0, 16);
+              const occurrenceStep = occurrenceSteps.get(step.templateStepId);
+              const variantId = occurrenceStep.variantId;
+              if (!variantId || !state.knowledge.entities.some((item) =>
+                  item.ownerId === ownerId && item.id === variantId &&
+                  item.type === "core.product_variant" && item.status === "active")) {
+                throw new AppError("CONTEXT_STALE", "확정한 제품 옵션을 찾지 못했어요.",
+                  { httpStatus: 409 });
+              }
+              const evidenceId = `${stem}:outcome-evidence:${role}`;
+              const experienceId = `${stem}:experience:${role}`;
+              applyKnowledge(`evidence:${role}`, "evidence.add", { id: evidenceId,
+                sourceVersionId: versionId, quote: `${occurrenceStep.title} · 사용했어요`,
+                locator: { kind: "user_report", jsonPointer: `/completedSteps/${index}` } });
+              applyKnowledge(`experience:${role}`, "entity.create", { id: experienceId,
+                type: "beauty.use_experience", label: "사용자가 기록한 제품 사용" });
+              const assertion = (suffix, predicate, objectEntityId) =>
+                applyKnowledge(`${suffix}:${role}`, "assertion.add", {
+                  id: `${stem}:${suffix}:${role}`, subjectId: experienceId,
+                  predicate, objectEntityId,
+                  scope: { type: "activity", id: activityId }, origin: "user_reported",
+                  assertedBy: { type: "user", id: ownerId },
+                  evidenceIds: [evidenceId], observedAt: recordedAt,
+                });
+              assertion("experience-in", "beauty.experience_in", occurrence.id);
+              assertion("experience-for-step", "beauty.experience_for_step",
+                step.templateStepId);
+              assertion("experience-uses-variant", "beauty.experience_uses_variant", variantId);
+              experienceIds.push(experienceId);
+            }
+            recordAffectedConsumers(state, beforeSequence);
+          }
+          const result = { activityId, occurrenceId: occurrence.id,
+            completedStepIds: completed.map((item) => item.templateStepId), experienceIds,
+            revision: applied.result.revision };
+          state.beautyCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

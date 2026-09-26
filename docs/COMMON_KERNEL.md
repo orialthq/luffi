@@ -52,6 +52,9 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/fashion/scenarios` | 확인해 가져온 패션 상품 캡처로 일정별 코디 계획 제안 |
 | `POST /v1/kernel/fashion/confirm-outfit` | 사용자가 코디 슬롯·색상·사이즈·소유 상태를 확인하고 출처가 있는 Outfit 구성 |
 | `POST /v1/kernel/fashion/wear-outcome` | 사용자가 실제 착용을 보고. `worn`일 때만 착용 관계 생성 |
+| `POST /v1/kernel/beauty/scenarios` | 확인한 뷰티 제품 캡처로 일정별 루틴 계획 제안 |
+| `POST /v1/kernel/beauty/confirm-routine` | 사용자가 제품 표기·단계명·순서를 확정하고 출처가 있는 루틴 구성 |
+| `POST /v1/kernel/beauty/routine-outcome` | 단계별 사용 결과를 직접 보고. `completed`에만 사용 경험 관계 생성 |
 | `POST /v1/kernel/domains/execute` | 부수 효과가 없는 등록된 분야 계산만 실행 |
 
 AI가 만든 PlanDraft/PlanPatch를 적용할 때는 `/knowledge/context`가 돌려준 `contextId`를 사용한다. 서버는 이 ID에 연결된 readSet, 없던 사실을 감시하는 queryWatches, 검색의 발견 의존성, 자원 조건, 정책·시간 조건과 Activity revision을 다시 검사한다. API가 전달한 임의 `context` 객체는 신뢰하지 않는다. 발급 맥락은 서버 상태에 저장되며 사용 기한은 1시간이다. `/planning/proposals`는 실제 상태를 바꾸지 않는 컴파일 검사를 먼저 하고, `/planning/accept`에서 기준 버전과 맥락을 다시 검사한다. 같은 명령 ID·같은 요청은 재전송해도 한 번만 처리하고, 같은 ID에 다른 내용은 충돌이다.
@@ -163,6 +166,12 @@ Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 �
 `POST /v1/kernel/fashion/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 패션 상품으로 확인해 가져온 `importIds`(1~5개), `occasion`, `scheduledAt`을 받는다. 서버는 캡처의 관측 제목·근거와 미해결 상품 Mention을 후보로 두고, `confirm_outfit → record_wear` 계획을 승인 대기로 만든다. 같은 제목의 다른 캡처를 자동 병합하지 않는다.
 
 사용자는 `confirm-outfit`에서 캡처별 코디 슬롯, 실제 선택한 색상·사이즈, `owned/candidate/unknown`을 직접 보낸다. 확인 Source/Evidence와 상품 IdentityDecision, Product/Variant/Outfit Entity, `fashion.variant_of`·`fashion.variant_options`·`fashion.has_item`·확인된 `fashion.ownership` 관계를 원자적으로 저장한다. `unknown`은 소유 Assertion을 만들지 않는다. `wear-outcome`의 `worn`만 사용자 보고 출처와 `fashion.wore_outfit` 관계를 만든다. 캡처가 삭제되면 현재 개발 저장소는 관련 Activity와 파생 확인·착용 출처를 지우고 명령 재전송을 차단한다. 자세한 예시와 이미지 API 검증은 [첫 패션 시나리오](FASHION_FIRST_SCENARIO.md)를 참조한다.
+
+## 첫 뷰티 시나리오
+
+`POST /v1/kernel/beauty/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 뷰티 상품 `importIds`(1~5개), `occasion`, `scheduledAt`을 받는다. 서버는 관측 제목과 근거를 후보로 두고 `confirm_routine → instantiate_routine → record_routine_outcome` 계획을 승인 대기로 만든다. 캡처만으로 소유·피부 적합성·효능이나 단계 순서를 확정하지 않는다.
+
+사용자는 `confirm-routine`의 `selections` 배열 순서로 사용할 캡처, `variantLabel`, `stepTitle`을 직접 확정한다. 확인 결과는 버전 1의 RoutineTemplate이며 `instantiate_routine`은 기존 시스템 capability로 일정 시각의 RoutineOccurrence를 만든다. `routine-outcome`은 모든 단계에 `completed/skipped/unknown`을 명시하며 `completed`에만 사용자 보고 출처와 `beauty.use_experience` 관계를 저장한다. 출처 삭제는 현재 개발 저장소에서 해당 Activity와 파생 루틴·경험을 함께 제거한다. 상세 흐름, 지식 그래프 경계, 이미지 API 검증은 [첫 뷰티 시나리오](BEAUTY_FIRST_SCENARIO.md)에 적었다.
 
 ## 일관성과 현재 경계
 

@@ -518,3 +518,22 @@ npm run test:fashion-image-live
 
 검증에 성공한 새 응답으로 fixture를 교체할 때만 스크립트에 `--record`를
 전달합니다. 현재 구현 범위는 `docs/FASHION_FIRST_SCENARIO.md`에 적었습니다.
+
+### 이미지 기반 뷰티 시나리오 검증
+
+`test/fixtures/beauty_a_cleanser.png`와 `beauty_b_moisturizer.png`는 합성
+제품 화면입니다. 각각 실제 `POST /v1/analyze`에 전송해 받은 응답을
+`*_live_analysis.json`에 보관했습니다. 서버 테스트는 응답을 재생해 출처가
+있는 제품 후보, 사용자가 확정한 루틴 순서, 실행 회차와 단계별 사용 결과를
+검사합니다. 상품 화면의 문구는 소유·효능·피부 적합성 판단으로 승격하지
+않습니다.
+
+```sh
+cd server
+npm run dev
+# 다른 터미널에서; 모델 호출 비용이 발생할 수 있음
+npm run test:beauty-image-live
+```
+
+검증에 성공한 새 응답으로 fixture를 교체할 때만 `--record`를 전달합니다.
+현재 구현 범위는 `docs/BEAUTY_FIRST_SCENARIO.md`에 적었습니다.

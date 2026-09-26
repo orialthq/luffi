@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "beauty",
+  "contentKind": "beauty_product",
+  "tags": [
+    {
+      "value": "뷰티",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "ev1",
+        "ev4"
+      ],
+      "quotes": [
+        "\"데일리 클렌징 젤\"",
+        "\"세안\""
+      ],
+      "citations": []
+    },
+    {
+      "value": "스킨케어",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.95,
+      "evidenceIds": [
+        "ev2",
+        "ev4"
+      ],
+      "quotes": [
+        "\"CLEANSING GEL\"",
+        "\"세안\""
+      ],
+      "citations": []
+    },
+    {
+      "value": "클렌저",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "ev2"
+      ],
+      "quotes": [
+        "\"CLEANSING GEL\""
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "데일리 클렌징 젤",
+    "status": "observed",
+    "confidence": 0.99,
+    "evidenceIds": [
+      "ev1"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "150 mL 용량의 세안용 데일리 클렌징 젤이다.",
+  "evidence": [
+    {
+      "id": "ev1",
+      "text": "데일리 클렌징 젤",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "ev2",
+      "text": "CLEANSING GEL",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "ev3",
+      "text": "150 mL",
+      "region": "product_panel",
+      "confidence": 0.99
+    },
+    {
+      "id": "ev4",
+      "text": "사용 단계 세안",
+      "region": "product_panel",
+      "confidence": 0.99
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "용량",
+      "value": "150 mL",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "ev3"
+      ]
+    },
+    {
+      "label": "사용 단계",
+      "value": "세안",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "ev4"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}
