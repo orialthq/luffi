@@ -158,6 +158,11 @@ export function buildReviewedCaptureImport(input, options = {}) {
     field("/title/value", analysis.title.value, analysis.title);
     const titleType = { recipe: "recipe.recipe", sauce_recipe: "recipe.recipe", beauty_product: "core.product", commerce_product: "core.product" }[analysis.contentKind];
     if (titleType) mention("/title/value", analysis.title.value, titleType, analysis.title);
+    if (analysis.contentKind === "unknown" &&
+        analysis.tags?.some((tag) => tag.value === "생활·팁" && tag.facet === "field") &&
+        analysis.facts?.some((fact) => fact.value?.trim() && fact.evidenceIds?.length)) {
+      mention("/title/value", analysis.title.value, "life_tip.tip", analysis.title);
+    }
   } else if (analysis.title.status === "inferred") omissions.push({ path: "/title/value", reason: "inferred_title_not_source_fact", preservedInSource: true });
   if (analysis.place) {
     for (const key of ["name", "address", "searchArea", "category"]) field(`/place/${key}`, analysis.place[key], analysis.place);

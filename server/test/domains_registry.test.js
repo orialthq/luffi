@@ -4,8 +4,9 @@ import { createDomainRegistry, domainRegistry as registry, DOMAIN_PACKS, DomainC
 
 const rejects = (run, code = "INVALID_DOMAIN_VALUE") => assert.throws(run, (error) => error instanceof DomainContractError && error.code === code);
 
-test("all five packs expose typed capabilities, artifacts, slots and kernel-compatible relations", () => {
-  assert.deepEqual(registry.listPacks().map((pack) => pack.id), ["recipe", "dining", "fashion", "beauty", "travel"]);
+test("all six packs expose typed capabilities, artifacts, slots and kernel-compatible relations", () => {
+  assert.deepEqual(registry.listPacks().map((pack) => pack.id),
+    ["recipe", "dining", "fashion", "beauty", "travel", "life_tip"]);
   for (const capability of registry.listCapabilities()) {
     assert.ok(registry.getType(capability.inputType));
     assert.ok(registry.getType(capability.outputType));

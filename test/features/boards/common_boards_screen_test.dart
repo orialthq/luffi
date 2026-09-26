@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/data/common_kernel_client.dart';
 import 'package:ori_beauty/features/boards/common_boards_screen.dart';
 import 'package:ori_beauty/features/boards/travel_scenario_dialogs.dart';
+import 'package:ori_beauty/features/boards/life_tip_scenario_dialogs.dart';
 
 KernelJson _board() => {
   'id': 'activity-1',
@@ -129,6 +130,22 @@ final class FakeTravelIntentStore implements TravelScenarioIntentStore {
   @override
   Future<void> save(KernelJson request) async {
     if (pending != null) throw StateError('pending travel intent exists');
+    pending = Map<String, Object?>.from(request);
+  }
+
+  @override
+  Future<void> clear() async => pending = null;
+}
+
+final class FakeLifeTipIntentStore implements LifeTipScenarioIntentStore {
+  KernelJson? pending;
+
+  @override
+  Future<KernelJson?> load() async => pending;
+
+  @override
+  Future<void> save(KernelJson request) async {
+    if (pending != null) throw StateError('pending life-tip intent exists');
     pending = Map<String, Object?>.from(request);
   }
 
@@ -614,6 +631,96 @@ final class FakeKernelClient implements CommonKernelClient {
     return {
       'activityId': request['activityId'],
       'itineraryId': 'itinerary-a',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> createLifeTipScenario(KernelJson request) async {
+    scenarioRequests.add(request);
+    if (scenarioFailure case final error?) throw error;
+    final activityId = request['activityId'];
+    if (board['id'] == activityId) {
+      return {
+        'activityId': activityId,
+        'proposalId': 'life-tip-proposal',
+        'revision': 1,
+        'replayed': true,
+      };
+    }
+    board = {
+      'id': activityId,
+      'title': '생활 꿀팁 활동',
+      'goal': {'description': '생활 꿀팁 실천'},
+      'revision': 1,
+      'lifecycle': 'active',
+      'tasks': <Object?>[],
+      'nextActions': <Object?>[],
+      'pendingChanges': <Object?>[],
+      'pendingProposals': [
+        {
+          'id': 'life-tip-proposal',
+          'kind': 'draft',
+          'plan': {
+            'tasks': [
+              {
+                'id': 'confirm_actions',
+                'title': '실천할 꿀팁 단계 확인',
+                'capabilityId': 'life_tip.confirm_actions',
+                'inputBindings': {
+                  'importId': request['importId'],
+                  'title': '영수증 정리 3단계',
+                  'mentionId': 'mention-tip',
+                  'candidates': [
+                    {
+                      'factIndex': 1,
+                      'text': '영수증 모으기',
+                      'evidenceIds': ['e1'],
+                    },
+                    {
+                      'factIndex': 2,
+                      'text': '영수증 나누기',
+                      'evidenceIds': ['e2'],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      'results': <Object?>[],
+      'artifacts': <Object?>[],
+      'reminders': <Object?>[],
+    };
+    if (commitThenTimeout) {
+      throw const CommonKernelException('NETWORK_TIMEOUT', '응답 시간이 초과됐어요.');
+    }
+    return {
+      'activityId': activityId,
+      'proposalId': 'life-tip-proposal',
+      'revision': 1,
+    };
+  }
+
+  @override
+  Future<KernelJson> confirmLifeTipActions(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'planId': 'plan-tip',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
+  Future<KernelJson> recordLifeTipOutcomes(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'planId': 'plan-tip',
       'revision': board['revision'],
     };
   }
@@ -1291,6 +1398,189 @@ void main() {
           'size': 'M',
           'ownership': 'unknown',
         },
+      ]);
+    },
+  );
+
+  testWidgets('reviewed life-tip image creates an approval-gated plan', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    final intentStore = FakeLifeTipIntentStore();
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          diningIntentStore: FakeDiningIntentStore(),
+          fashionIntentStore: FakeFashionIntentStore(),
+          beautyIntentStore: FakeBeautyIntentStore(),
+          travelIntentStore: FakeTravelIntentStore(),
+          lifeTipIntentStore: intentStore,
+          lifeTipImportOptions: const [
+            LifeTipImportOption(importId: 'receipts', title: '영수증 정리 3단계'),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('kernel-create-life-tip')));
+    await tester.tap(find.byKey(const Key('kernel-create-life-tip')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('life-tip-import-receipts')));
+    await tester.tap(find.byKey(const Key('life-tip-create-submit')));
+    await tester.pumpAndSettle();
+    expect(client.scenarioRequests.single['importId'], 'receipts');
+    expect(client.scenarioRequests.single['confirmed'], true);
+    expect(intentStore.pending, isNull);
+    expect(client.board['tasks'], isEmpty);
+    expect(find.text('계획 제안'), findsOneWidget);
+  });
+
+  testWidgets(
+    'life-tip board sends selected source steps and explicit outcomes',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.contract = {
+        'capabilities': [
+          {'id': 'life_tip.confirm_actions', 'actor': 'user', 'effect': 'none'},
+          {'id': 'life_tip.record_outcomes', 'actor': 'user', 'effect': 'none'},
+        ],
+      };
+      client.board = {
+        'id': 'tip-test',
+        'title': '영수증 정리',
+        'goal': {'description': '정리해 보기'},
+        'revision': 2,
+        'lifecycle': 'active',
+        'nextActions': ['confirm_actions'],
+        'tasks': [
+          {
+            'id': 'confirm_actions',
+            'title': '실천할 단계 확인',
+            'revision': 1,
+            'capabilityId': 'life_tip.confirm_actions',
+            'executionStatus': 'not_started',
+            'readiness': {
+              'status': 'ready',
+              'inputs': {
+                'importId': 'receipts',
+                'title': '영수증 정리 3단계',
+                'mentionId': 'mention-receipts',
+                'candidates': [
+                  {
+                    'factIndex': 1,
+                    'text': '영수증 모으기',
+                    'evidenceIds': ['e1'],
+                  },
+                  {
+                    'factIndex': 2,
+                    'text': '영수증 나누기',
+                    'evidenceIds': ['e2'],
+                  },
+                ],
+              },
+              'reasons': <Object?>[],
+            },
+          },
+        ],
+        'pendingChanges': <Object?>[],
+        'pendingProposals': <Object?>[],
+        'results': <Object?>[],
+        'artifacts': <Object?>[],
+        'reminders': <Object?>[],
+      };
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardScreen(
+            client: client,
+            activityId: 'tip-test',
+            contracts: client.contract,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('kernel-complete-confirm_actions')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('life-tip-fact-2')));
+      await tester.tap(find.byKey(const Key('life-tip-confirm-submit')));
+      await tester.pumpAndSettle();
+      expect(client.commands.single['factIndexes'], [1]);
+
+      client.board['tasks'] = [
+        {
+          'id': 'record_outcomes',
+          'title': '실행 결과 기록',
+          'revision': 1,
+          'capabilityId': 'life_tip.record_outcomes',
+          'executionStatus': 'not_started',
+          'readiness': {
+            'status': 'ready',
+            'inputs': {
+              'plan': {
+                'id': 'plan-tip',
+                'revision': 1,
+                'tipId': 'tip-source',
+                'title': '영수증 정리 3단계',
+                'actions': [
+                  {
+                    'id': 'action-1',
+                    'factIndex': 1,
+                    'text': '영수증 모으기',
+                    'order': 1,
+                  },
+                  {
+                    'id': 'action-2',
+                    'factIndex': 2,
+                    'text': '영수증 나누기',
+                    'order': 2,
+                  },
+                ],
+              },
+            },
+            'reasons': <Object?>[],
+          },
+        },
+      ];
+      client.board['nextActions'] = ['record_outcomes'];
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CommonBoardScreen(
+            client: client,
+            activityId: 'tip-test',
+            contracts: client.contract,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('kernel-complete-record_outcomes')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('life-tip-outcome-action-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('했어요').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('life-tip-outcome-action-2')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('하지 않았어요').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('life-tip-outcome-submit')));
+      await tester.pumpAndSettle();
+      expect(client.commands.last['actions'], [
+        {'actionId': 'action-1', 'status': 'done'},
+        {'actionId': 'action-2', 'status': 'skipped'},
       ]);
     },
   );

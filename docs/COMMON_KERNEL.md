@@ -58,6 +58,9 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/travel/scenarios` | 확인한 관광 장소 캡처로 한 지역의 하루 여행 계획 제안 |
 | `POST /v1/kernel/travel/confirm-itinerary` | 사용자가 장소·순서·예정 시각을 확정하고 출처 있는 일정 구성 |
 | `POST /v1/kernel/travel/stop-outcomes` | 장소별 실제 방문을 직접 보고. `visited`에만 방문 관계 생성 |
+| `POST /v1/kernel/life-tip/scenarios` | 확인한 단계형 생활 꿀팁 캡처 하나로 승인 대기 실천 계획 제안 |
+| `POST /v1/kernel/life-tip/confirm-actions` | 사용자가 실천할 원본 단계를 고르고 출처 있는 ActionPlan 구성 |
+| `POST /v1/kernel/life-tip/outcomes` | 단계별 실제 실행을 직접 보고. `done`에만 실행 관계 생성 |
 | `POST /v1/kernel/domains/execute` | 부수 효과가 없는 등록된 분야 계산만 실행 |
 
 AI가 만든 PlanDraft/PlanPatch를 적용할 때는 `/knowledge/context`가 돌려준 `contextId`를 사용한다. 서버는 이 ID에 연결된 readSet, 없던 사실을 감시하는 queryWatches, 검색의 발견 의존성, 자원 조건, 정책·시간 조건과 Activity revision을 다시 검사한다. API가 전달한 임의 `context` 객체는 신뢰하지 않는다. 발급 맥락은 서버 상태에 저장되며 사용 기한은 1시간이다. `/planning/proposals`는 실제 상태를 바꾸지 않는 컴파일 검사를 먼저 하고, `/planning/accept`에서 기준 버전과 맥락을 다시 검사한다. 같은 명령 ID·같은 요청은 재전송해도 한 번만 처리하고, 같은 ID에 다른 내용은 충돌이다.
@@ -181,6 +184,12 @@ Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 �
 `POST /v1/kernel/travel/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 관광 장소 `importIds`(1~8개), `area`, `startAt`을 받는다. 서버는 캡처의 관측 장소명·지역과 미해결 Mention을 후보로 보존하고 `confirm_itinerary → record_stop_outcomes` 계획을 승인 대기로 만든다. 장소명과 지역 근거가 바뀌면 오래된 계획은 승인할 수 없다.
 
 사용자는 `confirm-itinerary`의 `selections` 배열 순서로 장소와 `plannedAt`을 확정한다. Stop의 순서·예정 시각·장소 연결은 사용자 확인 근거로 저장한다. `stop-outcomes`는 모든 Stop에 `visited/skipped/unknown`을 명시하며, `visited`에만 사용자 보고 출처와 `travel.visit` 관계를 만든다. 화면에서 읽은 지역은 지도 제공자 검증 주소가 아니다. 자세한 범위와 검증 이미지는 [첫 여행 시나리오](TRAVEL_FIRST_SCENARIO.md)를 참조한다.
+
+## 첫 생활 꿀팁 시나리오
+
+`POST /v1/kernel/life-tip/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importId` 하나를 받는다. 서버는 `unknown` 분석 전체가 아니라 화면 근거가 있는 `생활·팁` 제목과 연속된 단계 fact만 후보로 삼고, `confirm_actions → record_outcomes` 계획을 승인 대기로 만든다. 제목이나 단계 근거가 바뀌면 기존 계획은 승인할 수 없다.
+
+사용자는 `confirm-actions`의 `factIndexes`로 실천할 단계를 원본 순서대로 고른다. 각 Action의 텍스트는 캡처 fact와 사용자 확인 출처에 연결한다. `outcomes`는 모든 Action에 `done/skipped/unknown`을 명시하며, `done`에만 사용자 보고 출처와 `life_tip.execution_for_action` 관계를 만든다. 자세한 범위와 검증 이미지는 [첫 생활 꿀팁 시나리오](LIFE_TIP_FIRST_SCENARIO.md)를 참조한다.
 
 ## 일관성과 현재 경계
 

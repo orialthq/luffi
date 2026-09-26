@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "unknown",
+  "contentKind": "unknown",
+  "tags": [
+    {
+      "value": "생활·팁",
+      "facet": "field",
+      "source": "ai",
+      "confidence": 0.99,
+      "evidenceIds": [
+        "e1"
+      ],
+      "quotes": [
+        "화면 상단에 \"생활·팁\"이 표시됨"
+      ],
+      "citations": []
+    },
+    {
+      "value": "정리·수납",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e2",
+        "e3",
+        "e4"
+      ],
+      "quotes": [
+        "게시물 제목이 \"영수증 정리 3단계\"임",
+        "영수증을 한곳에 모으고 필요한 것과 버릴 것을 나누는 내용임"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "영수증 정리 3단계",
+    "status": "observed",
+    "confidence": 1,
+    "evidenceIds": [
+      "e2"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "영수증을 모아 분류하고 날짜별 봉투에 보관하는 방법입니다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "생활·팁",
+      "region": "image_text",
+      "confidence": 0.99
+    },
+    {
+      "id": "e2",
+      "text": "영수증 정리 3단계",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e3",
+      "text": "주머니와 가방의 영수증을 한곳에 모아요",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e4",
+      "text": "필요한 영수증과 버릴 영수증을 나눠요",
+      "region": "image_text",
+      "confidence": 1
+    },
+    {
+      "id": "e5",
+      "text": "필요한 영수증은 날짜별 봉투에 넣어요",
+      "region": "image_text",
+      "confidence": 1
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "1단계",
+      "value": "주머니와 가방의 영수증을 한곳에 모아요",
+      "confidence": 1,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "2단계",
+      "value": "필요한 영수증과 버릴 영수증을 나눠요",
+      "confidence": 1,
+      "evidenceIds": [
+        "e4"
+      ]
+    },
+    {
+      "label": "3단계",
+      "value": "필요한 영수증은 날짜별 봉투에 넣어요",
+      "confidence": 1,
+      "evidenceIds": [
+        "e5"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

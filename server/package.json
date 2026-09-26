@@ -15,6 +15,7 @@
     "test:fashion-image-live": "node scripts/verify-fashion-images.mjs",
     "test:beauty-image-live": "node scripts/verify-beauty-images.mjs",
     "test:travel-image-live": "node scripts/verify-travel-images.mjs",
+    "test:life-tip-image-live": "node scripts/verify-life-tip-image.mjs",
     "test:watch": "node --test --watch test/*.test.js"
   }
 }

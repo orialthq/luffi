@@ -48,6 +48,61 @@ abstract interface class TravelScenarioIntentStore {
   Future<void> clear();
 }
 
+abstract interface class LifeTipScenarioIntentStore {
+  Future<KernelJson?> load();
+  Future<void> save(KernelJson request);
+  Future<void> clear();
+}
+
+final class FileLifeTipScenarioIntentStore
+    implements LifeTipScenarioIntentStore {
+  const FileLifeTipScenarioIntentStore({this.directoryPath});
+
+  final String? directoryPath;
+
+  Future<File> _file() async {
+    final directory = directoryPath == null
+        ? await getApplicationSupportDirectory()
+        : Directory(directoryPath!);
+    await directory.create(recursive: true);
+    return File('${directory.path}/luffi_life_tip_scenario_intent.json');
+  }
+
+  @override
+  Future<KernelJson?> load() async {
+    final file = await _file();
+    if (!await file.exists()) return null;
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, dynamic> ||
+        !_nonEmptyText(decoded['commandId']) ||
+        !_nonEmptyText(decoded['activityId']) ||
+        decoded['confirmed'] != true ||
+        !_nonEmptyText(decoded['importId'])) {
+      throw const FormatException('저장된 생활 꿀팁 생성 요청 형식이 올바르지 않아요.');
+    }
+    return Map<String, Object?>.from(decoded);
+  }
+
+  @override
+  Future<void> save(KernelJson request) async {
+    final file = await _file();
+    if (await file.exists()) {
+      throw StateError(
+        'An unconfirmed life-tip creation intent already exists',
+      );
+    }
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(request), flush: true);
+    await temporary.rename(file.path);
+  }
+
+  @override
+  Future<void> clear() async {
+    final file = await _file();
+    if (await file.exists()) await file.delete();
+  }
+}
+
 final class FileTravelScenarioIntentStore implements TravelScenarioIntentStore {
   const FileTravelScenarioIntentStore({this.directoryPath});
 
@@ -328,6 +383,9 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> createTravelScenario(KernelJson request);
   Future<KernelJson> confirmTravelItinerary(KernelJson request);
   Future<KernelJson> recordTravelStopOutcomes(KernelJson request);
+  Future<KernelJson> createLifeTipScenario(KernelJson request);
+  Future<KernelJson> confirmLifeTipActions(KernelJson request);
+  Future<KernelJson> recordLifeTipOutcomes(KernelJson request);
   Future<KernelJson> acceptProposal({
     required String proposalId,
     required String commandId,
@@ -484,6 +542,18 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> recordTravelStopOutcomes(KernelJson request) =>
       _request('POST', '/v1/kernel/travel/stop-outcomes', request);
+
+  @override
+  Future<KernelJson> createLifeTipScenario(KernelJson request) =>
+      _request('POST', '/v1/kernel/life-tip/scenarios', request);
+
+  @override
+  Future<KernelJson> confirmLifeTipActions(KernelJson request) =>
+      _request('POST', '/v1/kernel/life-tip/confirm-actions', request);
+
+  @override
+  Future<KernelJson> recordLifeTipOutcomes(KernelJson request) =>
+      _request('POST', '/v1/kernel/life-tip/outcomes', request);
 
   @override
   Future<KernelJson> acceptProposal({

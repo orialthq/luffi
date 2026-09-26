@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../data/common_kernel_client.dart';
 import '../../data/place_map_links.dart';
 import 'travel_scenario_dialogs.dart';
+import 'life_tip_scenario_dialogs.dart';
 
 KernelJson _object(Object? value) =>
     value is Map ? Map<String, Object?>.from(value) : {};
@@ -84,15 +85,18 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.fashionIntentStore,
     this.beautyIntentStore,
     this.travelIntentStore,
+    this.lifeTipIntentStore,
     this.importOptions = const [],
     this.diningImportOptions = const [],
     this.fashionImportOptions = const [],
     this.beautyImportOptions = const [],
     this.travelImportOptions = const [],
+    this.lifeTipImportOptions = const [],
     this.onOpenDiningImport,
     this.onOpenFashionImport,
     this.onOpenBeautyImport,
     this.onOpenTravelImport,
+    this.onOpenLifeTipImport,
     super.key,
   });
   final CommonKernelClient? client;
@@ -101,15 +105,18 @@ final class CommonBoardsScreen extends StatefulWidget {
   final FashionScenarioIntentStore? fashionIntentStore;
   final BeautyScenarioIntentStore? beautyIntentStore;
   final TravelScenarioIntentStore? travelIntentStore;
+  final LifeTipScenarioIntentStore? lifeTipIntentStore;
   final List<RecipeImportOption> importOptions;
   final List<DiningImportOption> diningImportOptions;
   final List<FashionImportOption> fashionImportOptions;
   final List<BeautyImportOption> beautyImportOptions;
   final List<TravelImportOption> travelImportOptions;
+  final List<LifeTipImportOption> lifeTipImportOptions;
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
   final void Function(String importId)? onOpenBeautyImport;
   final void Function(String importId)? onOpenTravelImport;
+  final void Function(String importId)? onOpenLifeTipImport;
 
   @override
   State<CommonBoardsScreen> createState() => _CommonBoardsScreenState();
@@ -165,6 +172,8 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
       widget.beautyIntentStore ?? const FileBeautyScenarioIntentStore();
   late final TravelScenarioIntentStore _travelIntentStore =
       widget.travelIntentStore ?? const FileTravelScenarioIntentStore();
+  late final LifeTipScenarioIntentStore _lifeTipIntentStore =
+      widget.lifeTipIntentStore ?? const FileLifeTipScenarioIntentStore();
   List<KernelJson> _boards = [];
   KernelJson _contracts = {};
   bool _contractsUnavailable = false;
@@ -179,21 +188,25 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _creatingFashion = false;
   bool _creatingBeauty = false;
   bool _creatingTravel = false;
+  bool _creatingLifeTip = false;
   bool _intentLoading = true;
   bool _diningIntentLoading = true;
   bool _fashionIntentLoading = true;
   bool _beautyIntentLoading = true;
   bool _travelIntentLoading = true;
+  bool _lifeTipIntentLoading = true;
   KernelJson? _pendingRecipeIntent;
   KernelJson? _pendingDiningIntent;
   KernelJson? _pendingFashionIntent;
   KernelJson? _pendingBeautyIntent;
   KernelJson? _pendingTravelIntent;
+  KernelJson? _pendingLifeTipIntent;
   Object? _intentError;
   Object? _diningIntentError;
   Object? _fashionIntentError;
   Object? _beautyIntentError;
   Object? _travelIntentError;
+  Object? _lifeTipIntentError;
   int _loadGeneration = 0;
 
   @override
@@ -205,6 +218,22 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     unawaited(_loadFashionIntent());
     unawaited(_loadBeautyIntent());
     unawaited(_loadTravelIntent());
+    unawaited(_loadLifeTipIntent());
+  }
+
+  Future<void> _loadLifeTipIntent() async {
+    setState(() {
+      _lifeTipIntentLoading = true;
+      _lifeTipIntentError = null;
+    });
+    try {
+      final pending = await _lifeTipIntentStore.load();
+      if (mounted) setState(() => _pendingLifeTipIntent = pending);
+    } catch (error) {
+      if (mounted) setState(() => _lifeTipIntentError = error);
+    } finally {
+      if (mounted) setState(() => _lifeTipIntentLoading = false);
+    }
   }
 
   Future<void> _loadTravelIntent() async {
@@ -358,6 +387,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
           onOpenFashionImport: widget.onOpenFashionImport,
           onOpenBeautyImport: widget.onOpenBeautyImport,
           onOpenTravelImport: widget.onOpenTravelImport,
+          onOpenLifeTipImport: widget.onOpenLifeTipImport,
         ),
       ),
     );
@@ -905,6 +935,125 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     }
   }
 
+  Future<void> _createReviewedLifeTip() async {
+    final importId = await showDialog<String>(
+      context: context,
+      builder: (_) =>
+          LifeTipScenarioDialog(options: widget.lifeTipImportOptions),
+    );
+    if (importId == null ||
+        !mounted ||
+        _pendingLifeTipIntent != null ||
+        _lifeTipIntentLoading ||
+        _lifeTipIntentError != null) {
+      return;
+    }
+    setState(() => _creatingLifeTip = true);
+    try {
+      final request = <String, Object?>{
+        'commandId': newKernelCommandId(),
+        'activityId': 'life-tip-${newKernelCommandId()}',
+        'confirmed': true,
+        'importId': importId,
+      };
+      await _lifeTipIntentStore.save(request);
+      if (mounted) setState(() => _pendingLifeTipIntent = request);
+      await _sendLifeTipIntent(request);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingLifeTip = false);
+    }
+  }
+
+  Future<void> _retryLifeTipIntent() async {
+    final pending = _pendingLifeTipIntent;
+    if (pending == null || _creatingLifeTip) return;
+    setState(() => _creatingLifeTip = true);
+    try {
+      await _sendLifeTipIntent(pending);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingLifeTip = false);
+    }
+  }
+
+  Future<void> _sendLifeTipIntent(KernelJson request) async {
+    KernelJson result;
+    try {
+      result = await _client.createLifeTipScenario(request);
+    } on CommonKernelException catch (error) {
+      if (const {
+        'INVALID_REQUEST',
+        'INVALID_DOMAIN_VALUE',
+        'IMPORT_NOT_FOUND',
+        'IMPORT_NOT_LIFE_TIP',
+        'SCENARIO_DELETED',
+      }.contains(error.code)) {
+        await _lifeTipIntentStore.clear();
+        if (mounted) setState(() => _pendingLifeTipIntent = null);
+      }
+      rethrow;
+    }
+    final activityId = result['activityId'];
+    if (activityId is! String || activityId != request['activityId']) {
+      throw const CommonKernelException(
+        'INVALID_RESPONSE',
+        '만든 꿀팁 활동의 ID를 확인할 수 없어요. 같은 요청으로 다시 확인해 주세요.',
+      );
+    }
+    await _lifeTipIntentStore.clear();
+    if (mounted) {
+      setState(() => _pendingLifeTipIntent = null);
+      await _open(activityId);
+    }
+  }
+
+  Future<void> _discardLifeTipIntent() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이전 생활 꿀팁 활동 요청 지우기'),
+        content: const Text('서버에 활동이 이미 만들어졌을 수 있어요. 목록을 확인한 뒤 지워 주세요.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('요청 지우기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _lifeTipIntentStore.clear();
+      if (mounted) {
+        setState(() {
+          _pendingLifeTipIntent = null;
+          _lifeTipIntentError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      }
+    }
+  }
+
   Future<void> _submitRecipe({
     required String title,
     required int baseServings,
@@ -1409,6 +1558,72 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
                     message: '저장된 여행 활동 요청을 읽지 못했어요.',
                     onRefresh: _loadTravelIntent,
                   ),
+                if (widget.lifeTipImportOptions.isNotEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '첫 생활 꿀팁 시나리오',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '저장한 단계형 꿀팁에서 실천할 항목을 고르고, 실제 한 단계만 기록해요.',
+                          ),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            key: const Key('kernel-create-life-tip'),
+                            onPressed:
+                                _creatingLifeTip ||
+                                    _lifeTipIntentLoading ||
+                                    _lifeTipIntentError != null ||
+                                    _pendingLifeTipIntent != null
+                                ? null
+                                : _createReviewedLifeTip,
+                            icon: const Icon(Icons.lightbulb_outline),
+                            label: Text(
+                              _creatingLifeTip ? '만드는 중' : '저장한 꿀팁으로 시작',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_pendingLifeTipIntent != null)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('완료 여부를 확인할 꿀팁 활동 요청이 있어요.'),
+                          const Text('같은 요청 ID로 재전송하면 중복 생성되지 않아요.'),
+                          FilledButton(
+                            key: const Key('kernel-retry-life-tip-create'),
+                            onPressed: _creatingLifeTip
+                                ? null
+                                : _retryLifeTipIntent,
+                            child: const Text('이전 생성 이어하기'),
+                          ),
+                          TextButton(
+                            key: const Key('kernel-discard-life-tip-create'),
+                            onPressed: _creatingLifeTip
+                                ? null
+                                : _discardLifeTipIntent,
+                            child: const Text('이전 요청 지우기'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_lifeTipIntentError != null)
+                  _ErrorPanel(
+                    message: '저장된 꿀팁 활동 요청을 읽지 못했어요.',
+                    onRefresh: _loadLifeTipIntent,
+                  ),
                 if (_pendingRecipeIntent != null)
                   Card(
                     child: Padding(
@@ -1511,6 +1726,7 @@ final class CommonBoardScreen extends StatefulWidget {
     this.onOpenFashionImport,
     this.onOpenBeautyImport,
     this.onOpenTravelImport,
+    this.onOpenLifeTipImport,
     super.key,
   });
   final CommonKernelClient client;
@@ -1520,6 +1736,7 @@ final class CommonBoardScreen extends StatefulWidget {
   final void Function(String importId)? onOpenFashionImport;
   final void Function(String importId)? onOpenBeautyImport;
   final void Function(String importId)? onOpenTravelImport;
+  final void Function(String importId)? onOpenLifeTipImport;
 
   @override
   State<CommonBoardScreen> createState() => _CommonBoardScreenState();
@@ -1717,6 +1934,46 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
 
   Future<void> _complete(KernelJson task) async {
     final capabilityId = _text(task['capabilityId']);
+    if (capabilityId == 'life_tip.confirm_actions') {
+      final inputs = _object(_taskInputs(task));
+      final factIndexes = await showDialog<List<int>>(
+        context: context,
+        builder: (_) => LifeTipConfirmDialog(
+          title: _text(inputs['title']),
+          importId: _text(inputs['importId']),
+          candidates: _objects(inputs['candidates']),
+          onOpenImport: widget.onOpenLifeTipImport,
+        ),
+      );
+      if (factIndexes == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.confirmLifeTipActions({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'factIndexes': factIndexes,
+        });
+      });
+      return;
+    }
+    if (capabilityId == 'life_tip.record_outcomes') {
+      final plan = _object(_object(_taskInputs(task))['plan']);
+      final actions = await showDialog<List<KernelJson>>(
+        context: context,
+        builder: (_) =>
+            LifeTipOutcomeDialog(actions: _objects(plan['actions'])),
+      );
+      if (actions == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordLifeTipOutcomes({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          'actions': actions,
+        });
+      });
+      return;
+    }
     if (capabilityId == 'travel.confirm_itinerary') {
       final inputs = _object(_taskInputs(task));
       final selections = await showDialog<List<KernelJson>>(
@@ -1941,6 +2198,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final isFashion = _text(task['capabilityId']).startsWith('fashion.');
     final isBeauty = _text(task['capabilityId']).startsWith('beauty.');
     final isTravel = _text(task['capabilityId']).startsWith('travel.');
+    final isLifeTip = _text(task['capabilityId']).startsWith('life_tip.');
     final selectedDiningCandidate = isDining
         ? _selectedDiningCandidate()
         : null;
@@ -2070,6 +2328,31 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                   const Text('예정된 장소가 실제 방문 장소는 아니에요. 방문 여부를 직접 기록해 주세요.'),
                 ],
               )
+            else if (isLifeTip && task['id'] == 'confirm_actions')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_text(_object(_taskInputs(task))['title'])),
+                  for (final candidate in _objects(
+                    _object(_taskInputs(task))['candidates'],
+                  ))
+                    Text(
+                      '• ${candidate['factIndex']}. ${_text(candidate['text'])}',
+                    ),
+                  const Text('캡처에서 읽은 단계입니다. 실천할 항목은 직접 골라 주세요.'),
+                ],
+              )
+            else if (isLifeTip && task['id'] == 'record_outcomes')
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final action in _objects(
+                    _object(_object(_taskInputs(task))['plan'])['actions'],
+                  ))
+                    Text('• ${_text(action['text'])}'),
+                  const Text('계획과 실제 실행은 별개입니다. 각 단계의 결과를 직접 기록해 주세요.'),
+                ],
+              )
             else
               _JsonDetails(title: '입력과 연결 정보', value: _taskInputs(task)),
             if (task['latestOutputRef'] != null)
@@ -2088,6 +2371,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 _beautyResult(task)
               else if (isTravel)
                 _travelResult(task)
+              else if (isLifeTip)
+                _lifeTipResult(task)
               else
                 _JsonDetails(
                   title: '최근 결과',
@@ -2164,6 +2449,17 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                         label: const Text('저장한 원본 보기'),
                       ),
                   ],
+                if (isLifeTip &&
+                    task['id'] == 'confirm_actions' &&
+                    widget.onOpenLifeTipImport != null)
+                  OutlinedButton.icon(
+                    key: const Key('kernel-open-life-tip-source'),
+                    onPressed: () => widget.onOpenLifeTipImport!(
+                      _text(_object(_taskInputs(task))['importId']),
+                    ),
+                    icon: const Icon(Icons.image_outlined),
+                    label: const Text('저장한 원본 보기'),
+                  ),
                 if (system &&
                     cap['effect'] == 'none' &&
                     status == 'not_started')
@@ -2353,6 +2649,49 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             Text(
               '• ${titles[_text(stop['stopId'])] ?? '장소'} · '
               '${statuses[_text(stop['status'])] ?? '상태 미확인'}',
+            ),
+        ],
+      );
+    }
+    return _JsonDetails(title: '최근 결과', value: result);
+  }
+
+  Widget _lifeTipResult(KernelJson task) {
+    final result = _objects(
+      _board?['results'],
+    ).where((item) => item['id'] == task['latestOutputRef']).firstOrNull;
+    final value = _object(result?['value']);
+    if (task['id'] == 'confirm_actions') {
+      final actions = _objects(_object(value['plan'])['actions']);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('확정한 실천 단계'),
+          for (final action in actions)
+            Text('${action['order']}. ${_text(action['text'])}'),
+        ],
+      );
+    }
+    if (task['id'] == 'record_outcomes') {
+      final titles = {
+        for (final action in _objects(
+          _object(_object(_taskInputs(task))['plan'])['actions'],
+        ))
+          _text(action['id']): _text(action['text']),
+      };
+      const statuses = {
+        'done': '했어요',
+        'skipped': '하지 않았어요',
+        'unknown': '아직 몰라요',
+      };
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('실제 실행 기록'),
+          for (final action in _objects(value['actions']))
+            Text(
+              '• ${titles[_text(action['actionId'])] ?? '단계'} · '
+              '${statuses[_text(action['status'])] ?? '상태 미확인'}',
             ),
         ],
       );
