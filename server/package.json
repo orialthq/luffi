@@ -14,6 +14,7 @@
     "test:labeled-report": "node scripts/evaluate-labeled-analysis.mjs",
     "check:kernel-restore": "node scripts/check-kernel-restore.mjs",
     "bootstrap:deletion-ledger": "node scripts/bootstrap-deletion-ledger.mjs",
+    "check:deletion-ledger": "node scripts/check-deletion-ledger.mjs",
     "reconcile:deletion-ledger": "node scripts/reconcile-deletion-ledger.mjs",
     "test:postgres-real": "node --test test/postgres_real_integration.test.js test/postgres_backup_restore.test.js",
     "test:image-live": "node scripts/verify-recipe-image.mjs",

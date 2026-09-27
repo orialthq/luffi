@@ -31,6 +31,7 @@ test("real pg_dump/pg_restore rejects an old deletion state and accepts a curren
     const schema = `luffi_restore_${randomUUID().replaceAll("-", "")}`;
     const folder = await mkdtemp(join(tmpdir(), "luffi-real-pg-restore-"));
     const ledger = createDeletionLedger({ filePath: join(folder, "deletions.ndjson") });
+    await ledger.bootstrap(createCommonKernelState());
     const oldDump = `/tmp/${schema}_old.dump`;
     const currentDump = `/tmp/${schema}_current.dump`;
     const database = new URL(databaseUrl).pathname.slice(1);

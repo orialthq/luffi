@@ -44,12 +44,14 @@
 
 ## 복구 경계
 
-삭제 전 백업을 복원하면 삭제된 자료가 돌아올 수 있다. [`deletion_ledger.js`](../server/src/storage/deletion_ledger.js)는 JSON·관계형 저장소에서 삭제 트랜잭션을 확정하기 **전**에 가져오기 ID와 Source ID의 해시를 별도 파일에 동기화한다. 파일은 `0600`으로 만들고 연속 기록의 해시 체인을 검증한다. `LUFFI_KERNEL_DELETION_LEDGER_PATH`를 서버 상태·DB 백업과 **별도로 보존되는 위치**로 설정해야 동작한다. 이 경로가 설정되지 않은 서버에는 해당 보호가 적용되지 않는다.
+삭제 전 백업을 복원하면 삭제된 자료가 돌아올 수 있다. [`deletion_ledger.js`](../server/src/storage/deletion_ledger.js)는 JSON·관계형 저장소에서 삭제 트랜잭션을 확정하기 **전**에 가져오기 ID와 Source ID의 해시를 별도 파일에 동기화한다. 파일은 `0600`으로 만들고 연속 기록의 해시 체인을 검증한다. 공통 보드 API를 켜면 `LUFFI_KERNEL_DELETION_LEDGER_PATH`가 필수이며, 서버 상태·DB 백업과 **별도로 보존되는 위치**로 지정해야 한다. 경로를 생략하면 서버는 시작을 거부한다.
 
-기존 신뢰 상태에 이미 삭제 기록이 있으면 처음부터 새 파일을 자동 생성하지 않는다. 서버 시작 전에 다음 중 현재 저장소에 맞는 환경 변수 하나만 설정하고 `npm run bootstrap:deletion-ledger --prefix server -- LEDGER.ndjson`을 한 번 실행한다.
+삭제 기록이 아직 없는 빈 저장소도 독립 파일을 자동 생성하지 않는다. 서버 시작 전에 다음 중 현재 저장소에 맞는 환경 변수 하나만 설정하고 **신뢰할 수 있는 현재 상태**에서 `npm run bootstrap:deletion-ledger --prefix server -- LEDGER.ndjson`을 한 번 실행한다. 이미 파일이 있으면 덮어쓰지 않는다. 서버를 시작할 때는 같은 파일 경로를 `LUFFI_KERNEL_DELETION_LEDGER_PATH`로 지정한다.
 
 - JSON: `LUFFI_KERNEL_STATE_PATH`
 - 관계형 DB: `LUFFI_KERNEL_DATABASE_URL`
+
+`npm run check:deletion-ledger --prefix server -- LEDGER.ndjson`은 같은 저장소 변수와 파일 경로로 삭제 기록의 체인·현재 삭제 영수증·되살아난 출처를 확인한다. `{"status":"safe","ledgerEntries":N}`만 출력하고 자료 내용은 출력하지 않는다. PostgreSQL에서는 저장소의 일반 시작 검사와 마찬가지로 아직 남아 있는 관계형 그래프 이관이 실행될 수 있으므로 DB 읽기 전용 명령은 아니다. 파일이 없어졌거나 현재 삭제 영수증이 유효한 파일의 일부에서 빠져도 서버 시작과 검사 모두 실패한다. 실행 중 파일이 사라져도 다음 삭제가 빈 파일을 다시 만들지 않고 실패한다. 개발 중 만든 상태 파일을 그대로 운영용 신뢰 상태로 간주하지 않는다.
 
 복원된 저장소에 과거 활성 자료가 있으면 서버는 `DELETION_LEDGER_RESTORE_UNSAFE`로 시작을 거부한다. 복원본을 사용자에게 제공하지 않는 격리 상태에서 `npm run reconcile:deletion-ledger --prefix server -- LEDGER.ndjson`으로 재적용 대상을 확인하고, 같은 명령 끝에 `--apply`를 붙여 삭제한 다음 일반 서버를 시작한다. 복구 명령은 원본 이미지나 분석 내용을 출력하지 않는다. 삭제 기록은 트랜잭션보다 먼저 쓰이므로 트랜잭션 자체가 실패한 삭제 의도도 나중에 재적용될 수 있다. 이는 자료를 되살리지 않기 위한 의도적인 경계다.
 

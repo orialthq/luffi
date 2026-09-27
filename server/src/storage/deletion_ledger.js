@@ -67,9 +67,12 @@ export function createDeletionLedger({ filePath, fsApi = fs }) {
     try { await fsApi.stat(filePath); }
     catch (error) {
       if (error.code !== "ENOENT") throw error;
-      if (deletionKeys(state).size) throw new Error("DELETION_LEDGER_MISSING");
+      throw new Error("DELETION_LEDGER_MISSING");
     }
     const expected = await read();
+    const recorded = new Set(expected.map((entry) => `${entry.kind}:${entry.keyHash}`));
+    const missing = [...deletionKeys(state)].filter((key) => !recorded.has(key));
+    if (missing.length) throw new Error(`DELETION_LEDGER_INCOMPLETE: ${missing.length}`);
     const active = new Set(activeRecords(state).map((item) => `${item.kind}:${item.keyHash}`));
     const resurrected = expected.filter((entry) => active.has(`${entry.kind}:${entry.keyHash}`));
     if (resurrected.length) throw new Error(`DELETION_LEDGER_RESTORE_UNSAFE: ${resurrected.length}`);
@@ -98,9 +101,19 @@ export function createDeletionLedger({ filePath, fsApi = fs }) {
     }).join("\n") + "\n";
     const folder = dirname(filePath);
     await fsApi.mkdir(folder, { recursive: true, mode: 0o700 });
-    const handle = await fsApi.open(filePath, "a", 0o600);
+    // Opening an existing file is essential: a lost ledger must not be silently
+    // recreated by a deletion in a long-running server process.
+    const handle = await fsApi.open(filePath, "r+");
     try {
-      await handle.writeFile(lines, "utf8");
+      const bytes = Buffer.from(lines, "utf8");
+      let written = 0;
+      const position = (await handle.stat()).size;
+      while (written < bytes.length) {
+        const result = await handle.write(bytes, written, bytes.length - written,
+          position + written);
+        if (result.bytesWritten === 0) throw new Error("DELETION_LEDGER_WRITE_FAILED");
+        written += result.bytesWritten;
+      }
       await handle.sync();
     } finally { await handle.close(); }
     const directory = await fsApi.open(folder, "r");

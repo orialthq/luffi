@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
 import { createDeletionLedger } from "../src/storage/deletion_ledger.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
@@ -22,6 +24,7 @@ test("independent write-ahead ledger blocks an older JSON backup before serving 
   const currentFile = join(root, "current.json");
   const ledgerFile = join(root, "independent", "deleted.ndjson");
   const ledger = createDeletionLedger({ filePath: ledgerFile });
+  await ledger.bootstrap(createCommonKernelState());
   const serviceAt = (path) => createCommonKernelService({ ownerId: "owner-a",
     store: createJsonStateStore({ filePath: path, initialState: createCommonKernelState,
       deletionLedger: ledger }) });
@@ -59,6 +62,7 @@ test("a backup from before the import cannot recreate a later deleted source", a
   const filePath = join(root, "state.json");
   const backup = join(root, "before-import.json");
   const ledger = createDeletionLedger({ filePath: join(root, "separate", "deleted.ndjson") });
+  await ledger.bootstrap(createCommonKernelState());
   const store = createJsonStateStore({ filePath, initialState: createCommonKernelState,
     deletionLedger: ledger });
   const service = createCommonKernelService({ ownerId: "owner-a", store });
@@ -78,6 +82,7 @@ test("direct source deletion also enters the ledger and cannot be restored activ
   const filePath = join(root, "state.json");
   const oldPath = join(root, "old.json");
   const ledger = createDeletionLedger({ filePath: join(root, "other", "deleted.ndjson") });
+  await ledger.bootstrap(createCommonKernelState());
   const store = createJsonStateStore({ filePath, initialState: createCommonKernelState,
     deletionLedger: ledger });
   const service = createCommonKernelService({ ownerId: "owner-a", store });
@@ -127,4 +132,73 @@ test("existing tombstones require an explicit one-time ledger bootstrap", async 
   assert.equal((await protectedStore.snapshot()).importReceipts[input.importId].deleted, true);
   await assert.rejects(ledger.bootstrap(await originalStore.snapshot()),
     (error) => error.code === "EEXIST");
+});
+
+test("configured ledger must exist even when the state has no deletion tombstones", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "luffi-ledger-missing-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const ledger = createDeletionLedger({ filePath: join(root, "independent", "deleted.ndjson") });
+  const store = createJsonStateStore({ filePath: join(root, "state.json"),
+    initialState: createCommonKernelState, deletionLedger: ledger });
+  await assert.rejects(store.snapshot(), /DELETION_LEDGER_MISSING/);
+  await ledger.bootstrap(createCommonKernelState());
+  assert.deepEqual(await store.snapshot(), createCommonKernelState());
+  await rm(join(root, "independent", "deleted.ndjson"));
+  const restarted = createJsonStateStore({ filePath: join(root, "state.json"),
+    initialState: createCommonKernelState, deletionLedger: ledger });
+  await assert.rejects(restarted.snapshot(), /DELETION_LEDGER_MISSING/);
+});
+
+test("valid ledger prefix missing a current tombstone fails closed", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "luffi-ledger-incomplete-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const filePath = join(root, "state.json");
+  const ledgerPath = join(root, "independent", "deleted.ndjson");
+  const ledger = createDeletionLedger({ filePath: ledgerPath });
+  await ledger.bootstrap(createCommonKernelState());
+  const service = createCommonKernelService({ ownerId: "owner-a",
+    store: createJsonStateStore({ filePath, initialState: createCommonKernelState,
+      deletionLedger: ledger }) });
+  await service.importReviewedCapture(input);
+  await service.deleteReviewedCapture({ importId: input.importId,
+    commandId: "delete-for-truncation" });
+  const [first] = (await readFile(ledgerPath, "utf8")).trimEnd().split("\n");
+  await writeFile(ledgerPath, `${first}\n`);
+  const restarted = createJsonStateStore({ filePath,
+    initialState: createCommonKernelState, deletionLedger: ledger });
+  await assert.rejects(restarted.snapshot(), /DELETION_LEDGER_INCOMPLETE/);
+});
+
+test("deletion cannot recreate a lost ledger in a running process", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "luffi-ledger-live-loss-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const filePath = join(root, "state.json");
+  const ledgerPath = join(root, "independent", "deleted.ndjson");
+  const ledger = createDeletionLedger({ filePath: ledgerPath });
+  await ledger.bootstrap(createCommonKernelState());
+  const service = createCommonKernelService({ ownerId: "owner-a",
+    store: createJsonStateStore({ filePath, initialState: createCommonKernelState,
+      deletionLedger: ledger }) });
+  await service.importReviewedCapture(input);
+  await rm(ledgerPath);
+  await assert.rejects(service.deleteReviewedCapture({ importId: input.importId,
+    commandId: "delete-after-ledger-loss" }), (error) => error.code === "ENOENT");
+  const unprotected = createCommonKernelService({ ownerId: "owner-a",
+    store: createJsonStateStore({ filePath, initialState: createCommonKernelState }) });
+  assert.equal((await unprotected.checkReviewedCaptureImports({
+    importIds: [input.importId] })).imports[0].status, "active");
+  await assert.rejects(stat(ledgerPath), (error) => error.code === "ENOENT");
+});
+
+test("kernel server refuses to start without an independent ledger path", () => {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../src/index.js", import.meta.url))], {
+    env: { ...process.env, OPENAI_API_KEY: "test-only",
+      LUFFI_KERNEL_TOKEN: "12345678901234567890123456789012",
+      LUFFI_KERNEL_OWNER_ID: "test-owner",
+      LUFFI_KERNEL_DELETION_LEDGER_PATH: "" },
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /LUFFI_KERNEL_DELETION_LEDGER_PATH/);
 });

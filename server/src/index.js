@@ -30,6 +30,15 @@ if (!apiKey) {
   );
   process.exitCode = 1;
 } else {
+  const kernelToken = process.env.LUFFI_KERNEL_TOKEN ?? null;
+  if (kernelToken && (kernelToken.length < 32 || !process.env.LUFFI_KERNEL_OWNER_ID)) {
+    throw new Error("LUFFI_KERNEL_TOKEN(32자 이상)과 LUFFI_KERNEL_OWNER_ID를 함께 설정하세요.");
+  }
+  const databaseUrl = process.env.LUFFI_KERNEL_DATABASE_URL;
+  const deletionLedgerPath = process.env.LUFFI_KERNEL_DELETION_LEDGER_PATH;
+  if (kernelToken && !deletionLedgerPath) {
+    throw new Error("공통 보드 API에는 LUFFI_KERNEL_DELETION_LEDGER_PATH가 필요합니다. 처음 실행 전에 삭제 기록을 초기화하세요.");
+  }
   const transport = createOpenAITransport({ apiKey });
   const analysisService = createAnalysisService({ transport });
   const batchAnalysisService = await createBatchAnalysisService({
@@ -86,12 +95,6 @@ if (!apiKey) {
   const recommendationService = createRecommendationService({ transport });
   const tagMergeService = createTagMergeService({ transport });
   const tagSenseService = createTagSenseService({ transport });
-  const kernelToken = process.env.LUFFI_KERNEL_TOKEN ?? null;
-  if (kernelToken && (kernelToken.length < 32 || !process.env.LUFFI_KERNEL_OWNER_ID)) {
-    throw new Error("LUFFI_KERNEL_TOKEN(32자 이상)과 LUFFI_KERNEL_OWNER_ID를 함께 설정하세요.");
-  }
-  const databaseUrl = process.env.LUFFI_KERNEL_DATABASE_URL;
-  const deletionLedgerPath = process.env.LUFFI_KERNEL_DELETION_LEDGER_PATH;
   const deletionLedger = kernelToken && deletionLedgerPath
     ? createDeletionLedger({ filePath: deletionLedgerPath }) : null;
   const kernelPool = kernelToken && databaseUrl

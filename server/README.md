@@ -12,7 +12,7 @@ Flutter 앱과 OpenAI 사이에서 이미지 분석을 수행하는 로컬 프�
 
 키체인 식별자는 기존 로컬 개발 환경과의 호환을 위해 현재 이름을 유지합니다.
 
-외부 npm 의존성은 없습니다.
+서버 의존성은 `npm ci`로 설치합니다.
 
 ## 실행
 
@@ -32,6 +32,19 @@ npm run dev
 cd server
 npm start
 ```
+
+공통 보드 API를 켜는 개발 실행에서는 `LUFFI_KERNEL_TOKEN`(32자 이상),
+`LUFFI_KERNEL_OWNER_ID`, 그리고 JSON 저장소라면 `LUFFI_KERNEL_STATE_PATH`를
+지정합니다. 공통 보드 API를 켠 실행에는 상태 파일과 별도로 보존되는
+`LUFFI_KERNEL_DELETION_LEDGER_PATH`도 필수입니다. 지정하지 않으면 서버가
+시작하지 않습니다.
+처음 켤 때는 신뢰할 수 있는 현재 상태에서
+`npm run bootstrap:deletion-ledger -- LEDGER.ndjson`을 한 번 실행하고,
+`npm run check:deletion-ledger -- LEDGER.ndjson`으로 확인합니다. 두 명령에는 상태 파일이면
+`LUFFI_KERNEL_STATE_PATH`, 관계형 저장소면 `LUFFI_KERNEL_DATABASE_URL` 중
+하나만 설정합니다. 저장소와 삭제 기록의 복구 절차는
+[실제 데이터 검증 직전의 개발 게이트](../docs/REAL_DATA_READINESS.md#복구-경계)를
+따릅니다.
 
 `HOST`와 `PORT` 환경변수로 수신 주소를 바꿀 수 있습니다. 실제 기기에서 같은
 Wi-Fi를 통해 개발 서버에 연결할 때만 `HOST=0.0.0.0`을 사용하고, 운영 환경에는
