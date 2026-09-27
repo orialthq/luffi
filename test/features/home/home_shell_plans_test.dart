@@ -7,7 +7,11 @@ import 'package:ori_beauty/data/app_snapshot_store.dart';
 import 'package:ori_beauty/data/content_analysis_service.dart';
 import 'package:ori_beauty/data/incoming_share_service.dart';
 import 'package:ori_beauty/data/plan_recommendation_service.dart';
+import 'package:ori_beauty/data/place_enrichment_service.dart';
 import 'package:ori_beauty/data/place_reminder_service.dart';
+import 'package:ori_beauty/data/reviewed_capture_import_client.dart';
+import 'package:ori_beauty/data/tag_merge_service.dart';
+import 'package:ori_beauty/data/tag_sense_service.dart';
 import 'package:ori_beauty/data/trigger_plan_store.dart';
 import 'package:ori_beauty/data/trigger_scheduler.dart';
 import 'package:ori_beauty/domain/models.dart';
@@ -152,6 +156,119 @@ void main() {
     await tester.tap(retry);
     await tester.pumpAndSettle();
     expect(find.textContaining('서버 동기화 설정이 없어요'), findsOneWidget);
+  });
+
+  testWidgets('historical server import requires a visible confirmation', (
+    tester,
+  ) async {
+    final store = InMemoryAppSnapshotStore();
+    final receivedAt = DateTime(2026, 9, 27);
+    final prepared = const BaselineContentAnalysisService().analyzeShare(
+      IncomingShare(
+        id: 'historical-reviewed-share',
+        receivedAt: receivedAt,
+        sharedText: '두부조림 레시피',
+        discoveredUrl: null,
+      ),
+    );
+    final capture = prepared.copyWith(
+      status: CaptureStatus.organized,
+      analysis: AnalysisRun(
+        id: 'analysis-historical-reviewed-share',
+        inputId: prepared.raw.id,
+        normalizerVersion: prepared.normalized.normalizerVersion,
+        analyzerVersion: 'test-structured-v1',
+        status: AnalysisRunStatus.succeeded,
+        completedAt: receivedAt,
+        evidence: const [],
+        productMentions: const [],
+        statements: const [],
+        disclosure: DisclosureObservation.unknown,
+        structuredContent: const StructuredContentAnalysis(
+          schemaVersion: '2.0',
+          model: 'gpt-5.6-luna',
+          domain: ContentDomain.food,
+          contentKind: ContentKind.recipe,
+          tags: [],
+          completeness: StructuredCompleteness.complete,
+          title: StructuredTitle(
+            value: '두부조림',
+            status: ObservedStatus.observed,
+            confidence: 0.95,
+            evidenceIds: [],
+          ),
+          place: null,
+          summary: '두부조림 레시피',
+          evidence: [],
+          ingredientGroups: [],
+          steps: [],
+          facts: [],
+          conflicts: [],
+          warnings: [],
+        ),
+      ),
+      review: UserReview(
+        id: 'review-historical-reviewed-share',
+        captureId: prepared.raw.id,
+        analysisRunId: 'analysis-historical-reviewed-share',
+        resolution: ReviewResolution.confirmed,
+        reviewedAt: receivedAt,
+      ),
+    );
+    await store.save([PersistedCapture.fromRecord(capture, null)]);
+    final importer = _HistoricalImportClient();
+    final controller = AppController(
+      InMemoryIncomingShareService(),
+      const BaselineContentAnalysisService(),
+      store,
+      null,
+      const NoPlaceEnrichmentService(),
+      const NoTagMergeService(),
+      const NoTagSenseService(),
+      null,
+      null,
+      importer,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    tester.view.physicalSize = const Size(430, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: HomeShell(
+          controller: controller,
+          placeReminderOpenInbox: InMemoryPlaceReminderOpenInbox(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shell-menu-button')));
+    await tester.pumpAndSettle();
+    final action = find.byKey(const Key('drawer-item-기존 자료 서버 가져오기 1건'));
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+    expect(find.text('기존 자료를 서버에 가져올까요?'), findsOneWidget);
+    expect(importer.requests, isEmpty);
+
+    await tester.tap(find.text('취소'));
+    await tester.pumpAndSettle();
+    expect(importer.requests, isEmpty);
+    await tester.tap(find.byKey(const Key('shell-menu-button')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('confirm-historical-capture-import')),
+    );
+    await tester.pumpAndSettle();
+    expect(importer.requests, hasLength(1));
+    expect(controller.eligibleHistoricalCaptureImportCount, 0);
   });
 
   testWidgets('reaches 계획함 with no tab bar left to reach it by', (
@@ -615,6 +732,30 @@ final class _HomeShellPlansFixture {
     await scheduler.close();
     await placeReminderOpenInbox.close();
   }
+}
+
+final class _HistoricalImportClient implements ReviewedCaptureImportClient {
+  final List<Map<String, Object?>> requests = [];
+
+  @override
+  Future<ReviewedCaptureImportReceipt> importReviewedCapture(
+    Map<String, Object?> request,
+  ) async {
+    requests.add(request);
+    return ReviewedCaptureImportReceipt(
+      importId: request['importId']! as String,
+      sourceId: 'source-historical-test',
+      sourceVersionId: 'source-version-historical-test',
+      materialId: 'material-historical-test',
+      replayed: false,
+    );
+  }
+
+  @override
+  Future<void> deleteReviewedImport({
+    required String importId,
+    required String commandId,
+  }) async {}
 }
 
 final class _TestTriggerScheduler implements TriggerScheduler {

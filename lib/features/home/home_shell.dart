@@ -529,6 +529,42 @@ final class _HomeShellState extends State<HomeShell>
     );
   }
 
+  Future<void> _importHistoricalReviewedCaptures() async {
+    final count = widget.controller.eligibleHistoricalCaptureImportCount;
+    if (count == 0) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        surfaceTintColor: Colors.transparent,
+        title: const Text('기존 자료를 서버에 가져올까요?'),
+        content: Text(
+          '정리함에 저장된 자료 $count건의 분석 결과와 출처 정보를 개발 서버에 보냅니다. '
+          '원본 이미지 파일은 보내지 않아요. 전송에 실패한 자료는 대기 상태로 남아 다시 시도할 수 있어요.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            key: const Key('confirm-historical-capture-import'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('가져오기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final queued = await widget.controller.importHistoricalReviewedCaptures();
+    if (!mounted) return;
+    _showMessage(
+      queued == 0
+          ? '가져오기 요청을 저장하지 못했어요. 다시 시도해 주세요.'
+          : '$queued건의 서버 가져오기를 시작했어요.',
+    );
+  }
+
   /// The 콘텐츠 list, pushed rather than switched to.
   ///
   /// It stopped being a tab; this is the door home opens for it.
@@ -991,6 +1027,9 @@ final class _HomeShellState extends State<HomeShell>
               pendingReviewedImportCount:
                   widget.controller.pendingReviewedCaptureImportCount,
               onRetryReviewedImports: _retryPendingReviewedImports,
+              historicalImportCount:
+                  widget.controller.eligibleHistoricalCaptureImportCount,
+              onImportHistoricalCaptures: _importHistoricalReviewedCaptures,
             ),
           ),
           body: Stack(
@@ -1706,6 +1745,8 @@ final class _HomeDrawer extends StatelessWidget {
     required this.onRetrySourceDeletions,
     required this.pendingReviewedImportCount,
     required this.onRetryReviewedImports,
+    required this.historicalImportCount,
+    required this.onImportHistoricalCaptures,
     this.onOpenCommonBoards,
   });
 
@@ -1721,6 +1762,8 @@ final class _HomeDrawer extends StatelessWidget {
   final VoidCallback onRetrySourceDeletions;
   final int pendingReviewedImportCount;
   final VoidCallback onRetryReviewedImports;
+  final int historicalImportCount;
+  final VoidCallback onImportHistoricalCaptures;
   final VoidCallback? onOpenCommonBoards;
 
   /// Null when there are no plans at all, and then the drawer does not offer a
@@ -1848,6 +1891,15 @@ final class _HomeDrawer extends StatelessWidget {
                         onTap: () {
                           Navigator.of(context).pop();
                           onRetryReviewedImports();
+                        },
+                      ),
+                    if (historicalImportCount > 0)
+                      _DrawerItem(
+                        icon: Icons.cloud_upload_outlined,
+                        label: '기존 자료 서버 가져오기 $historicalImportCount건',
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          onImportHistoricalCaptures();
                         },
                       ),
                     _DrawerItem(

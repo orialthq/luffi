@@ -556,6 +556,117 @@ void main() {
     expect(reviewedController.syncedReviewedCaptureImports, isEmpty);
   });
 
+  test('old organized capture imports only after explicit backfill', () async {
+    final snapshotStore = InMemoryAppSnapshotStore();
+    final oldController = AppController(
+      InMemoryIncomingShareService(),
+      const _StructuredAnalysisService(),
+      snapshotStore,
+    );
+    await oldController.initialize();
+    final reviewedId = oldController.addManualInput('두부조림 레시피');
+    final unreviewedId = oldController.addManualInput('나중에 확인할 레시피');
+    await oldController.confirmStructured(reviewedId);
+    final oldReviewId = oldController.captureById(reviewedId)!.review!.id;
+    expect(oldController.captureById(reviewedId)!.reviewedImport, isNull);
+    oldController.dispose();
+
+    final importer = _RecordingReviewedImportClient();
+    final restored = _reviewedController(snapshotStore, importer);
+    addTearDown(restored.dispose);
+    await restored.initialize();
+    expect(restored.eligibleHistoricalCaptureImportCount, 1);
+    expect(importer.requests, isEmpty);
+
+    expect(await restored.importHistoricalReviewedCaptures(), 1);
+    await _waitUntil(() => restored.syncedReviewedCaptureImports.length == 1);
+    expect(importer.requests, hasLength(1));
+    expect(restored.captureById(unreviewedId)!.reviewedImport, isNull);
+    expect(restored.captureById(reviewedId)!.review!.id, oldReviewId);
+    expect(restored.eligibleHistoricalCaptureImportCount, 0);
+    expect(await restored.importHistoricalReviewedCaptures(), 0);
+    expect(importer.requests, hasLength(1));
+  });
+
+  test(
+    'historical import keeps its request through an offline restart',
+    () async {
+      final snapshotStore = InMemoryAppSnapshotStore();
+      final oldController = AppController(
+        InMemoryIncomingShareService(),
+        const _StructuredAnalysisService(),
+        snapshotStore,
+      );
+      await oldController.initialize();
+      final captureId = oldController.addManualInput('두부조림 레시피');
+      await oldController.confirmStructured(captureId);
+      oldController.dispose();
+
+      final offlineImporter = _RecordingReviewedImportClient()
+        ..failRequests = true;
+      final offline = _reviewedController(snapshotStore, offlineImporter);
+      await offline.initialize();
+      expect(await offline.importHistoricalReviewedCaptures(), 1);
+      await _waitUntil(() => offlineImporter.finishedCalls == 1);
+      final request = offlineImporter.requests.single;
+      expect(offline.pendingReviewedCaptureImportCount, 1);
+      offline.dispose();
+
+      final onlineImporter = _RecordingReviewedImportClient();
+      final online = _reviewedController(snapshotStore, onlineImporter);
+      addTearDown(online.dispose);
+      await online.initialize();
+      await _waitUntil(() => online.syncedReviewedCaptureImports.length == 1);
+      expect(onlineImporter.requests.single, request);
+      expect(
+        online.captureById(captureId)!.reviewedImport!.status,
+        ReviewedCaptureImportStatus.synced,
+      );
+      expect(online.eligibleHistoricalCaptureImportCount, 0);
+    },
+  );
+
+  test(
+    'historical import sends nothing when its intent cannot be saved',
+    () async {
+      final snapshotStore = _ToggleAppSnapshotStore();
+      final oldController = AppController(
+        InMemoryIncomingShareService(),
+        const _StructuredAnalysisService(),
+        snapshotStore,
+      );
+      await oldController.initialize();
+      final captureId = oldController.addManualInput('두부조림 레시피');
+      await oldController.confirmStructured(captureId);
+      oldController.dispose();
+
+      final importer = _RecordingReviewedImportClient();
+      final restored = AppController(
+        InMemoryIncomingShareService(),
+        const _StructuredAnalysisService(),
+        snapshotStore,
+        null,
+        const NoPlaceEnrichmentService(),
+        const NoTagMergeService(),
+        const NoTagSenseService(),
+        null,
+        null,
+        importer,
+      );
+      addTearDown(restored.dispose);
+      await restored.initialize();
+      snapshotStore.failWrites = true;
+      final originalDebugPrint = debugPrint;
+      debugPrint = (message, {wrapWidth}) {};
+      addTearDown(() => debugPrint = originalDebugPrint);
+
+      expect(await restored.importHistoricalReviewedCaptures(), 0);
+      expect(importer.requests, isEmpty);
+      expect(restored.captureById(captureId)!.reviewedImport, isNull);
+      expect(restored.eligibleHistoricalCaptureImportCount, 1);
+    },
+  );
+
   test('recipe source picker excludes a synced non-recipe capture', () async {
     final snapshotStore = InMemoryAppSnapshotStore();
     final importer = _RecordingReviewedImportClient();

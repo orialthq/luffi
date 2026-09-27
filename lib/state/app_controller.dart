@@ -194,6 +194,16 @@ final class AppController extends ChangeNotifier {
             ReviewedCaptureImportStatus.pending,
       )
       .length;
+  int get eligibleHistoricalCaptureImportCount =>
+      _reviewedCaptureImportClient == null
+      ? 0
+      : _captures
+            .where(
+              (capture) =>
+                  capture.reviewedImport == null &&
+                  reviewedCaptureImportRequest(capture) != null,
+            )
+            .length;
   List<ReviewedCaptureImportSummary> get allSyncedReviewedCaptureImports =>
       List.unmodifiable([
         for (final capture in _captures)
@@ -2065,6 +2075,35 @@ final class AppController extends ChangeNotifier {
         status: ReviewedCaptureImportStatus.pending,
       ),
     );
+  }
+
+  /// Queue an explicitly requested import of already organized captures.
+  /// Never sends raw image bytes; each exact request is saved before dispatch.
+  Future<int> importHistoricalReviewedCaptures() async {
+    if (_reviewedCaptureImportClient == null || _disposed) return 0;
+    final previous = <String, CaptureRecord>{};
+    for (final capture in _captures) {
+      if (capture.reviewedImport != null ||
+          reviewedCaptureImportRequest(capture) == null) {
+        continue;
+      }
+      previous[capture.raw.id] = capture;
+      _markReviewedImportPending(capture.raw.id);
+    }
+    if (previous.isEmpty) return 0;
+    notifyListeners();
+    if (!await _persistState()) {
+      for (var index = 0; index < _captures.length; index++) {
+        final prior = previous[_captures[index].raw.id];
+        if (prior != null && _captures[index].reviewedImport != null) {
+          _captures[index] = prior;
+        }
+      }
+      notifyListeners();
+      return 0;
+    }
+    unawaited(retryPendingReviewedCaptureImports());
+    return previous.length;
   }
 
   /// Retry one durable intent with the same importId and exact same body.
