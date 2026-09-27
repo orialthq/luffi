@@ -1469,7 +1469,7 @@ final class _ShoppingInventoryCancellationDialogState
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('이 관측은 현재 재고 판단에서 제외됩니다. 원래 보고와 취소 이력은 남습니다.'),
+            const Text('이 관측은 현재 재고 관측 목록에서 제외됩니다. 원래 보고와 취소 이력은 남습니다.'),
             DropdownButtonFormField<String>(
               key: const Key('shopping-cancel-observation'),
               initialValue: observationId,
