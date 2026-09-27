@@ -2632,6 +2632,56 @@ void main() {
     expect(intentStore.pending, isNull);
   });
 
+  testWidgets('shopping rechecks every selected capture before saving intent', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    final intentStore = FakeShoppingIntentStore();
+    final available = <String>{'product-a', 'product-b'};
+    tester.view.physicalSize = const Size(1000, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          shoppingIntentStore: intentStore,
+          shoppingImportOptions: const [
+            ShoppingImportOption(
+              importId: 'product-a',
+              title: '상품 A',
+              displayedPriceText: '1,000원',
+            ),
+            ShoppingImportOption(
+              importId: 'product-b',
+              title: '상품 B',
+              displayedPriceText: '2,000원',
+            ),
+          ],
+          verifyImportIds: (ids) async => ids.toSet().intersection(available),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('kernel-create-shopping')));
+    await tester.tap(find.byKey(const Key('kernel-create-shopping')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('shopping-purpose')),
+      '두 상품 비교',
+    );
+    await tester.tap(find.byKey(const Key('shopping-import-product-a')));
+    await tester.tap(find.byKey(const Key('shopping-import-product-b')));
+    available.remove('product-b');
+    await tester.tap(find.byKey(const Key('shopping-create-submit')));
+    await tester.pumpAndSettle();
+    expect(client.scenarioRequests, isEmpty);
+    expect(intentStore.pending, isNull);
+    expect(find.textContaining('현재 서버에서 확인되지 않아요'), findsOneWidget);
+  });
+
   testWidgets('reviewed life-tip image creates an approval-gated plan', (
     tester,
   ) async {
@@ -2669,6 +2719,72 @@ void main() {
     expect(intentStore.pending, isNull);
     expect(client.board['tasks'], isEmpty);
     expect(find.text('계획 제안'), findsOneWidget);
+  });
+
+  testWidgets('an open board filters removed imports and rechecks the choice', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    final available = <String>{'live-tip'};
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          lifeTipIntentStore: FakeLifeTipIntentStore(),
+          lifeTipImportOptions: const [
+            LifeTipImportOption(importId: 'removed-tip', title: '이전 서버의 자료'),
+            LifeTipImportOption(importId: 'live-tip', title: '현재 서버의 자료'),
+          ],
+          verifyImportIds: (ids) async => ids.toSet().intersection(available),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('kernel-create-life-tip')));
+    await tester.tap(find.byKey(const Key('kernel-create-life-tip')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('life-tip-import-removed-tip')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('life-tip-import-live-tip')),
+      findsOneWidget,
+    );
+
+    available.clear();
+    await tester.tap(find.byKey(const ValueKey('life-tip-import-live-tip')));
+    await tester.tap(find.byKey(const Key('life-tip-create-submit')));
+    await tester.pumpAndSettle();
+    expect(client.scenarioRequests, isEmpty);
+    expect(find.textContaining('현재 서버에서 확인되지 않아요'), findsOneWidget);
+  });
+
+  testWidgets('unavailable status check does not open a stale import dialog', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+          lifeTipIntentStore: FakeLifeTipIntentStore(),
+          lifeTipImportOptions: const [
+            LifeTipImportOption(importId: 'uncertain-tip', title: '확인 대기 자료'),
+          ],
+          verifyImportIds: (_) async => throw StateError('offline'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('kernel-create-life-tip')));
+    await tester.tap(find.byKey(const Key('kernel-create-life-tip')));
+    await tester.pumpAndSettle();
+    expect(find.byType(LifeTipScenarioDialog), findsNothing);
+    expect(find.textContaining('서버 자료를 확인할 수 없어요'), findsOneWidget);
+    expect(client.scenarioRequests, isEmpty);
   });
 
   testWidgets(

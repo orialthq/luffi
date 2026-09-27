@@ -618,6 +618,12 @@ void main() {
         ),
         [local.last.importId],
       );
+      expect(
+        await controller.verifiedReviewedCaptureImports(
+          importIds: {local.first.importId},
+        ),
+        isEmpty,
+      );
       importer.serverStatuses[local.first.importId] = 'active';
       importer.serverSourceIds[local.first.importId] =
           'source-from-another-server';

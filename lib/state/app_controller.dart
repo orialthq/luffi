@@ -230,11 +230,15 @@ final class AppController extends ChangeNotifier {
 
   /// A local receipt is only a past acknowledgement. Check the current server
   /// before offering it as provenance for a new board; never re-import here.
-  Future<List<ReviewedCaptureImportSummary>>
-  verifiedReviewedCaptureImports() async {
+  Future<List<ReviewedCaptureImportSummary>> verifiedReviewedCaptureImports({
+    Set<String>? importIds,
+  }) async {
     final client = _reviewedCaptureImportClient;
     if (client == null) return const [];
-    final local = allSyncedReviewedCaptureImports;
+    final local = [
+      for (final item in allSyncedReviewedCaptureImports)
+        if (importIds == null || importIds.contains(item.importId)) item,
+    ];
     final verified = <ReviewedCaptureImportSummary>[];
     for (var offset = 0; offset < local.length; offset += 100) {
       final chunk = local.skip(offset).take(100).toList();

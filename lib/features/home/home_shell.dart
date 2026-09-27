@@ -461,6 +461,11 @@ final class _HomeShellState extends State<HomeShell>
           lifeTipImportOptions: lifeTipImportOptions,
           shoppingImportOptions: shoppingImportOptions,
           healthImportOptions: healthImportOptions,
+          verifyImportIds: (ids) async {
+            final verified = await widget.controller
+                .verifiedReviewedCaptureImports(importIds: ids.toSet());
+            return {for (final item in verified) item.importId};
+          },
           onOpenDiningImport: (importId) {
             for (final imported in verifiedImports) {
               if (imported.importId != importId) continue;

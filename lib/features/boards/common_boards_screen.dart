@@ -123,6 +123,7 @@ final class CommonBoardsScreen extends StatefulWidget {
     this.lifeTipImportOptions = const [],
     this.shoppingImportOptions = const [],
     this.healthImportOptions = const [],
+    this.verifyImportIds,
     this.onOpenDiningImport,
     this.onOpenFashionImport,
     this.onOpenBeautyImport,
@@ -149,6 +150,7 @@ final class CommonBoardsScreen extends StatefulWidget {
   final List<LifeTipImportOption> lifeTipImportOptions;
   final List<ShoppingImportOption> shoppingImportOptions;
   final List<HealthImportOption> healthImportOptions;
+  final Future<Set<String>> Function(List<String> importIds)? verifyImportIds;
   final void Function(String importId)? onOpenDiningImport;
   final void Function(String importId)? onOpenFashionImport;
   final void Function(String importId)? onOpenBeautyImport;
@@ -234,6 +236,7 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   bool _creatingLifeTip = false;
   bool _creatingShopping = false;
   bool _creatingHealth = false;
+  bool _checkingImportOptions = false;
   bool _intentLoading = true;
   bool _diningIntentLoading = true;
   bool _fashionIntentLoading = true;
@@ -526,12 +529,81 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
     );
   }
 
-  Future<void> _createReviewedRecipe() async {
-    final draft = await showDialog<KernelJson>(
+  void _showImportStatusMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<Set<String>?> _checkImportIds(List<String> ids) async {
+    final verify = widget.verifyImportIds;
+    if (verify == null) return ids.toSet();
+    if (_checkingImportOptions) return null;
+    setState(() => _checkingImportOptions = true);
+    try {
+      final active = await verify(ids);
+      if (!mounted) return null;
+      return active.intersection(ids.toSet());
+    } catch (_) {
+      _showImportStatusMessage('서버 자료를 확인할 수 없어요. 연결 후 다시 시도해 주세요.');
+      return null;
+    } finally {
+      if (mounted) setState(() => _checkingImportOptions = false);
+    }
+  }
+
+  List<String> _draftImportIds(KernelJson draft) => [
+    if (draft['importId'] case final String id) id,
+    if (draft['importIds'] case final List ids)
+      for (final id in ids)
+        if (id is String) id,
+  ];
+
+  Future<T?> _showVerifiedImportDialog<O, T>(
+    List<O> options,
+    String Function(O) importIdOf,
+    Widget Function(List<O>) dialog,
+    List<String> Function(T) selectedIds,
+  ) async {
+    final initialIds = [for (final option in options) importIdOf(option)];
+    final active = await _checkImportIds(initialIds);
+    if (active == null || !mounted) return null;
+    final fresh = [
+      for (final option in options)
+        if (active.contains(importIdOf(option))) option,
+    ];
+    if (fresh.isEmpty) {
+      _showImportStatusMessage('현재 서버에서 확인되는 자료가 없어요. 새로고침 후 다시 선택해 주세요.');
+      return null;
+    }
+    final selected = await showDialog<T>(
       context: context,
-      builder: (_) =>
-          _ReviewedRecipeDialog(importOptions: widget.importOptions),
+      builder: (_) => dialog(fresh),
     );
+    if (selected == null || !mounted) return null;
+    final ids = selectedIds(selected);
+    if (ids.isEmpty || ids.any((id) => !active.contains(id))) {
+      _showImportStatusMessage('선택한 자료를 다시 확인해 주세요.');
+      return null;
+    }
+    final stillActive = await _checkImportIds(ids);
+    if (stillActive == null || !mounted) return null;
+    if (ids.any((id) => !stillActive.contains(id))) {
+      _showImportStatusMessage('선택한 자료가 현재 서버에서 확인되지 않아요. 다시 선택해 주세요.');
+      return null;
+    }
+    return selected;
+  }
+
+  Future<void> _createReviewedRecipe() async {
+    final draft =
+        await _showVerifiedImportDialog<RecipeImportOption, KernelJson>(
+          widget.importOptions,
+          (option) => option.importId,
+          (options) => _ReviewedRecipeDialog(importOptions: options),
+          _draftImportIds,
+        );
     if (draft == null || !mounted) return;
     await _submitRecipe(
       title: _text(draft['title']),
@@ -543,11 +615,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   }
 
   Future<void> _createReviewedDining() async {
-    final draft = await showDialog<KernelJson>(
-      context: context,
-      builder: (_) =>
-          _DiningScenarioDialog(options: widget.diningImportOptions),
-    );
+    final draft =
+        await _showVerifiedImportDialog<DiningImportOption, KernelJson>(
+          widget.diningImportOptions,
+          (option) => option.importId,
+          (options) => _DiningScenarioDialog(options: options),
+          _draftImportIds,
+        );
     if (draft == null ||
         !mounted ||
         _pendingDiningIntent != null ||
@@ -665,11 +739,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   }
 
   Future<void> _createReviewedFashion() async {
-    final draft = await showDialog<KernelJson>(
-      context: context,
-      builder: (_) =>
-          _FashionScenarioDialog(options: widget.fashionImportOptions),
-    );
+    final draft =
+        await _showVerifiedImportDialog<FashionImportOption, KernelJson>(
+          widget.fashionImportOptions,
+          (option) => option.importId,
+          (options) => _FashionScenarioDialog(options: options),
+          _draftImportIds,
+        );
     if (draft == null ||
         !mounted ||
         _pendingFashionIntent != null ||
@@ -784,11 +860,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   }
 
   Future<void> _createReviewedBeauty() async {
-    final draft = await showDialog<KernelJson>(
-      context: context,
-      builder: (_) =>
-          _BeautyScenarioDialog(options: widget.beautyImportOptions),
-    );
+    final draft =
+        await _showVerifiedImportDialog<BeautyImportOption, KernelJson>(
+          widget.beautyImportOptions,
+          (option) => option.importId,
+          (options) => _BeautyScenarioDialog(options: options),
+          _draftImportIds,
+        );
     if (draft == null ||
         !mounted ||
         _pendingBeautyIntent != null ||
@@ -903,10 +981,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   }
 
   Future<void> _createReviewedTravel() async {
-    final draft = await showDialog<KernelJson>(
-      context: context,
-      builder: (_) => TravelScenarioDialog(options: widget.travelImportOptions),
-    );
+    final draft =
+        await _showVerifiedImportDialog<TravelImportOption, KernelJson>(
+          widget.travelImportOptions,
+          (option) => option.importId,
+          (options) => TravelScenarioDialog(options: options),
+          _draftImportIds,
+        );
     if (draft == null ||
         !mounted ||
         _pendingTravelIntent != null ||
@@ -1021,10 +1102,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   }
 
   Future<void> _createReviewedHealth() async {
-    final importId = await showDialog<String>(
-      context: context,
-      builder: (_) => HealthScenarioDialog(options: widget.healthImportOptions),
-    );
+    final importId =
+        await _showVerifiedImportDialog<HealthImportOption, String>(
+          widget.healthImportOptions,
+          (option) => option.importId,
+          (options) => HealthScenarioDialog(options: options),
+          (selected) => [selected],
+        );
     if (importId == null ||
         !mounted ||
         _pendingHealthIntent != null ||
@@ -1139,11 +1223,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   }
 
   Future<void> _createReviewedShopping() async {
-    final selection = await showDialog<KernelJson>(
-      context: context,
-      builder: (_) =>
-          ShoppingScenarioDialog(options: widget.shoppingImportOptions),
-    );
+    final selection =
+        await _showVerifiedImportDialog<ShoppingImportOption, KernelJson>(
+          widget.shoppingImportOptions,
+          (option) => option.importId,
+          (options) => ShoppingScenarioDialog(options: options),
+          _draftImportIds,
+        );
     if (selection == null ||
         !mounted ||
         _pendingShoppingIntent != null ||
@@ -1322,11 +1408,13 @@ final class _CommonBoardsScreenState extends State<CommonBoardsScreen> {
   }
 
   Future<void> _createReviewedLifeTip() async {
-    final importId = await showDialog<String>(
-      context: context,
-      builder: (_) =>
-          LifeTipScenarioDialog(options: widget.lifeTipImportOptions),
-    );
+    final importId =
+        await _showVerifiedImportDialog<LifeTipImportOption, String>(
+          widget.lifeTipImportOptions,
+          (option) => option.importId,
+          (options) => LifeTipScenarioDialog(options: options),
+          (selected) => [selected],
+        );
     if (importId == null ||
         !mounted ||
         _pendingLifeTipIntent != null ||
