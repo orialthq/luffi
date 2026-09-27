@@ -1,6 +1,7 @@
 import { array, enumeration, integer, nonnegative, object, positive, ref, text } from "./schema.js";
+import { QUANTITY_UNITS } from "./quantity_conversion.js";
 
-const unit = enumeration("g", "kg", "ml", "l", "count", "tsp", "tbsp");
+const unit = enumeration(...QUANTITY_UNITS);
 const quantity = (amount) => ({ oneOf: [
   object({ status: enumeration("known"), amount, unit }),
   object({ status: enumeration("unknown") }),

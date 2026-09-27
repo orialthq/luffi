@@ -3331,14 +3331,30 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('shopping-choice-tofu-product')));
       await tester.tap(find.byKey(const Key('shopping-ingredient-tofu')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('shopping-package-known')));
+      await tester.tap(find.byKey(const Key('shopping-package-known')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('shopping-package-amount')),
+        '300',
+      );
       await tester.tap(find.byKey(const Key('shopping-choice-submit')));
       await tester.pumpAndSettle();
       expect(client.commands.single['ingredientMatch'], {
         'status': 'matched',
         'ingredientId': 'tofu',
       });
+      expect(client.commands.single['packageQuantity'], {
+        'status': 'known',
+        'amount': 300.0,
+        'unit': 'g',
+      });
       client.connections = [
-        {...client.connections.single, 'recipeNeeds': {'status': 'stale'}},
+        {
+          ...client.connections.single,
+          'recipeNeeds': {'status': 'stale'},
+        },
       ];
       await tester.ensureVisible(
         find.byKey(const Key('kernel-complete-confirm_choice')),

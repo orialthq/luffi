@@ -1,10 +1,28 @@
 import { array, enumeration, fail, integer, object, ref, text } from "./schema.js";
 import { artifact, capability, relation, valueRelation } from "./shared.js";
+import { convertQuantity, QUANTITY_UNITS, roundedQuantity } from "./quantity_conversion.js";
 
 const choice = object({ id: text, productId: text, offerId: text,
   importId: text, title: text, quantity: ref("shopping.quantity_count"),
-  displayedPriceText: text, ingredientMatch: ref("shopping.ingredient_match_result") },
+  displayedPriceText: text, ingredientMatch: ref("shopping.ingredient_match_result"),
+  packageQuantity: ref("shopping.package_quantity"),
+  recipeCoverage: ref("shopping.recipe_coverage") },
   ["id", "productId", "offerId", "importId", "title", "quantity", "displayedPriceText"]);
+
+export function calculateShoppingCoverage(missingQuantity, packageQuantity, count) {
+  if (packageQuantity.status === "unknown") return { status: "unknown_package" };
+  if (missingQuantity.status !== "known") return { status: "unknown_need" };
+  const selectedAmount = convertQuantity(packageQuantity.amount * count,
+    packageQuantity.unit, missingQuantity.unit);
+  if (selectedAmount === null) return { status: "incompatible_unit" };
+  const selectedQuantity = { status: "known", amount: selectedAmount,
+    unit: missingQuantity.unit };
+  const shortfall = { status: "known",
+    amount: roundedQuantity(Math.max(0, missingQuantity.amount - selectedAmount)),
+    unit: missingQuantity.unit };
+  return { status: shortfall.amount === 0 ? "sufficient" : "insufficient",
+    neededQuantity: missingQuantity, selectedQuantity, shortfall };
+}
 
 export const shoppingPack = {
   id: "shopping", version: 1, compatibleKernelVersions: [1],
@@ -18,6 +36,23 @@ export const shoppingPack = {
     { id: "shopping.offer_snapshot", schema: object({ id: text,
       title: text, displayedPriceText: text }) },
     { id: "shopping.purchase_choice", schema: choice },
+    { id: "shopping.package_quantity", schema: { oneOf: [
+      object({ status: enumeration("unknown") }),
+      object({ status: enumeration("known"), amount: { type: "number",
+        exclusiveMinimum: 0 }, unit: enumeration(...QUANTITY_UNITS) }),
+    ] }, validate: (value) => {
+      if (value.status === "known" && value.amount > 1_000_000_000) {
+        fail("package amount exceeds limit");
+      }
+    } },
+    { id: "shopping.recipe_coverage", schema: { oneOf: [
+      object({ status: enumeration("unknown_package") }),
+      object({ status: enumeration("unknown_need") }),
+      object({ status: enumeration("incompatible_unit") }),
+      object({ status: enumeration("sufficient", "insufficient"),
+        neededQuantity: ref("core.quantity"), selectedQuantity: ref("core.quantity"),
+        shortfall: ref("core.quantity") }),
+    ] } },
     { id: "shopping.ingredient_match_result", schema: { oneOf: [
       object({ status: enumeration("unverified") }),
       object({ status: enumeration("matched"), ingredientId: text,
@@ -70,6 +105,8 @@ export const shoppingPack = {
       ["recipe.ingredient"], "one"),
     valueRelation("shopping.quantity", ["shopping.purchase_choice"],
       "shopping.quantity_count", "explicit_user_confirmation"),
+    valueRelation("shopping.package_quantity", ["shopping.purchase_choice"],
+      "shopping.package_quantity", "explicit_user_confirmation"),
     relation("shopping.purchase_for_choice", ["shopping.purchase_report"],
       ["shopping.purchase_choice"], "one"),
     valueRelation("shopping.actual_paid_krw", ["shopping.purchase_report"],

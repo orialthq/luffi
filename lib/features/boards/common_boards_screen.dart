@@ -3435,6 +3435,10 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final value = _object(result?['value']);
     if (task['id'] == 'confirm_choice') {
       final choice = _object(value['choice']);
+      final package = _object(choice['packageQuantity']);
+      final coverage = _object(choice['recipeCoverage']);
+      final selected = _object(coverage['selectedQuantity']);
+      final shortfall = _object(coverage['shortfall']);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3442,6 +3446,22 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           Text(
             '${_text(choice['title'])} · ${choice['quantity']}개 · 캡처 표시 ${_text(choice['displayedPriceText'])}',
           ),
+          if (package['status'] == 'known')
+            Text('확인한 상품 한 개 분량: ${package['amount']}${package['unit']}'),
+          if (coverage['status'] == 'sufficient')
+            Text(
+              '선택한 분량 ${selected['amount']}${selected['unit']}으로 선택 당시 부족량을 충족해요.',
+            ),
+          if (coverage['status'] == 'insufficient')
+            Text(
+              '선택한 분량 ${selected['amount']}${selected['unit']} · 선택 당시 부족량에서 ${shortfall['amount']}${shortfall['unit']} 남아요.',
+            ),
+          if (coverage['status'] == 'unknown_need')
+            const Text('재고 또는 레시피 필요량이 확정되지 않아 충족 여부를 판단할 수 없어요.'),
+          if (coverage['status'] == 'unknown_package')
+            const Text('포장 분량을 확인하지 않아 충족 여부를 판단할 수 없어요.'),
+          if (coverage['status'] == 'incompatible_unit')
+            const Text('포장 분량과 부족량의 단위를 비교할 수 없어요.'),
         ],
       );
     }

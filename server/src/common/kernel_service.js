@@ -22,6 +22,7 @@ import { buildBeautyPlanDraft } from "../scenarios/beauty_plan.js";
 import { buildTravelPlanDraft } from "../scenarios/travel_plan.js";
 import { buildLifeTipPlanDraft } from "../scenarios/life_tip_plan.js";
 import { buildShoppingPlanDraft } from "../scenarios/shopping_plan.js";
+import { calculateShoppingCoverage } from "../domains/shopping.js";
 import { buildHealthPlanDraft } from "../scenarios/health_plan.js";
 import {
   applyResourceCommand, createResourceState,
@@ -6085,7 +6086,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId",
           "expectedRevision", "selectedImportId", "quantity",
-          "ingredientMatch"].includes(key)) ||
+          "ingredientMatch", "packageQuantity"].includes(key)) ||
           !Number.isSafeInteger(input.expectedRevision) ||
           input.expectedRevision < 0 || !Number.isSafeInteger(input.quantity) ||
           input.quantity < 1 || input.quantity > 20) {
@@ -6097,7 +6098,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         const selectedImportId = safeId(input.selectedImportId, "selectedImportId");
         const requestHash = requestFingerprint({ activityId,
           expectedRevision: input.expectedRevision, selectedImportId,
-          quantity: input.quantity, ingredientMatch: input.ingredientMatch });
+          quantity: input.quantity, ingredientMatch: input.ingredientMatch,
+          packageQuantity: input.packageQuantity });
         return await store.transact((state) => {
           assertState(state);
           state.shoppingCommandReceipts ??= {};
@@ -6134,6 +6136,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           }
           let ingredientMatch = null;
           let matchContext = null;
+          let packageQuantity = null;
+          let recipeCoverage = null;
           if (ready.linkedRecipe) {
             const decision = input.ingredientMatch;
             if (!decision || typeof decision !== "object" || Array.isArray(decision) ||
@@ -6167,12 +6171,27 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               ingredientMatch = { status: "matched", ingredientId: item.ingredientId,
                 sourceResultId: needs.sourceResultId };
               matchContext = { item, line };
+              try {
+                registry.validate("shopping.package_quantity", input.packageQuantity);
+              } catch {
+                throw new AppError("PACKAGE_QUANTITY_REQUIRED",
+                  "상품 한 개의 포장 분량을 입력하거나 미확인을 선택해 주세요.",
+                  { httpStatus: 400 });
+              }
+              packageQuantity = input.packageQuantity;
+              recipeCoverage = calculateShoppingCoverage(item.missingQuantity,
+                packageQuantity, input.quantity);
             } else {
               ingredientMatch = { status: "unverified" };
             }
           } else if (input.ingredientMatch !== undefined) {
             throw new AppError("INVALID_INGREDIENT_MATCH",
               "레시피가 연결되지 않은 쇼핑 활동이에요.", { httpStatus: 422 });
+          }
+          if (!matchContext && input.packageQuantity !== undefined) {
+            throw new AppError("INVALID_PACKAGE_QUANTITY",
+              "확인된 레시피 재료가 없으면 포장 분량을 연결할 수 없어요.",
+              { httpStatus: 422 });
           }
           const trusted = shoppingCandidates(state, scenario.importIds).candidates;
           if (ready.purpose !== scenario.purpose ||
@@ -6199,7 +6218,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const sourceId = `${stem}:confirmation-source`;
           const versionId = `${stem}:confirmation-version`;
           const confirmationContent = { selectedImportId, quantity: input.quantity,
-            ...(ingredientMatch ? { ingredientMatch } : {}) };
+            ...(ingredientMatch ? { ingredientMatch } : {}),
+            ...(packageQuantity ? { packageQuantity } : {}) };
           const beforeSequence = state.knowledge.sequence;
           const applyKnowledge = (role, type, payload) => {
             if (type === "assertion.add") validateAssertionRelation(state, payload);
@@ -6275,12 +6295,24 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
                 ...matchContext.line.value.evidenceIds,
                 ...matchContext.line.requires.evidenceIds,
               ])], matchContext.line.requires.objectEntityId);
+            if (packageQuantity.status === "known") {
+              const packageEvidenceId = `${stem}:package-quantity-evidence`;
+              applyKnowledge("package-quantity-evidence", "evidence.add", {
+                id: packageEvidenceId, sourceVersionId: versionId,
+                quote: `${candidate.title} 한 개의 포장 분량 ${packageQuantity.amount}${packageQuantity.unit} 확인`,
+                locator: { kind: "user_confirmation",
+                  jsonPointer: "/packageQuantity" } });
+              assertion("package-quantity", choiceId, "shopping.package_quantity",
+                [packageEvidenceId], null,
+                { type: "shopping.package_quantity", value: packageQuantity });
+            }
           }
           const choice = { id: choiceId, productId, offerId,
             importId: selectedImportId, title: candidate.title,
             quantity: input.quantity,
             displayedPriceText: candidate.displayedPriceText,
-            ...(ingredientMatch ? { ingredientMatch } : {}) };
+            ...(ingredientMatch ? { ingredientMatch } : {}),
+            ...(packageQuantity ? { packageQuantity, recipeCoverage } : {}) };
           registry.validate("shopping.purchase_choice", choice);
           recordAffectedConsumers(state, beforeSequence);
           const applied = applyActivityCommand(state.activities, { ownerId,

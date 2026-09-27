@@ -233,7 +233,17 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
   int _quantity = 1;
   bool _ingredientDecisionMade = false;
   String? _selectedIngredientId;
+  bool _packageDecisionMade = false;
+  bool _packageKnown = false;
+  final _packageAmount = TextEditingController();
+  String _packageUnit = 'g';
   String? _error;
+
+  @override
+  void dispose() {
+    _packageAmount.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -330,6 +340,7 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
                   onTap: () => setState(() {
                     _ingredientDecisionMade = true;
                     _selectedIngredientId = _text(item['ingredientId']);
+                    _packageDecisionMade = false;
                   }),
                 ),
               ListTile(
@@ -343,8 +354,72 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
                 onTap: () => setState(() {
                   _ingredientDecisionMade = true;
                   _selectedIngredientId = null;
+                  _packageDecisionMade = false;
                 }),
               ),
+              if (_ingredientDecisionMade && _selectedIngredientId != null) ...[
+                const SizedBox(height: 12),
+                const Text('상품 한 개의 포장 분량을 직접 확인해 주세요. 상품명에서 자동 추정하지 않아요.'),
+                ListTile(
+                  key: const Key('shopping-package-known'),
+                  title: const Text('포장 분량 확인'),
+                  leading: Icon(
+                    _packageDecisionMade && _packageKnown
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  onTap: () => setState(() {
+                    _packageDecisionMade = true;
+                    _packageKnown = true;
+                  }),
+                ),
+                if (_packageDecisionMade && _packageKnown)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const Key('shopping-package-amount'),
+                          controller: _packageAmount,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: '상품 한 개의 분량',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      DropdownButton<String>(
+                        key: const Key('shopping-package-unit'),
+                        value: _packageUnit,
+                        items:
+                            const ['g', 'kg', 'ml', 'l', 'count', 'tsp', 'tbsp']
+                                .map(
+                                  (unit) => DropdownMenuItem(
+                                    value: unit,
+                                    child: Text(unit),
+                                  ),
+                                )
+                                .toList(),
+                        onChanged: (unit) =>
+                            setState(() => _packageUnit = unit!),
+                      ),
+                    ],
+                  ),
+                ListTile(
+                  key: const Key('shopping-package-unknown'),
+                  title: const Text('포장 분량 확인하지 못함'),
+                  leading: Icon(
+                    _packageDecisionMade && !_packageKnown
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  onTap: () => setState(() {
+                    _packageDecisionMade = true;
+                    _packageKnown = false;
+                  }),
+                ),
+              ],
             ],
             if (_error != null)
               Text(
@@ -371,6 +446,20 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
             setState(() => _error = '해당 재료를 확인하거나 미확인을 선택해 주세요.');
             return;
           }
+          if (_selectedIngredientId != null && !_packageDecisionMade) {
+            setState(() => _error = '포장 분량을 확인하거나 미확인을 선택해 주세요.');
+            return;
+          }
+          final packageAmount = double.tryParse(_packageAmount.text.trim());
+          if (_selectedIngredientId != null &&
+              _packageKnown &&
+              (packageAmount == null ||
+                  !packageAmount.isFinite ||
+                  packageAmount <= 0 ||
+                  packageAmount > 1000000000)) {
+            setState(() => _error = '상품 한 개의 분량을 0보다 큰 숫자로 입력해 주세요.');
+            return;
+          }
           Navigator.pop(context, <String, Object?>{
             'selectedImportId': _selectedId,
             'quantity': _quantity,
@@ -381,6 +470,14 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
                       'status': 'matched',
                       'ingredientId': _selectedIngredientId,
                     },
+            if (_selectedIngredientId != null)
+              'packageQuantity': _packageKnown
+                  ? {
+                      'status': 'known',
+                      'amount': packageAmount,
+                      'unit': _packageUnit,
+                    }
+                  : {'status': 'unknown'},
           });
         },
         child: const Text('선택 확정'),

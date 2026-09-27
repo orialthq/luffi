@@ -182,12 +182,25 @@ void main() {
     expect(result, isNull);
     expect(find.text('해당 재료를 확인하거나 미확인을 선택해 주세요.'), findsOneWidget);
     await tester.tap(find.byKey(const Key('shopping-ingredient-tofu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shopping-choice-submit')));
+    await tester.pumpAndSettle();
+    expect(result, isNull);
+    expect(find.text('포장 분량을 확인하거나 미확인을 선택해 주세요.'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('shopping-package-known')));
+    await tester.tap(find.byKey(const Key('shopping-package-known')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('shopping-package-amount')),
+      '300',
+    );
     await tester.tap(find.byKey(const Key('shopping-choice-submit')));
     await tester.pumpAndSettle();
     expect(result, {
       'selectedImportId': 'tofu-product',
       'quantity': 1,
       'ingredientMatch': {'status': 'matched', 'ingredientId': 'tofu'},
+      'packageQuantity': {'status': 'known', 'amount': 300.0, 'unit': 'g'},
     });
   });
 

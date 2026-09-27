@@ -370,14 +370,33 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     selectedImportId: "tofu", quantity: 1,
     ingredientMatch: { status: "matched", ingredientId: "not-in-recipe" } }),
   (error) => error.code === "INVALID_INGREDIENT_MATCH");
+  await assert.rejects(service.confirmShoppingChoice({ commandId: "missing-package",
+    activityId: "linked-shopping", expectedRevision: readyShopping.revision,
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "matched", ingredientId: "tofu" } }),
+  (error) => error.code === "PACKAGE_QUANTITY_REQUIRED");
+  await assert.rejects(service.confirmShoppingChoice({ commandId: "invalid-package",
+    activityId: "linked-shopping", expectedRevision: readyShopping.revision,
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "matched", ingredientId: "tofu" },
+    packageQuantity: { status: "known", amount: 0, unit: "g" } }),
+  (error) => error.code === "PACKAGE_QUANTITY_REQUIRED");
+  await assert.rejects(service.confirmShoppingChoice({ commandId: "unverified-package",
+    activityId: "linked-shopping", expectedRevision: readyShopping.revision,
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "unverified" },
+    packageQuantity: { status: "known", amount: 300, unit: "g" } }),
+  (error) => error.code === "INVALID_PACKAGE_QUANTITY");
   await service.confirmShoppingChoice({ commandId: "choose-reviewed-tofu",
     activityId: "linked-shopping", expectedRevision: readyShopping.revision,
     selectedImportId: "tofu", quantity: 1,
-    ingredientMatch: { status: "matched", ingredientId: "tofu" } });
+    ingredientMatch: { status: "matched", ingredientId: "tofu" },
+    packageQuantity: { status: "known", amount: 300, unit: "g" } });
   assert.equal((await service.confirmShoppingChoice({ commandId: "choose-reviewed-tofu",
     activityId: "linked-shopping", expectedRevision: readyShopping.revision,
     selectedImportId: "tofu", quantity: 1,
-    ingredientMatch: { status: "matched", ingredientId: "tofu" } })).replayed, true);
+    ingredientMatch: { status: "matched", ingredientId: "tofu" },
+    packageQuantity: { status: "known", amount: 300, unit: "g" } })).replayed, true);
   await assert.rejects(service.confirmShoppingChoice({ commandId: "choose-reviewed-tofu",
     activityId: "linked-shopping", expectedRevision: readyShopping.revision,
     selectedImportId: "tofu", quantity: 1,
@@ -391,6 +410,10 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
   assert.equal(matchedState.knowledge.entities.find((item) =>
     item.id === matchRelation[0].objectEntityId)?.type, "recipe.ingredient");
   assert.ok(matchRelation[0].evidenceIds.length >= 3);
+  assert.equal(active(matchedState, "shopping.package_quantity").length, 1);
+  assert.deepEqual((await service.getBoard("linked-shopping")).results.find((item) =>
+    item.taskId === "confirm_choice").value.choice.recipeCoverage,
+  { status: "unknown_need" });
   assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice").length, 0);
   await assert.rejects(service.getRecipeShoppingPlanReview("linked-shopping", secondLink.id),
     (error) => error.code === "STARTED_TASK_PROTECTED");

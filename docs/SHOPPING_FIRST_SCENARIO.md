@@ -23,6 +23,7 @@
 | 표시 제안 | `shopping.offer_snapshot` → `shopping.offer_of_product`, `shopping.displayed_price` | 선택한 캡처의 시점 한정 표시 가격. 현재 가격, 최저가, 결제액이 아님 |
 | 사용자 선택 | `shopping.purchase_choice` → `shopping.choice_product`, `shopping.choice_offer`, `shopping.quantity` | 사용자 확인 Source/Evidence로 뒷받침하는 상품·수량 선택 |
 | 레시피 재료 대응 | `shopping.purchase_choice` → `shopping.choice_matches_ingredient` → `recipe.ingredient` | 레시피가 계획에 연결된 경우에만 사용자가 명시적으로 확인한 당시의 대응. 미확인이면 관계 없음 |
+| 상품 포장 분량 | `shopping.purchase_choice` → `shopping.package_quantity` | 대응 재료를 확인한 경우 사용자가 직접 확인한 상품 한 개의 분량. 제목에서 자동 추정하지 않음 |
 | 구매 보고 | `shopping.purchase_report` → `shopping.purchase_for_choice`, `shopping.actual_paid_krw` | `purchased` 보고 때만 생성. 영수증이나 결제 사업자 확인은 아님 |
 
 모든 관계는 활동 범위, 출처, 시점을 보존한다. 표시 가격은 캡처 시점의 근거이고, 실제 지불액은 별도 사용자 보고 근거다. 일반 작업 완료 명령으로 선택·구매 기록을 만들 수 없다. 서버는 소유자, revision, 승인된 후보, 준비 상태, 원본 근거, 그래프의 선택 관계를 검사한다. 동일한 명령 ID는 재전송해도 결과를 재생한다. 가격 확인과 보드 생성 명령 ID를 한 요청 묶음으로 앱에 저장해 네트워크 재시도 시 다시 사용한다. 확인 assertion이 정정되거나 철회되면 이전 가격으로 만든 계획은 stale 처리한다. 캡처나 파생 출처를 삭제하면 해당 활동과 파생 관계도 제거한다.

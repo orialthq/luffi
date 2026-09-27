@@ -1,5 +1,6 @@
 import { array, assertUnique, enumeration, fail, object, ref, text } from "./schema.js";
 import { artifact, capability, relation, slot, valueRelation } from "./shared.js";
+import { convertQuantity, roundedQuantity } from "./quantity_conversion.js";
 
 const ingredient = object({
   id: text, ingredientId: text, name: text, quantity: ref("core.ingredient_quantity"),
@@ -40,11 +41,6 @@ function validateRecipe(input) {
   }
 }
 
-function rounded(value) {
-  if (!Number.isFinite(value)) fail("calculated quantity exceeds the supported numeric range");
-  return Number(value.toPrecision(12));
-}
-
 export function scaleRecipeServings(input) {
   const ratio = input.targetServings / input.recipe.baseServings;
   return {
@@ -54,18 +50,10 @@ export function scaleRecipeServings(input) {
       ...item,
       quantity: item.quantity.status === "known" ? {
         ...item.quantity,
-        amount: rounded(item.quantity.amount * (item.scaling === "fixed" ? 1 : ratio)),
+        amount: roundedQuantity(item.quantity.amount * (item.scaling === "fixed" ? 1 : ratio)),
       } : { ...item.quantity },
     })),
   };
-}
-
-// Only SI conversions with known dimensions. A spoon or an ingredient density
-// never silently becomes millilitres or grams.
-const units = { g: ["mass", 1], kg: ["mass", 1000], ml: ["volume", 1], l: ["volume", 1000], count: ["count", 1], tsp: ["tsp", 1], tbsp: ["tbsp", 1] };
-function convert(amount, from, to) {
-  if (units[from][0] !== units[to][0]) return null;
-  return rounded(amount * units[from][1] / units[to][1]);
 }
 
 export function calculateRecipeRequirements(input) {
@@ -87,16 +75,16 @@ export function calculateRecipeRequirements(input) {
     let status = "unknown";
     if (quantities.every((q) => q.status === "known")) {
       const unit = quantities[0].unit;
-      const amounts = quantities.map((q) => convert(q.amount, q.unit, unit));
+      const amounts = quantities.map((q) => convertQuantity(q.amount, q.unit, unit));
       if (amounts.includes(null)) {
         status = "incompatible_unit";
       } else {
-        requiredQuantity = { status: "known", amount: rounded(amounts.reduce((a, b) => a + b, 0)), unit };
+        requiredQuantity = { status: "known", amount: roundedQuantity(amounts.reduce((a, b) => a + b, 0)), unit };
         if (availableQuantity.status === "known") {
-          const available = convert(availableQuantity.amount, availableQuantity.unit, unit);
+          const available = convertQuantity(availableQuantity.amount, availableQuantity.unit, unit);
           if (available === null) status = "incompatible_unit";
           else {
-            missingQuantity = { status: "known", amount: rounded(Math.max(0, requiredQuantity.amount - available)), unit };
+            missingQuantity = { status: "known", amount: roundedQuantity(Math.max(0, requiredQuantity.amount - available)), unit };
             status = missingQuantity.amount > 0 ? "needed" : "satisfied";
           }
         }
