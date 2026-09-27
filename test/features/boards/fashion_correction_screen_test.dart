@@ -66,6 +66,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       final dropdowns = find.byType(DropdownButtonFormField<String>);
+      await tester.ensureVisible(dropdowns.at(0));
       await tester.tap(dropdowns.at(0));
       await tester.pumpAndSettle();
       await tester.tap(find.text('하의').last);
@@ -73,11 +74,16 @@ void main() {
       await tester.ensureVisible(
         find.byKey(const Key('submit-fashion-correction')),
       );
+      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('submit-fashion-correction')));
       await tester.pumpAndSettle();
       expect(client.requests, isEmpty);
+      await tester.drag(find.byType(ListView), const Offset(0, 700));
+      await tester.pumpAndSettle();
       expect(find.textContaining('같은 코디 자리'), findsOneWidget);
 
+      await tester.ensureVisible(dropdowns.at(0));
       await tester.tap(dropdowns.at(0));
       await tester.pumpAndSettle();
       await tester.tap(find.text('상의').last);
@@ -85,6 +91,14 @@ void main() {
       await tester.tap(dropdowns.at(1));
       await tester.pumpAndSettle();
       await tester.tap(find.text('가지고 있어요').last);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('fashion-color-jacket')));
+      await tester.enterText(
+        find.byKey(const Key('fashion-color-jacket')),
+        '검정',
+      );
+      await tester.enterText(find.byKey(const Key('fashion-size-jacket')), 'L');
+      tester.testTextInput.hide();
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ListView), const Offset(0, -280));
       await tester.pumpAndSettle();
@@ -96,6 +110,8 @@ void main() {
       final items = request['items'] as List;
       expect((items.first as Map)['slot'], 'top');
       expect((items.first as Map)['ownership'], 'owned');
+      expect((items.first as Map)['color'], '검정');
+      expect((items.first as Map)['size'], 'L');
       expect(request['expectedGraphFingerprint'], 'c' * 64);
       expect(request['confirmed'], true);
     },

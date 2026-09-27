@@ -3870,7 +3870,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             key: const Key('kernel-open-fashion-correction'),
             onPressed: _busy || _needsRefresh ? null : _openFashionEditor,
             icon: const Icon(Icons.edit_note_rounded),
-            label: const Text('코디 자리·소유 상태 정정'),
+            label: const Text('코디 옵션·자리 정정'),
           ),
         if (board['scenario'] == 'travel' &&
             _objects(board['tasks']).any(

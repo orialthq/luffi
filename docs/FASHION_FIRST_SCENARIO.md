@@ -29,15 +29,15 @@
 | 상품 | 캡처별 `core.product` Mention, 사용자 확인 IdentityDecision | 같은 상호·제목이라는 이유로 자동 병합하지 않음 |
 | 선택 옵션 | `core.product_variant` Entity, `fashion.variant_of`와 `fashion.variant_options` | 사용자가 명시한 색상·사이즈. 온라인 재고나 구매 상태가 아님 |
 | 소유 | Variant의 `fashion.ownership` 값 관계 | 사용자 보고 `owned/candidate`; `unknown`은 소유 주장으로 저장하지 않음 |
-| 코디 | `fashion.outfit` Entity, 슬롯별 `fashion.has_item`, 버전 있는 TaskResult | 해당 일정의 구성. 사용자의 영구 취향 또는 착용 완료가 아님 |
+| 코디 | `fashion.outfit` Entity, 항목별 `fashion.has_line` → `fashion.outfit_line` → `fashion.line_variant`, 현재 `fashion.has_item`, 버전 있는 TaskResult | 항목 신원을 유지하면서 현재 Variant 연결을 바꿀 수 있음. 착용 완료를 뜻하지 않음 |
 | 코디 자리 | Variant의 활동 범위 `fashion.item_slot` 값 관계 | 겉옷·상의·하의 등 사용자가 확인한 배치. 같은 활동에서 중복 자리는 허용하지 않음 |
 | 착용 | `fashion.wear_experience` Entity와 `fashion.wore_outfit` | `worn`을 직접 보고한 경우에만 생성 |
 
 시나리오 명령은 owner, ID, 현재 보드 revision, 입력 후보, 고유 슬롯을 검증하고 원자적·재전송 안전 영수증을 남긴다. 출처를 삭제하면 아직 부분 철회·재계획이 완성되지 않은 개발 저장소에서는 관련 활동을 함께 제거하고 재전송을 차단한다. 이후에는 독립 출처를 유지하고 영향받은 작업만 재검토하게 확장한다.
 
-확정 후에는 현재 그래프의 코디 자리와 소유 상태를 함께 정정할 수 있다. 화면은 현재 그래프 지문과 항목을 받아 중복 자리와 소유 상태를 검토한 뒤 한 명령으로 제출한다. 서버는 `fashion.item_slot`과 `fashion.ownership`을 사용자 정정 출처·근거와 함께 원자적으로 교체하거나 철회한다. 처음 확정한 TaskResult와 착용 기록은 바꾸지 않으며, 기존 보드의 `record_wear`는 재검토 대상으로 막고 새 활동에서 코디를 다시 확인한다. 색상·사이즈를 바꾸면 다른 Variant 신원이 되므로 이번 정정 범위에 포함하지 않는다. 이미 확정한 Variant의 신원을 바꾸지 않고 새 Variant를 선택하는 흐름은 별도 단계다.
+확정 후에는 현재 그래프의 색상·사이즈·코디 자리·소유 상태를 함께 정정할 수 있다. 화면은 현재 그래프 지문과 항목을 받아 중복 자리와 옵션을 검토한 뒤 한 명령으로 제출한다. 자리·소유만 바꾸면 현재 Variant 관계를 정정한다. 색상·사이즈가 바뀌면 기존 Variant를 고치지 않고 새 `core.product_variant`를 만들어 같은 상품에 연결하고, 항목의 `fashion.line_variant`와 코디의 `fashion.has_item`을 새 Variant로 교체한다. 이전 Variant를 참조하는 다른 활동은 그대로 유지한다. 새 Variant의 옵션·소유·자리 관계와 출처·근거는 한 트랜잭션에서 기록한다. 처음 확정한 TaskResult와 착용 기록은 바꾸지 않으며, 기존 보드의 `record_wear`는 재검토 대상으로 막고 새 활동에서 코디를 다시 확인한다. 같은 상품 옵션을 서로 다른 활동에서 다시 확인하더라도 자동으로 신원을 병합하지 않는다.
 
-새 관계 도입 전 확정한 코디에는 `fashion.item_slot`이 없을 수 있다. 이 경우 현재 화면은 처음 확정한 슬롯을 읽어 보여주고, 첫 정정에서 모든 항목의 슬롯 관계를 함께 만든다. 일부 슬롯 관계만 남은 불완전한 그래프는 충돌로 거부한다.
+새 관계 도입 전 확정한 코디에는 `fashion.item_slot`이나 안정적인 항목 연결이 없을 수 있다. 이 경우 현재 화면은 처음 확정한 슬롯과 Variant를 읽어 보여주고, 첫 정정에서 모든 항목의 관계를 함께 만든다. 일부 관계만 남은 불완전한 그래프는 충돌로 거부한다.
 
 ## 검증 사례
 
@@ -46,7 +46,7 @@
 - `candidate`는 구매·소유를 의미하지 않고, `not_worn`/`unknown`은 착용 관계를 만들지 않는다. 같은 명령의 재전송과 서버 재시작에도 중복 기록이 생기지 않는다.
 - 기존 캡처의 출처 삭제와 근거 변경 시 오래된 계획 승인을 막는다.
 - 착용 결과 직전에 Outfit의 상품 Variant·색상·사이즈·소유 상태 관계를 다시 확인한다. `fashion.has_item`이 철회된 코디는 착용으로 기록하지 않는다. JSON 파일과 관계형 PostgreSQL 저장소에서 같은 검증을 실행한다.
-- 슬롯·소유 상태 정정은 JSON 및 관계형 저장소에서 완료 결과 불변, 새 출처와 관계 변경, 오래된 지문 거부, 명령 재전송, 삭제 후 재전송 차단을 검사한다.
+- 색상·사이즈·슬롯·소유 상태 정정은 JSON 및 관계형 저장소에서 완료 결과 불변, 다른 활동의 Variant 격리, 여러 번 정정한 뒤 현재 항목 복원, 오래된 지문 거부, 명령 재전송, 삭제 후 재전송 차단을 검사한다.
 
 ## 이후 확장
 

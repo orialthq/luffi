@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import pg from "pg";
-import { createCommonKernelState } from "../src/common/kernel_service.js";
+import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
 import { domainRegistry } from "../src/domains/index.js";
 import { applyKnowledgeCommand } from "../src/knowledge/index.js";
 import { createPostgresRelationalStore } from "../src/storage/postgres_relational_store.js";
@@ -98,6 +98,51 @@ test("real PostgreSQL migrates, imports, serializes concurrent writes, and rolls
       assert.equal(restored.knowledge.assertions.length, 1);
       assert.equal(restored.shoppingCommandReceipts["integration:failed"], undefined);
       assert.equal(restored.shoppingCommandReceipts["integration:counter"], 2);
+
+      const fashion = createCommonKernelService({ ownerId: "integration-fashion-user",
+        store: reopened });
+      for (const [importId, fixture] of [
+        ["pg-blazer", "fashion_a_blazer_live_analysis.json"],
+        ["pg-trousers", "fashion_b_trousers_live_analysis.json"],
+      ]) {
+        const analysis = JSON.parse(await readFile(fileURLToPath(new URL(
+          `./fixtures/${fixture}`, import.meta.url)), "utf8"));
+        await fashion.importReviewedCapture({ importId, reviewed: true,
+          reviewedAt: "2026-09-27T09:00:00Z",
+          capture: { id: importId, asset: { status: "unavailable" } }, analysis });
+      }
+      const created = await fashion.createFashionScenario({ commandId: "pg-create-outfit",
+        activityId: "pg-outfit", confirmed: true,
+        importIds: ["pg-blazer", "pg-trousers"], occasion: "검증용 모임",
+        scheduledAt: "2026-09-28T18:00:00+09:00" });
+      await fashion.acceptProposal({ proposalId: created.proposalId,
+        commandId: "pg-approve-outfit" });
+      const board = await fashion.getBoard("pg-outfit");
+      await fashion.confirmFashionOutfit({ commandId: "pg-confirm-outfit",
+        activityId: "pg-outfit", expectedRevision: board.revision,
+        selections: [
+          { importId: "pg-blazer", slot: "outerwear", color: "차콜",
+            size: "M", ownership: "candidate" },
+          { importId: "pg-trousers", slot: "bottom", color: "베이지",
+            size: "30", ownership: "owned" },
+        ] });
+      const editable = await fashion.getEditableFashionOutfit("pg-outfit");
+      await fashion.correctFashionOutfit({ commandId: "pg-change-option",
+        activityId: "pg-outfit", expectedGraphFingerprint: editable.graphFingerprint,
+        confirmed: true, items: editable.items.map((item, index) => ({
+          variantId: item.variantId, slot: item.slot, ownership: item.ownership,
+          color: index === 0 ? "검정" : item.color,
+          size: index === 0 ? "L" : item.size })) });
+      const afterRestart = createCommonKernelService({ ownerId: "integration-fashion-user",
+        store: createPostgresRelationalStore({ pool,
+          initialState: createCommonKernelState }) });
+      const current = await afterRestart.getEditableFashionOutfit("pg-outfit");
+      assert.notEqual(current.items[0].variantId, editable.items[0].variantId);
+      assert.deepEqual([current.items[0].color, current.items[0].size], ["검정", "L"]);
+      assert.equal((await pool.query(`SELECT count(*)::integer AS n FROM luffi_assertion
+        WHERE owner_id = $1 AND scope_id = $2 AND predicate = 'fashion.line_variant'
+          AND status = 'active'`, ["integration-fashion-user", "pg-outfit"]))
+        .rows[0].n, 2);
     } finally {
       if (pool) await pool.end();
       await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

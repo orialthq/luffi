@@ -1678,45 +1678,65 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       item.predicate === predicate && item.scope?.type === scope.type &&
       item.scope.id === scope.id);
     const has = active("fashion.has_item").filter((item) => item.subjectId === outfit.id);
+    const hasLines = active("fashion.has_line").filter((item) => item.subjectId === outfit.id);
+    const lineVariants = active("fashion.line_variant");
     const slots = active("fashion.item_slot");
     const ownership = active("fashion.ownership");
     const options = active("fashion.variant_options");
     const products = active("fashion.variant_of");
     if (!outfit.items.length || has.length !== outfit.items.length ||
+        ![0, outfit.items.length].includes(hasLines.length) ||
+        lineVariants.length !== hasLines.length ||
         ![0, outfit.items.length].includes(slots.length) ||
-        options.length !== outfit.items.length || products.length !== outfit.items.length ||
         new Set(outfit.items.map((item) => item.variantId)).size !== outfit.items.length) {
       throw new AppError("FASHION_GRAPH_CONFLICT", "코디 항목 연결 수가 달라요.",
         { httpStatus: 409 });
     }
     const lines = new Map();
     for (const original of outfit.items) {
-      const variantId = original.variantId;
+      const role = fingerprint(original.importId ?? original.variantId).slice(0, 16);
+      const lineId = `fashion:${fingerprint([ownerId, activityId]).slice(0, 32)}:line:${role}`;
+      const lineLink = hasLines.filter((item) => item.objectEntityId === lineId);
+      const variantLink = lineVariants.filter((item) => item.subjectId === lineId);
+      const variantId = hasLines.length ? variantLink[0]?.objectEntityId : original.variantId;
       const itemHas = has.filter((item) => item.objectEntityId === variantId);
       const itemSlot = slots.filter((item) => item.subjectId === variantId);
       const itemOwner = ownership.filter((item) => item.subjectId === variantId);
       const itemOptions = options.filter((item) => item.subjectId === variantId);
       const itemProduct = products.filter((item) => item.subjectId === variantId);
-      if (itemHas.length !== 1 || itemSlot.length > 1 || itemOwner.length > 1 ||
+      const originalProduct = products.filter((item) =>
+        item.subjectId === original.variantId);
+      if ((hasLines.length && (lineLink.length !== 1 || variantLink.length !== 1 ||
+          !activeScenarioEntity(state, lineId, "fashion.outfit_line"))) ||
+          itemHas.length !== 1 || itemSlot.length > 1 || itemOwner.length > 1 ||
           itemOptions.length !== 1 || itemProduct.length !== 1 ||
+          originalProduct.length !== 1 ||
+          itemProduct[0].objectEntityId !== originalProduct[0].objectEntityId ||
           !activeScenarioEntity(state, variantId, "core.product_variant") ||
           !activeScenarioEntity(state, itemProduct[0].objectEntityId, "core.product") ||
           !itemOptions[0].typedValue?.value ||
-          requestFingerprint(itemOptions[0].typedValue?.value) !==
-            requestFingerprint({ color: original.color, size: original.size }) ||
+          typeof itemOptions[0].typedValue.value.color !== "string" ||
+          typeof itemOptions[0].typedValue.value.size !== "string" ||
+          !itemOptions[0].typedValue.value.color.trim() ||
+          !itemOptions[0].typedValue.value.size.trim() ||
           (itemSlot[0] && !["outerwear", "top", "bottom", "shoes", "accessory"]
             .includes(itemSlot[0].typedValue?.value)) ||
           (itemOwner[0] && !["owned", "candidate"].includes(itemOwner[0].typedValue?.value))) {
         throw new AppError("FASHION_GRAPH_CONFLICT", "코디 항목의 내용이 서로 달라요.",
           { httpStatus: 409 });
       }
-      lines.set(variantId, { has: itemHas[0], slot: itemSlot[0] ?? null,
+      lines.set(variantId, { has: itemHas[0], lineId,
+        hasLine: lineLink[0] ?? null, lineVariant: variantLink[0] ?? null,
+        slot: itemSlot[0] ?? null,
         ownership: itemOwner[0] ?? null, options: itemOptions[0], product: itemProduct[0],
         original });
     }
+    if (lines.size !== outfit.items.length) throw new AppError("FASHION_GRAPH_CONFLICT",
+      "코디 항목이 같은 옵션을 중복 참조해요.", { httpStatus: 409 });
     const items = [...lines].map(([variantId, line]) => ({ variantId,
-      importId: line.original.importId, color: line.original.color,
-      size: line.original.size,
+      importId: line.original.importId,
+      color: line.options.typedValue.value.color,
+      size: line.options.typedValue.value.size,
       slot: line.slot?.typedValue.value ?? line.original.slot,
       ownership: line.ownership?.typedValue.value ?? "unknown" }));
     if (new Set(items.map((item) => item.slot)).size !== items.length) {
@@ -1725,7 +1745,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     const graphFingerprint = requestFingerprint([...lines].map(([id, line]) =>
       [id, line.has.id, line.slot?.id ?? null, line.ownership?.id ?? null,
-        line.options.id, line.product.id]));
+        line.options.id, line.product.id, line.hasLine?.id ?? null,
+        line.lineVariant?.id ?? null]));
     const revision = 1 + Object.values(state.fashionCorrectionReceipts ?? {}).filter((item) =>
       item.ownerId === ownerId && item.activityId === activityId && !item.deleted).length;
     return { current, scenario, source, outfit, items, lines,
@@ -2988,17 +3009,24 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           !Array.isArray(input.items) || input.items.length < 1 ||
           input.items.length > 5 || input.items.some((item) =>
             !item || typeof item !== "object" || Array.isArray(item) ||
-            Object.keys(item).some((key) => !["variantId", "slot", "ownership"].includes(key)) ||
+            Object.keys(item).some((key) => !["variantId", "slot", "ownership",
+              "color", "size"].includes(key)) ||
             !["outerwear", "top", "bottom", "shoes", "accessory"].includes(item.slot) ||
-            !["owned", "candidate", "unknown"].includes(item.ownership))) {
-          throw new AppError("INVALID_REQUEST", "정정할 코디 자리와 소유 상태를 확인해 주세요.",
+            !["owned", "candidate", "unknown"].includes(item.ownership) ||
+            (item.color === undefined) !== (item.size === undefined) ||
+            (item.color !== undefined && ["color", "size"].some((key) =>
+              typeof item[key] !== "string" || !item[key].trim() ||
+              item[key].trim().length > 80)))) {
+          throw new AppError("INVALID_REQUEST", "정정할 코디 자리·옵션·소유 상태를 확인해 주세요.",
             { httpStatus: 400 });
         }
         const commandId = safeId(input.commandId, "commandId");
         const activityId = safeId(input.activityId, "activityId");
         const items = input.items.map((item) => ({
           variantId: safeId(item.variantId, "variantId"),
-          slot: item.slot, ownership: item.ownership }));
+          slot: item.slot, ownership: item.ownership,
+          ...(item.color !== undefined ? { color: item.color.trim(),
+            size: item.size.trim() } : {}) }));
         if (new Set(items.map((item) => item.variantId)).size !== items.length ||
             new Set(items.map((item) => item.slot)).size !== items.length) {
           throw new AppError("INVALID_REQUEST", "코디 항목이나 자리가 중복됐어요.",
@@ -3028,8 +3056,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             throw new AppError("INVALID_REQUEST", "확정한 상품만 정정할 수 있어요.",
               { httpStatus: 400 });
           }
-          if (requestFingerprint(items) === requestFingerprint(graph.items.map((item) =>
-            ({ variantId: item.variantId, slot: item.slot, ownership: item.ownership })))) {
+          const desired = items.map((item) => {
+            const current = graph.items.find((entry) => entry.variantId === item.variantId);
+            return { ...item, color: item.color ?? current.color,
+              size: item.size ?? current.size };
+          });
+          if (requestFingerprint(desired) === requestFingerprint(graph.items.map((item) =>
+            ({ variantId: item.variantId, slot: item.slot, ownership: item.ownership,
+              color: item.color, size: item.size })))) {
             throw new AppError("UNCHANGED_OUTFIT", "변경된 코디 내용이 없어요.",
               { httpStatus: 409 });
           }
@@ -3050,34 +3084,79 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               importedSourceIds: graph.scenario.importIds.map((id) =>
                 state.importReceipts[id].sourceId) } });
           apply("version", "source.version.add", { id: versionId, sourceId,
-            contentHash: fingerprint(items), content: { items }, capturedAt: now });
-          for (const [index, item] of items.entries()) {
+            contentHash: fingerprint(desired), content: { items: desired }, capturedAt: now });
+          for (const [index, item] of desired.entries()) {
             const line = graph.lines.get(item.variantId);
             const role = fingerprint(item.variantId).slice(0, 16);
             const evidenceId = `${stem}:evidence:${role}`;
             apply(`evidence:${role}`, "evidence.add", { id: evidenceId,
               sourceVersionId: versionId,
-              quote: `${item.slot} · ${item.ownership}`,
+              quote: `${item.slot} · ${item.color} · ${item.size} · ${item.ownership}`,
               locator: { kind: "user_confirmation", jsonPointer: `/items/${index}` } });
-            const assertion = (field, predicate, value, type) => ({
-              id: `${stem}:${field}:${role}`, subjectId: item.variantId,
+            const assertion = (field, subjectId, predicate, value, type = null) => ({
+              id: `${stem}:${field}:${role}`, subjectId,
               predicate, scope: graph.scope, origin: "user_reported",
               assertedBy: { type: "user", id: ownerId },
               evidenceIds: [evidenceId], observedAt: now,
-              typedValue: { type, value } });
-            if (line.slot?.typedValue?.value !== item.slot) {
-              const next = assertion("slot", "fashion.item_slot", item.slot, "fashion.item_slot");
+              ...(type ? { typedValue: { type, value } } : { objectEntityId: value }) });
+            const variantChanged = item.color !== line.options.typedValue.value.color ||
+              item.size !== line.options.typedValue.value.size;
+            const nextVariantId = variantChanged ? `${stem}:variant:${role}` : item.variantId;
+            if (variantChanged) {
+              apply(`variant:${role}`, "entity.create", { id: nextVariantId,
+                type: "core.product_variant", label: "사용자가 정정한 색상·사이즈" });
+              apply(`variant-of:${role}`, "assertion.add", assertion("variant-of",
+                nextVariantId, "fashion.variant_of", line.product.objectEntityId));
+              apply(`variant-options:${role}`, "assertion.add", assertion("variant-options",
+                nextVariantId, "fashion.variant_options",
+                { color: item.color, size: item.size }, "fashion.variant_options"));
+              apply(`has-item:${role}`, "assertion.correct", {
+                assertionId: line.has.id, expectedRevision: line.has.revision,
+                assertion: assertion("has-item", graph.outfit.id,
+                  "fashion.has_item", nextVariantId) });
+            }
+            if (!line.hasLine) {
+              if (!activeScenarioEntity(state, line.lineId, "fashion.outfit_line")) {
+                apply(`line:${role}`, "entity.create", { id: line.lineId,
+                  type: "fashion.outfit_line", label: "사용자가 선택한 코디 항목" });
+              }
+              apply(`has-line:${role}`, "assertion.add", assertion("has-line",
+                graph.outfit.id, "fashion.has_line", line.lineId));
+              apply(`line-variant:${role}`, "assertion.add", assertion("line-variant",
+                line.lineId, "fashion.line_variant", nextVariantId));
+            } else if (variantChanged) {
+              apply(`line-variant:${role}`, "assertion.correct", {
+                assertionId: line.lineVariant.id,
+                expectedRevision: line.lineVariant.revision,
+                assertion: assertion("line-variant", line.lineId,
+                  "fashion.line_variant", nextVariantId) });
+            }
+            if (variantChanged) {
+              if (line.slot) apply(`retract-slot:${role}`, "assertion.retract", {
+                assertionId: line.slot.id, expectedRevision: line.slot.revision });
+              apply(`slot:${role}`, "assertion.add", assertion("slot",
+                nextVariantId, "fashion.item_slot", item.slot, "fashion.item_slot"));
+            } else if (line.slot?.typedValue?.value !== item.slot) {
+              const next = assertion("slot", nextVariantId,
+                "fashion.item_slot", item.slot, "fashion.item_slot");
               if (line.slot) apply(`slot:${role}`, "assertion.correct", {
                 assertionId: line.slot.id, expectedRevision: line.slot.revision, assertion: next });
               else apply(`slot:${role}`, "assertion.add", next);
             }
-            if (line.ownership?.typedValue?.value !== item.ownership) {
+            if (variantChanged) {
+              if (line.ownership) apply(`retract-ownership:${role}`, "assertion.retract", {
+                assertionId: line.ownership.id,
+                expectedRevision: line.ownership.revision });
+              if (item.ownership !== "unknown") apply(`ownership:${role}`,
+                "assertion.add", assertion("ownership", nextVariantId,
+                  "fashion.ownership", item.ownership, "fashion.ownership"));
+            } else if (line.ownership?.typedValue?.value !== item.ownership) {
               if (item.ownership === "unknown") {
                 if (line.ownership) apply(`ownership:${role}`, "assertion.retract", {
                   assertionId: line.ownership.id,
                   expectedRevision: line.ownership.revision });
               } else {
-                const next = assertion("ownership", "fashion.ownership",
+                const next = assertion("ownership", nextVariantId, "fashion.ownership",
                   item.ownership, "fashion.ownership");
                 if (line.ownership) apply(`ownership:${role}`, "assertion.correct", {
                   assertionId: line.ownership.id,
@@ -5158,6 +5237,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               { type: "fashion.variant_options", value: {
                 color: selection.color, size: selection.size } });
             assertion("has-item", outfitId, "fashion.has_item", variantId);
+            const lineId = `${stem}:line:${role}`;
+            applyKnowledge(`line:${role}`, "entity.create", { id: lineId,
+              type: "fashion.outfit_line", label: "사용자가 선택한 코디 항목" });
+            assertion("has-line", outfitId, "fashion.has_line", lineId);
+            assertion("line-variant", lineId, "fashion.line_variant", variantId);
             assertion("item-slot", variantId, "fashion.item_slot", null,
               { type: "fashion.item_slot", value: selection.slot });
             if (selection.ownership !== "unknown") {

@@ -46,6 +46,85 @@ const selections = [
 ];
 
 for (const backend of ["json", "postgres"]) {
+test(`changing fashion options creates a new linked variant without changing another outfit (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  for (const [activityId, commandId] of [["outfit-1", "create-first"],
+    ["outfit-2", "create-second"]]) {
+    const created = await service.createFashionScenario({ ...scenario,
+      activityId, commandId });
+    await service.acceptProposal({ proposalId: created.proposalId,
+      commandId: `approve-${activityId}` });
+    const board = await service.getBoard(activityId);
+    await service.confirmFashionOutfit({ commandId: `confirm-${activityId}`,
+      activityId, expectedRevision: board.revision, selections });
+  }
+  const first = await service.getEditableFashionOutfit("outfit-1");
+  const second = await service.getEditableFashionOutfit("outfit-2");
+  assert.equal(first.items[0].variantId, second.items[0].variantId);
+  const beforeInvalid = await store.snapshot();
+  await assert.rejects(service.correctFashionOutfit({ commandId: "missing-option-size",
+    activityId: "outfit-1", expectedGraphFingerprint: first.graphFingerprint,
+    confirmed: true, items: first.items.map((item, index) => ({
+      variantId: item.variantId, slot: item.slot, ownership: item.ownership,
+      ...(index === 0 ? { color: "검정" } : {}) })) }),
+  (error) => error.code === "INVALID_REQUEST");
+  assert.deepEqual(await store.snapshot(), beforeInvalid);
+  const historical = structuredClone((await service.getBoard("outfit-1")).results);
+  const request = { commandId: "change-jacket-option", activityId: "outfit-1",
+    expectedGraphFingerprint: first.graphFingerprint, confirmed: true,
+    items: first.items.map((item, index) => ({ variantId: item.variantId,
+      slot: item.slot, ownership: index === 0 ? "owned" : item.ownership,
+      color: index === 0 ? "검정" : item.color,
+      size: index === 0 ? "L" : item.size })) };
+  const corrected = await service.correctFashionOutfit(request);
+  assert.equal((await service.correctFashionOutfit(request)).replayed, true);
+  const now = await service.getEditableFashionOutfit("outfit-1");
+  assert.notEqual(now.items[0].variantId, first.items[0].variantId);
+  assert.deepEqual([now.items[0].color, now.items[0].size, now.items[0].ownership],
+    ["검정", "L", "owned"]);
+  assert.deepEqual(await service.getEditableFashionOutfit("outfit-2"), second);
+  assert.deepEqual((await service.getBoard("outfit-1")).results, historical);
+  const graph = (await store.snapshot()).knowledge;
+  const active = (predicate, activityId) => graph.assertions.filter((item) =>
+    item.status === "active" && item.predicate === predicate && item.scope?.id === activityId);
+  assert.equal(active("fashion.has_item", "outfit-1").find((item) =>
+    item.objectEntityId === now.items[0].variantId)?.objectEntityId, now.items[0].variantId);
+  assert.equal(active("fashion.line_variant", "outfit-1").find((item) =>
+    item.objectEntityId === now.items[0].variantId)?.objectEntityId, now.items[0].variantId);
+  assert.equal(active("fashion.variant_of", "outfit-1").find((item) =>
+    item.subjectId === now.items[0].variantId)?.objectEntityId,
+  active("fashion.variant_of", "outfit-1").find((item) =>
+    item.subjectId === first.items[0].variantId)?.objectEntityId);
+  assert.equal(active("fashion.variant_options", "outfit-1").find((item) =>
+    item.subjectId === now.items[0].variantId)?.typedValue.value.color, "검정");
+  assert.equal(active("fashion.has_item", "outfit-2").find((item) =>
+    item.objectEntityId === second.items[0].variantId)?.objectEntityId,
+  second.items[0].variantId);
+  await assert.rejects(service.correctFashionOutfit({ ...request,
+    commandId: "stale-option-change" }),
+  (error) => error.code === "FASHION_REVISION_CONFLICT");
+  const nextRequest = { commandId: "change-option-again", activityId: "outfit-1",
+    expectedGraphFingerprint: now.graphFingerprint, confirmed: true,
+    items: now.items.map((item, index) => ({ variantId: item.variantId,
+      slot: item.slot, ownership: item.ownership,
+      color: index === 0 ? "남색" : item.color,
+      size: index === 0 ? "S" : item.size })) };
+  await service.correctFashionOutfit(nextRequest);
+  const latest = await service.getEditableFashionOutfit("outfit-1");
+  assert.notEqual(latest.items[0].variantId, now.items[0].variantId);
+  assert.deepEqual([latest.items[0].color, latest.items[0].size], ["남색", "S"]);
+  assert.equal(latest.revision, now.revision + 1);
+  assert.ok(graph.sources.some((item) => item.id === corrected.sourceId));
+  await service.knowledgeCommand({ commandId: "delete-first-option-correction",
+    type: "source.delete", payload: { sourceId: corrected.sourceId } });
+  await assert.rejects(service.getBoard("outfit-1"),
+    (error) => error.code === "NOT_FOUND");
+  assert.deepEqual(await service.getEditableFashionOutfit("outfit-2"), second);
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate?.startsWith("fashion.") &&
+    item.scope?.id === "outfit-1").length, 0);
+});
+
 test(`deleting a fashion correction also removes its now incomplete activity (${backend})`, async (t) => {
   const { service, store } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
@@ -70,17 +149,18 @@ test(`deleting a fashion correction also removes its now incomplete activity (${
     item.scope?.id === "outfit-1").length, 0);
 });
 
-test(`fashion correction upgrades an older outfit without slot assertions (${backend})`, async (t) => {
+test(`fashion correction upgrades an older outfit without line or slot assertions (${backend})`, async (t) => {
   const { service, store } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-legacy" });
   const board = await service.getBoard("outfit-1");
   await service.confirmFashionOutfit({ commandId: "confirm-legacy",
     activityId: "outfit-1", expectedRevision: board.revision, selections });
-  const slotAssertions = (await store.snapshot()).knowledge.assertions.filter((item) =>
-    item.status === "active" && item.predicate === "fashion.item_slot" &&
+  const legacyOnly = (await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && ["fashion.item_slot", "fashion.has_line",
+      "fashion.line_variant"].includes(item.predicate) &&
     item.scope?.id === "outfit-1");
-  for (const assertion of slotAssertions) {
+  for (const assertion of legacyOnly) {
     await service.knowledgeCommand({ commandId: `legacy-remove:${assertion.id}`,
       type: "assertion.retract", payload: { assertionId: assertion.id,
         expectedRevision: assertion.revision } });
@@ -92,9 +172,10 @@ test(`fashion correction upgrades an older outfit without slot assertions (${bac
     items: editable.items.map((item, index) => ({ variantId: item.variantId,
       slot: item.slot, ownership: index === 0 ? "owned" : item.ownership })) });
   const upgraded = (await store.snapshot()).knowledge.assertions.filter((item) =>
-    item.status === "active" && item.predicate === "fashion.item_slot" &&
+    item.status === "active" && ["fashion.item_slot", "fashion.has_line",
+      "fashion.line_variant"].includes(item.predicate) &&
     item.scope?.id === "outfit-1");
-  assert.equal(upgraded.length, 2);
+  assert.equal(upgraded.length, 6);
 });
 
 test(`fashion correction changes slots and ownership without rewriting wear history (${backend})`, async (t) => {

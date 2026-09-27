@@ -7,9 +7,10 @@ const outfitItem = object({ slot: text, variantId: text,
 const outfit = object({ id: text, occasion: text, items: array(ref("fashion.outfit_item"), 1) });
 
 export const fashionPack = {
-  id: "fashion", version: 3, compatibleKernelVersions: [1],
-  entityTypes: ["core.product", "core.product_variant", "core.owned_item", "fashion.outfit", "fashion.wear_experience"],
+  id: "fashion", version: 4, compatibleKernelVersions: [1],
+  entityTypes: ["core.product", "core.product_variant", "core.owned_item", "fashion.outfit", "fashion.outfit_line", "fashion.wear_experience"],
   types: [
+    { id: "fashion.outfit_line", schema: object({ id: text }) },
     { id: "fashion.outfit_item", schema: outfitItem },
     { id: "fashion.outfit", schema: outfit, validate: (value) => assertUnique(value.items, "slot", "$.items") },
     { id: "fashion.ownership", schema: enumeration("owned", "candidate", "unknown") },
@@ -32,6 +33,8 @@ export const fashionPack = {
     relation("fashion.variant_of", ["core.product_variant"], ["core.product"], "one"),
     valueRelation("fashion.variant_options", ["core.product_variant"], "fashion.variant_options", "explicit_user_confirmation"),
     relation("fashion.has_item", ["fashion.outfit"], ["core.product_variant", "core.owned_item"]),
+    relation("fashion.has_line", ["fashion.outfit"], ["fashion.outfit_line"]),
+    relation("fashion.line_variant", ["fashion.outfit_line"], ["core.product_variant"], "one"),
     valueRelation("fashion.item_slot", ["core.product_variant"], "fashion.item_slot", "explicit_user_confirmation"),
     relation("fashion.wore_outfit", ["fashion.wear_experience"], ["fashion.outfit"], "one"),
     { ...valueRelation("fashion.ownership", ["core.product_variant"], "fashion.ownership", "explicit_user_observation"), allowedValues: ["owned", "candidate", "unknown"], unknownValues: ["unknown"] },

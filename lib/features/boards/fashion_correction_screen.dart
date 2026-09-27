@@ -21,13 +21,22 @@ final class _FashionItem {
   _FashionItem(KernelJson value)
     : variantId = value['variantId'] as String,
       label = '${value['color']} · ${value['size']}',
+      color = TextEditingController(text: value['color'] as String),
+      size = TextEditingController(text: value['size'] as String),
       slot = value['slot'] as String,
       ownership = value['ownership'] as String;
 
   final String variantId;
   final String label;
+  final TextEditingController color;
+  final TextEditingController size;
   String slot;
   String ownership;
+
+  void dispose() {
+    color.dispose();
+    size.dispose();
+  }
 }
 
 final class _FashionCorrectionScreenState
@@ -46,6 +55,7 @@ final class _FashionCorrectionScreenState
   };
 
   final _items = <_FashionItem>[];
+  final _allItems = <_FashionItem>[];
   KernelJson? _data;
   KernelJson? _pending;
   Object? _error;
@@ -55,6 +65,14 @@ final class _FashionCorrectionScreenState
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    for (final item in _allItems) {
+      item.dispose();
+    }
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -75,6 +93,7 @@ final class _FashionCorrectionScreenState
             (raw) => _FashionItem(Map<String, Object?>.from(raw as Map)),
           ),
         );
+      _allItems.addAll(_items);
       setState(() => _data = data);
     } catch (error) {
       if (mounted) setState(() => _error = error);
@@ -89,12 +108,24 @@ final class _FashionCorrectionScreenState
       setState(() => _error = '같은 코디 자리에 두 상품을 둘 수 없어요.');
       return;
     }
+    if (_items.any(
+      (item) =>
+          item.color.text.trim().isEmpty ||
+          item.color.text.trim().length > 80 ||
+          item.size.text.trim().isEmpty ||
+          item.size.text.trim().length > 80,
+    )) {
+      setState(() => _error = '색상과 사이즈를 각각 1~80자로 입력해 주세요.');
+      return;
+    }
     final items = _items
         .map(
           (item) => <String, Object?>{
             'variantId': item.variantId,
             'slot': item.slot,
             'ownership': item.ownership,
+            'color': item.color.text.trim(),
+            'size': item.size.text.trim(),
           },
         )
         .toList();
@@ -109,7 +140,8 @@ final class _FashionCorrectionScreenState
             children: [
               for (final entry in _items.asMap().entries)
                 Text(
-                  '${_slots[entry.value.slot]} · ${entry.value.label} · '
+                  '${_slots[entry.value.slot]} · '
+                  '${entry.value.color.text.trim()} · ${entry.value.size.text.trim()} · '
                   '${_ownerships[entry.value.ownership]}',
                 ),
               const SizedBox(height: 12),
@@ -167,7 +199,7 @@ final class _FashionCorrectionScreenState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('코디 자리·소유 상태 정정')),
+    appBar: AppBar(title: const Text('코디 옵션·자리 정정')),
     body: _data == null && _busy
         ? const Center(child: CircularProgressIndicator())
         : ListView(
@@ -187,7 +219,7 @@ final class _FashionCorrectionScreenState
               ],
               if (_data != null) ...[
                 const Text(
-                  '현재 코디의 자리와 소유 상태를 정정합니다. 색상·사이즈는 처음 확인한 옵션으로 유지됩니다.',
+                  '현재 코디의 색상·사이즈·자리·소유 상태를 정정합니다. 옵션을 바꾸면 새 상품 옵션으로 연결됩니다.',
                 ),
                 ExpansionTile(
                   title: const Text('처음 확정한 코디 보기'),
@@ -209,7 +241,19 @@ final class _FashionCorrectionScreenState
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(item.label),
+                          Text('처음 선택한 옵션: ${item.label}'),
+                          TextField(
+                            key: Key('fashion-color-${item.variantId}'),
+                            controller: item.color,
+                            maxLength: 80,
+                            decoration: const InputDecoration(labelText: '색상'),
+                          ),
+                          TextField(
+                            key: Key('fashion-size-${item.variantId}'),
+                            controller: item.size,
+                            maxLength: 80,
+                            decoration: const InputDecoration(labelText: '사이즈'),
+                          ),
                           DropdownButtonFormField<String>(
                             initialValue: item.slot,
                             decoration: const InputDecoration(
