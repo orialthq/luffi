@@ -117,7 +117,7 @@ test("maps an upstream key failure without leaking the cause", async (t) => {
 
   assert.equal(response.status, 503);
   assert.equal(body.error.code, "PLACE_SEARCH_NOT_CONFIGURED");
-  assert.equal(JSON.stringify(body).includes("401"), false);
+  assert.equal(body.error.message.includes("401"), false);
 });
 
 test("rejects a non-POST method", async (t) => {

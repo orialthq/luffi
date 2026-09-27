@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
+import { createCommonKernelService } from "../src/common/kernel_service.js";
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
-import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createScenarioTestStore } from "./relational_fixture.js";
 import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const imagePath = fileURLToPath(new URL("./fixtures/life_tip_receipts.png", import.meta.url));
@@ -16,11 +14,8 @@ const analysisPath = fileURLToPath(new URL(
   "./fixtures/life_tip_receipts_live_analysis.json", import.meta.url));
 const imageHash = "711b224d91b4b1b6e888e281bf208ec310dd486c82b1975b472a328999f96b46";
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-life-tip-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const filePath = join(folder, "state.json");
-  const store = createJsonStateStore({ filePath, initialState: createCommonKernelState });
+async function fixture(t, backend) {
+  const { store, reopenStore } = await createScenarioTestStore(t, backend, "life_tip");
   const service = createCommonKernelService({ ownerId: "reader", store });
   const image = await fs.readFile(imagePath);
   assert.equal(createHash("sha256").update(image).digest("hex"), imageHash);
@@ -37,7 +32,7 @@ async function fixture(t) {
   const imported = await service.importReviewedCapture({ importId: "receipts",
     reviewed: true, reviewedAt: "2026-09-27T09:00:00+09:00",
     capture: { id: "receipts", asset: { status: "unavailable" } }, analysis });
-  return { service, store, filePath, imported, analysis };
+  return { service, store, reopenStore, imported, analysis };
 }
 
 const scenario = { commandId: "create-life-tip", activityId: "tip-1",
@@ -47,8 +42,9 @@ const resultValue = (board, taskId) => {
   return board.results.find((result) => result.id === ref)?.value;
 };
 
-test("a live image analysis becomes a confirmed checklist and only done steps become executions", async (t) => {
-  const { service, store, filePath } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`a live image analysis becomes a confirmed checklist and only done steps become executions (${backend})`, async (t) => {
+  const { service, store, reopenStore } = await fixture(t, backend);
   const created = await service.createLifeTipScenario(scenario);
   assert.equal(created.candidateCount, 3);
   assert.equal((await service.createLifeTipScenario(scenario)).replayed, true);
@@ -84,7 +80,7 @@ test("a live image analysis becomes a confirmed checklist and only done steps be
     item.predicate === "life_tip.execution_for_action" && item.status === "active")
     .map((item) => item.objectEntityId), [plan.actions[0].id]);
   const reopened = createCommonKernelService({ ownerId: "reader",
-    store: createJsonStateStore({ filePath, initialState: createCommonKernelState }) });
+    store: reopenStore() });
   assert.equal((await reopened.confirmLifeTipActions({ commandId: "confirm-life-tip",
     activityId: "tip-1", expectedRevision: confirmed.revision - 1,
     factIndexes })).replayed, true);
@@ -93,8 +89,8 @@ test("a live image analysis becomes a confirmed checklist and only done steps be
     actions })).replayed, true);
 });
 
-test("life-tip plan refuses forged task completion and invalid selections or outcomes", async (t) => {
-  const { service, store } = await fixture(t);
+test(`life-tip plan refuses forged task completion and invalid selections or outcomes (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createLifeTipScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-life-tip" });
@@ -139,8 +135,8 @@ test("life-tip plan refuses forged task completion and invalid selections or out
     item.kind === "user_report" && item.provenance?.scenario === "life_tip").length, 0);
 });
 
-test("deleted image source removes its life-tip plan and blocks replay", async (t) => {
-  const { service, store, imported } = await fixture(t);
+test(`deleted image source removes its life-tip plan and blocks replay (${backend})`, async (t) => {
+  const { service, store, imported } = await fixture(t, backend);
   const created = await service.createLifeTipScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-life-tip" });
@@ -165,8 +161,8 @@ test("deleted image source removes its life-tip plan and blocks replay", async (
     item.predicate?.startsWith("life_tip.") && item.scope?.id === "tip-1"));
 });
 
-test("changed fact invalidates a pending plan and non-tip content is refused", async (t) => {
-  const { service, store, imported, analysis } = await fixture(t);
+test(`changed fact invalidates a pending plan and non-tip content is refused (${backend})`, async (t) => {
+  const { service, store, imported, analysis } = await fixture(t, backend);
   const wrong = structuredClone(analysis);
   wrong.tags = wrong.tags.filter((item) => item.value !== "생활·팁");
   await service.importReviewedCapture({ importId: "not-life-tip",
@@ -189,8 +185,8 @@ test("changed fact invalidates a pending plan and non-tip content is refused", a
   (error) => error.code === "CONTEXT_STALE");
 });
 
-test("corrected tip text reaches the confirmed checklist after review", async (t) => {
-  const { service, store, imported } = await fixture(t);
+test(`corrected tip text reaches the confirmed checklist after review (${backend})`, async (t) => {
+  const { service, store, imported } = await fixture(t, backend);
   const created = await service.createLifeTipScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-before-tip-correction" });
@@ -214,8 +210,8 @@ test("corrected tip text reaches the confirmed checklist after review", async (t
   assert.equal(plan.actions[0].text, "영수증을 날짜별로 먼저 분류한다");
 });
 
-test("same-title captures do not automatically become one tip identity", async (t) => {
-  const { service, analysis } = await fixture(t);
+test(`same-title captures do not automatically become one tip identity (${backend})`, async (t) => {
+  const { service, analysis } = await fixture(t, backend);
   await service.importReviewedCapture({ importId: "another-receipts",
     reviewed: true, reviewedAt: "2026-09-27T10:00:00+09:00",
     capture: { id: "another-receipts", asset: { status: "unavailable" } },
@@ -241,3 +237,27 @@ test("same-title captures do not automatically become one tip identity", async (
   assert.equal(firstPlan.title, secondPlan.title);
   assert.notEqual(firstPlan.tipId, secondPlan.tipId);
 });
+
+test(`retracted checklist text blocks an all-skipped report (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createLifeTipScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-life-tip" });
+  let board = await service.getBoard("tip-1");
+  await service.confirmLifeTipActions({ commandId: "confirm-life-tip", activityId: "tip-1",
+    expectedRevision: board.revision, factIndexes: [1, 3] });
+  board = await service.getBoard("tip-1");
+  const plan = resultValue(board, "confirm_actions").plan;
+  const edge = (await store.snapshot()).knowledge.assertions.find((item) =>
+    item.status === "active" && item.subjectId === plan.actions[1].id &&
+    item.predicate === "life_tip.action_text");
+  await service.knowledgeCommand({ commandId: "retract-action-text", type: "assertion.retract",
+    payload: { assertionId: edge.id } });
+  board = await service.getBoard("tip-1");
+  await assert.rejects(service.recordLifeTipOutcomes({ commandId: "report-stale-tip",
+    activityId: "tip-1", expectedRevision: board.revision,
+    actions: plan.actions.map((action) => ({ actionId: action.id, status: "skipped" })) }),
+  (error) => error.code === "CONTEXT_STALE");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "life_tip.execution_for_action").length, 0);
+});
+}

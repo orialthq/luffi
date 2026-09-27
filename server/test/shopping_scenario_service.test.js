@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
+import { createCommonKernelService } from "../src/common/kernel_service.js";
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
-import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createScenarioTestStore } from "./relational_fixture.js";
 
 const cases = [
   ["a_fabric_box", "ce71495de8243c750e0b17a67499534c9f9e691b6d2cb818046e38706634e542", "12,900원"],
@@ -17,11 +15,8 @@ const cases = [
 const scenario = { commandId: "create-shopping", activityId: "shop-1",
   confirmed: true, purpose: "수납함 고르기", importIds: cases.map(([name]) => name) };
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-shopping-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const filePath = join(folder, "state.json");
-  const store = createJsonStateStore({ filePath, initialState: createCommonKernelState });
+async function fixture(t, backend) {
+  const { store, reopenStore } = await createScenarioTestStore(t, backend, "shopping");
   const service = createCommonKernelService({ ownerId: "buyer", store });
   const imported = [];
   for (const [name, hash, price] of cases) {
@@ -40,7 +35,7 @@ async function fixture(t) {
       reviewed: true, reviewedAt: "2026-09-27T09:00:00+09:00",
       capture: { id: name, asset: { status: "unavailable" } }, analysis }));
   }
-  return { service, store, filePath, imported };
+  return { service, store, reopenStore, imported };
 }
 
 const output = (board, taskId) => {
@@ -48,8 +43,9 @@ const output = (board, taskId) => {
   return board.results.find((item) => item.id === task.latestOutputRef)?.value;
 };
 
-test("analyzed shopping images become comparable candidates; only a user report creates purchase evidence", async (t) => {
-  const { service, store, filePath } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`analyzed shopping images become comparable candidates; only a user report creates purchase evidence (${backend})`, async (t) => {
+  const { service, store, reopenStore } = await fixture(t, backend);
   const created = await service.createShoppingScenario(scenario);
   assert.equal((await service.createShoppingScenario(scenario)).replayed, true);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-shopping" });
@@ -82,7 +78,7 @@ test("analyzed shopping images become comparable candidates; only a user report 
   assert.equal(state.knowledge.assertions.find((item) => item.status === "active" &&
     item.predicate === "shopping.purchase_for_choice")?.objectEntityId, choice.id);
   const reopened = createCommonKernelService({ ownerId: "buyer",
-    store: createJsonStateStore({ filePath, initialState: createCommonKernelState }) });
+    store: reopenStore() });
   assert.equal((await reopened.confirmShoppingChoice({ commandId: "choose-shopping",
     activityId: "shop-1", expectedRevision: confirmed.revision - 1,
     selectedImportId: "a_fabric_box", quantity: 2 })).replayed, true);
@@ -91,8 +87,8 @@ test("analyzed shopping images become comparable candidates; only a user report 
     status: "purchased", actualPaidKrw: 13500 })).replayed, true);
 });
 
-test("shopping rejects task bypasses, out-of-plan choices, and unsupported purchase amounts", async (t) => {
-  const { service, store } = await fixture(t);
+test(`shopping rejects task bypasses, out-of-plan choices, and unsupported purchase amounts (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createShoppingScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-shopping" });
   let board = await service.getBoard("shop-1");
@@ -140,8 +136,8 @@ test("shopping rejects task bypasses, out-of-plan choices, and unsupported purch
     item.predicate === "shopping.actual_paid_krw").length, 0);
 });
 
-test("deleting a source removes its shopping scenario and prevents replay", async (t) => {
-  const { service, store, imported } = await fixture(t);
+test(`deleting a source removes its shopping scenario and prevents replay (${backend})`, async (t) => {
+  const { service, store, imported } = await fixture(t, backend);
   const created = await service.createShoppingScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-shopping" });
   let board = await service.getBoard("shop-1");
@@ -162,8 +158,8 @@ test("deleting a source removes its shopping scenario and prevents replay", asyn
     item.predicate?.startsWith("shopping.") && item.scope?.id === "shop-1"));
 });
 
-test("retracting observed price evidence invalidates an unapproved shopping plan", async (t) => {
-  const { service, store, imported } = await fixture(t);
+test(`retracting observed price evidence invalidates an unapproved shopping plan (${backend})`, async (t) => {
+  const { service, store, imported } = await fixture(t, backend);
   const created = await service.createShoppingScenario(scenario);
   const state = await store.snapshot();
   const field = state.knowledge.assertions.find((item) => item.status === "active" &&
@@ -175,3 +171,27 @@ test("retracting observed price evidence invalidates an unapproved shopping plan
   await assert.rejects(service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-old-price" }), (error) => error.code === "CONTEXT_STALE");
 });
+
+test(`retracted offer link prevents a purchase outcome (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-shopping" });
+  let board = await service.getBoard("shop-1");
+  await service.confirmShoppingChoice({ commandId: "choose-shopping",
+    activityId: "shop-1", expectedRevision: board.revision,
+    selectedImportId: "a_fabric_box", quantity: 1 });
+  const edge = (await store.snapshot()).knowledge.assertions.find((item) =>
+    item.status === "active" && item.predicate === "shopping.choice_offer");
+  await service.knowledgeCommand({ commandId: "retract-choice-offer",
+    type: "assertion.retract", payload: { assertionId: edge.id } });
+  board = await service.getBoard("shop-1");
+  await assert.rejects(service.recordShoppingPurchaseOutcome({
+    commandId: "report-stale-shopping", activityId: "shop-1",
+    expectedRevision: board.revision, status: "not_purchased" }),
+  (error) => ["CONTEXT_STALE", "TASK_BLOCKED"].includes(error.code));
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "shopping.purchase_for_choice").length, 0);
+});
+
+}

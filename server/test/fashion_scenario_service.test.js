@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
+import { createCommonKernelService } from "../src/common/kernel_service.js";
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
-import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createScenarioTestStore } from "./relational_fixture.js";
 import { makeValidAnalysis, makeFiling, makeTag } from "./fixtures.js";
 import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
@@ -17,11 +15,8 @@ const cases = [
   ["b_trousers", "베이지 슬랙스", "3c0e56a2b659de402f0b67129a060d479274c8a093eb9fb1c3c2f0f63ecd9d65"],
 ];
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-fashion-scenario-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const store = createJsonStateStore({ filePath: join(folder, "state.json"),
-    initialState: createCommonKernelState });
+async function fixture(t, backend) {
+  const { store } = await createScenarioTestStore(t, backend, "fashion");
   const service = createCommonKernelService({ ownerId: "stylist", store });
   const imports = {};
   for (const [name, title, hash] of cases) {
@@ -50,8 +45,9 @@ const selections = [
   { importId: "b_trousers", slot: "bottom", color: "베이지", size: "30", ownership: "owned" },
 ];
 
-test("real fashion image responses become a user-confirmed outfit and a reported wear", async (t) => {
-  const { service, store } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`real fashion image responses become a user-confirmed outfit and a reported wear (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
   assert.equal(created.candidateCount, 2);
   assert.equal((await service.createFashionScenario(scenario)).replayed, true);
@@ -112,8 +108,8 @@ test("real fashion image responses become a user-confirmed outfit and a reported
     item.type === "core.product_variant" && item.status === "active").length, 2);
 });
 
-test("duplicate slots and unconfirmed wear cannot invent ownership or wearing", async (t) => {
-  const { service, store } = await fixture(t);
+test(`duplicate slots and unconfirmed wear cannot invent ownership or wearing (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-outfit" });
   let board = await service.getBoard("outfit-1");
@@ -134,8 +130,8 @@ test("duplicate slots and unconfirmed wear cannot invent ownership or wearing", 
     item.status === "active").length, 0);
 });
 
-test("corrected product title produces a reviewed fashion patch", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`corrected product title produces a reviewed fashion patch (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-before-title-correction" });
@@ -160,8 +156,8 @@ test("corrected product title produces a reviewed fashion patch", async (t) => {
   assert.equal(after.pendingChanges.length, 0);
 });
 
-test("confirmed outfit remains unchanged when its source title is corrected", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`confirmed outfit remains unchanged when its source title is corrected (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-protected-outfit" });
@@ -179,8 +175,8 @@ test("confirmed outfit remains unchanged when its source title is corrected", as
   assert.deepEqual((await service.getBoard("outfit-1")).results, resultBefore);
 });
 
-test("source deletion removes the dependent fashion activity and blocks replay", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`source deletion removes the dependent fashion activity and blocks replay (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-outfit" });
   let board = await service.getBoard("outfit-1");
@@ -203,8 +199,8 @@ test("source deletion removes the dependent fashion activity and blocks replay",
     item.provenance?.scenario === "fashion" && item.provenance.activityId === "outfit-1"));
 });
 
-test("identical product titles from separate captures stay separate", async (t) => {
-  const { service, store } = await fixture(t);
+test(`identical product titles from separate captures stay separate (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const analysis = JSON.parse(await fs.readFile(fileURLToPath(
     new URL("./fixtures/fashion_a_blazer_live_analysis.json", import.meta.url)), "utf8"));
   await service.importReviewedCapture({ importId: "a_blazer_copy", reviewed: true,
@@ -226,8 +222,8 @@ test("identical product titles from separate captures stay separate", async (t) 
     item.type === "core.product" && item.status === "active").length, 2);
 });
 
-test("a generic commerce product without fashion classification cannot enter the outfit flow", async (t) => {
-  const { service } = await fixture(t);
+test(`a generic commerce product without fashion classification cannot enter the outfit flow (${backend})`, async (t) => {
+  const { service } = await fixture(t, backend);
   const appliance = makeValidAnalysis({ domain: "unknown", contentKind: "commerce_product",
     ingredientGroups: [], steps: [], facts: [], warnings: [],
     title: { value: "전기밥솥", status: "observed", confidence: 0.99, evidenceIds: ["e1"] },
@@ -239,3 +235,23 @@ test("a generic commerce product without fashion classification cannot enter the
     commandId: "reject-appliance", activityId: "appliance-outfit", importIds: ["appliance"] }),
   (error) => error.code === "IMPORT_NOT_FASHION");
 });
+
+test(`retracted outfit item prevents a wear report (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createFashionScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-outfit" });
+  let board = await service.getBoard("outfit-1");
+  await service.confirmFashionOutfit({ commandId: "confirm-outfit", activityId: "outfit-1",
+    expectedRevision: board.revision, selections });
+  const edge = (await store.snapshot()).knowledge.assertions.find((item) =>
+    item.status === "active" && item.predicate === "fashion.has_item");
+  await service.knowledgeCommand({ commandId: "retract-outfit-item", type: "assertion.retract",
+    payload: { assertionId: edge.id } });
+  board = await service.getBoard("outfit-1");
+  await assert.rejects(service.recordFashionWearOutcome({ commandId: "wear-stale",
+    activityId: "outfit-1", expectedRevision: board.revision, status: "worn" }),
+  (error) => error.code === "CONTEXT_STALE");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "fashion.wore_outfit").length, 0);
+});
+}

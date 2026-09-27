@@ -742,6 +742,17 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
   }
 
+  function activeScenarioEntity(state, id, type) {
+    return state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+      item.id === id && item.type === type && item.status === "active");
+  }
+
+  function activeScenarioRelation(state, subjectId, predicate, matches) {
+    return state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
+      item.status === "active" && item.subjectId === subjectId &&
+      item.predicate === predicate && matches(item));
+  }
+
   function registerContextWatch(state, activityId, context) {
     const watch = registerKnowledgeWatch(state.knowledge, { ownerId, consumerId: activityId, context });
     state.knowledge = watch.state;
@@ -4112,6 +4123,23 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const place = state.knowledge.entities.find((item) => item.ownerId === ownerId &&
             item.id === placeId && item.type === "dining.place" && item.status === "active");
           if (!place) throw new AppError("CONTEXT_STALE", "선택한 식당을 찾지 못했어요.", { httpStatus: 409 });
+          const selectionTask = current.tasks.find((item) => item.id === "select_place" &&
+            item.capabilityId === "dining.select_place" &&
+            item.executionStatus === "completed");
+          const selected = current.results.find((item) =>
+            item.id === selectionTask?.latestOutputRef)?.value;
+          const candidate = selectionTask?.readiness?.inputs?.candidates?.find((item) =>
+            item.id === selected?.candidateId);
+          if (selected?.placeId !== placeId || !candidate?.mentionIds?.length ||
+              candidate.mentionIds.some((mentionId) =>
+                !state.knowledge.entityMentions.some((item) => item.ownerId === ownerId &&
+                  item.id === mentionId && item.status === "active") ||
+                !state.knowledge.identityDecisions.some((item) => item.ownerId === ownerId &&
+                  item.mentionId === mentionId && item.entityId === placeId &&
+                  item.status === "accepted"))) {
+            throw new AppError("CONTEXT_STALE", "선택한 식당 지점의 연결이 변경됐어요.",
+              { httpStatus: 409 });
+          }
           const stem = `dining:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
           const reportedAt = new Date().toISOString();
           const output = { placeId, status: input.status, reportedAt };
@@ -4416,8 +4444,26 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           if (task?.readiness?.status !== "ready") throw new AppError("TASK_BLOCKED",
             "착용 결과를 기록할 수 없어요.", { httpStatus: 409 });
           const outfitId = task.readiness.inputs.outfitId;
-          if (!state.knowledge.entities.some((item) => item.ownerId === ownerId &&
-              item.id === outfitId && item.type === "fashion.outfit" && item.status === "active")) {
+          const confirmTask = current.tasks.find((item) => item.id === "confirm_outfit" &&
+            item.capabilityId === "fashion.confirm_outfit" &&
+            item.executionStatus === "completed");
+          const confirmed = current.results.find((item) =>
+            item.id === confirmTask?.latestOutputRef)?.value;
+          const outfit = confirmed?.outfit;
+          if (!outfit || confirmed.outfitId !== outfitId || outfit.id !== outfitId ||
+              !activeScenarioEntity(state, outfitId, "fashion.outfit") ||
+              outfit.items.some((item) =>
+                !activeScenarioEntity(state, item.variantId, "core.product_variant") ||
+                !activeScenarioRelation(state, outfitId, "fashion.has_item",
+                  (edge) => edge.objectEntityId === item.variantId) ||
+                !activeScenarioRelation(state, item.variantId, "fashion.variant_of",
+                  (edge) => activeScenarioEntity(state, edge.objectEntityId, "core.product")) ||
+                !activeScenarioRelation(state, item.variantId, "fashion.variant_options",
+                  (edge) => edge.typedValue?.value?.color === item.color &&
+                    edge.typedValue?.value?.size === item.size) ||
+                (item.ownership !== "unknown" &&
+                  !activeScenarioRelation(state, item.variantId, "fashion.ownership",
+                    (edge) => edge.typedValue?.value === item.ownership)))) {
             throw new AppError("CONTEXT_STALE", "확정한 코디를 찾지 못했어요.",
               { httpStatus: 409 });
           }
@@ -5231,6 +5277,20 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               { httpStatus: 409 });
           }
           const itineraryStops = new Map(itinerary.stops.map((item) => [item.id, item]));
+          if (itinerary.stops.some((stop, index) =>
+            !activeScenarioEntity(state, stop.id, "travel.stop") ||
+            !activeScenarioEntity(state, stop.placeId, "travel.place") ||
+            !activeScenarioRelation(state, itinerary.id, "travel.has_stop",
+              (edge) => edge.objectEntityId === stop.id) ||
+            !activeScenarioRelation(state, stop.id, "travel.stop_order",
+              (edge) => edge.typedValue?.value === index + 1) ||
+            !activeScenarioRelation(state, stop.id, "travel.planned_at",
+              (edge) => edge.typedValue?.value === stop.plannedAt) ||
+            !activeScenarioRelation(state, stop.id, "travel.stop_at",
+              (edge) => edge.objectEntityId === stop.placeId))) {
+            throw new AppError("CONTEXT_STALE", "확정한 방문 순서와 장소가 변경됐어요.",
+              { httpStatus: 409 });
+          }
           if (stops.length !== itineraryStops.size ||
               stops.some((item) => !itineraryStops.has(item.stopId))) {
             throw new AppError("INVALID_REQUEST", "모든 장소의 방문 여부를 기록해 주세요.",
@@ -5587,6 +5647,20 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               { httpStatus: 409 });
           }
           const planActions = new Map(plan.actions.map((item) => [item.id, item]));
+          if (!activeScenarioEntity(state, plan.tipId, "life_tip.tip") ||
+              !activeScenarioRelation(state, plan.id, "life_tip.plan_uses_tip",
+                (edge) => edge.objectEntityId === plan.tipId) ||
+              plan.actions.some((action, index) =>
+                !activeScenarioEntity(state, action.id, "life_tip.action") ||
+                !activeScenarioRelation(state, plan.id, "life_tip.plan_has_action",
+                  (edge) => edge.objectEntityId === action.id) ||
+                !activeScenarioRelation(state, action.id, "life_tip.action_order",
+                  (edge) => edge.typedValue?.value === index + 1) ||
+                !activeScenarioRelation(state, action.id, "life_tip.action_text",
+                  (edge) => edge.typedValue?.value === action.text))) {
+            throw new AppError("CONTEXT_STALE", "확정한 꿀팁 단계가 변경됐어요.",
+              { httpStatus: 409 });
+          }
           if (actions.length !== planActions.size ||
               actions.some((item) => !planActions.has(item.actionId))) {
             throw new AppError("INVALID_REQUEST", "모든 단계의 실행 여부를 기록해 주세요.",
@@ -5956,6 +6030,20 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               { httpStatus: 409 });
           }
           const planExercises = new Map(plan.exercises.map((item) => [item.id, item]));
+          if (!activeScenarioEntity(state, plan.workoutId, "health.workout") ||
+              !activeScenarioRelation(state, plan.id, "health.plan_uses_workout",
+                (edge) => edge.objectEntityId === plan.workoutId) ||
+              plan.exercises.some((exercise, index) =>
+                !activeScenarioEntity(state, exercise.id, "health.planned_exercise") ||
+                !activeScenarioRelation(state, plan.id, "health.plan_has_exercise",
+                  (edge) => edge.objectEntityId === exercise.id) ||
+                !activeScenarioRelation(state, exercise.id, "health.exercise_order",
+                  (edge) => edge.typedValue?.value === index + 1) ||
+                !activeScenarioRelation(state, exercise.id, "health.exercise_text",
+                  (edge) => edge.typedValue?.value === exercise.text))) {
+            throw new AppError("CONTEXT_STALE", "확정한 운동 항목이 변경됐어요.",
+              { httpStatus: 409 });
+          }
           if (exercises.length !== planExercises.size ||
               exercises.some((item) => !planExercises.has(item.exerciseId))) {
             throw new AppError("INVALID_REQUEST", "모든 운동 항목의 결과를 기록해 주세요.",

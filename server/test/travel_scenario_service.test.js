@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
+import { createCommonKernelService } from "../src/common/kernel_service.js";
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
-import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createScenarioTestStore } from "./relational_fixture.js";
 import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const cases = [
@@ -16,11 +14,8 @@ const cases = [
   ["b_coastwalk", "푸른곶 해안길", "0746124c05158934bb348be03c57ea0f7408c2cb000477edaffe94c8806642d1"],
 ];
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-travel-scenario-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const filePath = join(folder, "state.json");
-  const store = createJsonStateStore({ filePath, initialState: createCommonKernelState });
+async function fixture(t, backend) {
+  const { store, reopenStore } = await createScenarioTestStore(t, backend, "travel");
   const service = createCommonKernelService({ ownerId: "traveler", store });
   const imports = {};
   for (const [name, placeName, hash] of cases) {
@@ -40,7 +35,7 @@ async function fixture(t) {
       reviewedAt: "2026-09-27T09:00:00+09:00",
       capture: { id: name, asset: { status: "unavailable" } }, analysis });
   }
-  return { service, store, filePath, imports };
+  return { service, store, reopenStore, imports };
 }
 
 const scenario = { commandId: "create-travel", activityId: "trip-1", confirmed: true,
@@ -55,8 +50,9 @@ const resultValue = (board, taskId) => {
   return board.results.find((result) => result.id === ref)?.value;
 };
 
-test("real travel image analyses become an ordered day plan and visited-stop evidence", async (t) => {
-  const { service, store, filePath } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`real travel image analyses become an ordered day plan and visited-stop evidence (${backend})`, async (t) => {
+  const { service, store, reopenStore } = await fixture(t, backend);
   const created = await service.createTravelScenario(scenario);
   assert.equal(created.candidateCount, 2);
   assert.equal((await service.createTravelScenario(scenario)).replayed, true);
@@ -98,15 +94,15 @@ test("real travel image analyses become an ordered day plan and visited-stop evi
     item.predicate === "travel.visit_at_place" && item.status === "active")
     .objectEntityId, itinerary.stops[0].placeId);
   const reopened = createCommonKernelService({ ownerId: "traveler",
-    store: createJsonStateStore({ filePath, initialState: createCommonKernelState }) });
+    store: reopenStore() });
   assert.equal((await reopened.recordTravelStopOutcomes({ commandId: "report-travel",
     activityId: "trip-1", expectedRevision: reported.revision - 1, stops })).replayed, true);
   assert.equal((await reopened.confirmTravelItinerary({ commandId: "confirm-travel",
     activityId: "trip-1", expectedRevision: confirmed.revision - 1, selections })).replayed, true);
 });
 
-test("travel confirmation rejects forged task results and invalid times or candidates", async (t) => {
-  const { service, store } = await fixture(t);
+test(`travel confirmation rejects forged task results and invalid times or candidates (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createTravelScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-travel" });
   let board = await service.getBoard("trip-1");
@@ -154,8 +150,8 @@ test("travel confirmation rejects forged task results and invalid times or candi
     item.kind === "user_report" && item.provenance?.scenario === "travel").length, 0);
 });
 
-test("source deletion removes the dependent travel activity and prevents command replay", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`source deletion removes the dependent travel activity and prevents command replay (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createTravelScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-travel" });
   let board = await service.getBoard("trip-1");
@@ -182,8 +178,8 @@ test("source deletion removes the dependent travel activity and prevents command
     item.predicate?.startsWith("travel.") && item.scope?.id === "trip-1"));
 });
 
-test("a changed place field invalidates a pending travel plan", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`a changed place field invalidates a pending travel plan (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createTravelScenario(scenario);
   const snapshot = await store.snapshot();
   const field = snapshot.knowledge.assertions.find((item) => item.status === "active" &&
@@ -196,8 +192,8 @@ test("a changed place field invalidates a pending travel plan", async (t) => {
     commandId: "approve-stale-travel" }), (error) => error.code === "CONTEXT_STALE");
 });
 
-test("a corrected place name reaches the approved itinerary", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`a corrected place name reaches the approved itinerary (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createTravelScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-before-place-correction" });
@@ -223,8 +219,8 @@ test("a corrected place name reaches the approved itinerary", async (t) => {
   assert.equal(itinerary.stops[1].title, "바람언덕 전망 쉼터");
 });
 
-test("same-name captures remain separate places until a user resolves identity", async (t) => {
-  const { service, store } = await fixture(t);
+test(`same-name captures remain separate places until a user resolves identity (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const analysis = JSON.parse(await fs.readFile(fileURLToPath(
     new URL("./fixtures/travel_a_viewpoint_live_analysis.json", import.meta.url)), "utf8"));
   await service.importReviewedCapture({ importId: "another_viewpoint", reviewed: true,
@@ -252,8 +248,8 @@ test("same-name captures remain separate places until a user resolves identity",
       stop.placeId === item.entityId)).length, 2);
 });
 
-test("other regions and restaurant captures cannot enter the travel plan", async (t) => {
-  const { service } = await fixture(t);
+test(`other regions and restaurant captures cannot enter the travel plan (${backend})`, async (t) => {
+  const { service } = await fixture(t, backend);
   await assert.rejects(service.createTravelScenario({ ...scenario,
     commandId: "wrong-area", activityId: "wrong-area-trip", area: "서울" }),
   (error) => error.code === "IMPORT_NOT_TRAVEL");
@@ -268,3 +264,27 @@ test("other regions and restaurant captures cannot enter the travel plan", async
     importIds: ["restaurant"] }),
   (error) => error.code === "IMPORT_NOT_TRAVEL");
 });
+
+test(`retracted visit order blocks an all-skipped travel report (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createTravelScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-travel" });
+  let board = await service.getBoard("trip-1");
+  await service.confirmTravelItinerary({ commandId: "confirm-travel", activityId: "trip-1",
+    expectedRevision: board.revision, selections });
+  board = await service.getBoard("trip-1");
+  const itinerary = resultValue(board, "confirm_itinerary").itinerary;
+  const edge = (await store.snapshot()).knowledge.assertions.find((item) =>
+    item.status === "active" && item.subjectId === itinerary.stops[1].id &&
+    item.predicate === "travel.stop_order");
+  await service.knowledgeCommand({ commandId: "retract-stop-order", type: "assertion.retract",
+    payload: { assertionId: edge.id } });
+  board = await service.getBoard("trip-1");
+  await assert.rejects(service.recordTravelStopOutcomes({ commandId: "report-stale-travel",
+    activityId: "trip-1", expectedRevision: board.revision,
+    stops: itinerary.stops.map((stop) => ({ stopId: stop.id, status: "skipped" })) }),
+  (error) => error.code === "CONTEXT_STALE");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "travel.visit_of_stop").length, 0);
+});
+}

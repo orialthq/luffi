@@ -687,8 +687,9 @@ test(`a corrected image-backed recipe hides old shopping amounts until a success
 });
 }
 
-test("old and current displayed prices require review instead of silently choosing one", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`old and current displayed prices require review instead of silently choosing one (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   const captured = await importCapture(service, "price");
   assert.equal(captured.analysis.facts.find((item) => item.label === "이전 표시가")?.value, "19,900원");
   assert.equal(captured.analysis.facts.find((item) => item.label === "화면 표시가")?.value, "12,900원");
@@ -697,9 +698,11 @@ test("old and current displayed prices require review instead of silently choosi
     purpose: "표시 가격 확인" }), (error) => error.code === "IMPORT_NOT_SHOPPING");
   assert.equal(active(await store.snapshot(), "shopping.displayed_price").length, 0);
 });
+}
 
-test("Jeju travel and Jeju restaurant are linked after real image-backed selections, without visits", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`Jeju travel and Jeju restaurant link without visits (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   await importCapture(service, "travel");
   const restaurant = await importCapture(service, "dining");
   assert.equal(restaurant.analysis.place.address, "제주 서귀포시 성산읍");
@@ -732,6 +735,7 @@ test("Jeju travel and Jeju restaurant are linked after real image-backed selecti
   assert.equal(active(state, "dining.visited").length, 0);
   assert.equal(active(state, "travel.visit_of_stop").length, 0);
 });
+}
 
 for (const backend of ["json", "postgres"]) {
 test(`fashion and beauty plans link without implying that the outfit was worn or routine used (${backend})`, async (t) => {
@@ -767,8 +771,9 @@ test(`fashion and beauty plans link without implying that the outfit was worn or
 });
 }
 
-test("workout and preparation tip link ordered steps but do not imply either was done", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`workout and preparation tip link without implied execution (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   await importCapture(service, "health");
   const tipImport = await importCapture(service, "tip");
   assert.equal(tipImport.analysis.facts.length, 0);
@@ -796,9 +801,11 @@ test("workout and preparation tip link ordered steps but do not imply either was
   assert.equal(active(state, "health.performance_in_session").length, 0);
   assert.equal(active(state, "health.session_for_plan").length, 0);
 });
+}
 
-test("retracting a captured tip step invalidates the pending plan", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`retracting a captured tip step invalidates the pending plan (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   const imported = await importCapture(service, "tip");
   const created = await service.createLifeTipScenario({ commandId: "create-tip",
     activityId: "tip-board", confirmed: true, importId: "tip" });
@@ -812,3 +819,4 @@ test("retracting a captured tip step invalidates the pending plan", async (t) =>
   await assert.rejects(service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-stale-tip" }), (error) => error.code === "CONTEXT_STALE");
 });
+}

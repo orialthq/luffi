@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
+import { createCommonKernelService } from "../src/common/kernel_service.js";
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
-import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createScenarioTestStore } from "./relational_fixture.js";
 import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const imagePath = fileURLToPath(new URL("./fixtures/health_home_workout.png", import.meta.url));
@@ -18,11 +16,8 @@ const imageHash = "c1000800307a89f4c8341d50111e6e2acbbcac6b8ad6e9be1d9048efa4f6a
 const scenario = { commandId: "create-health", activityId: "workout-1",
   confirmed: true, importId: "home-workout" };
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-health-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const filePath = join(folder, "state.json");
-  const store = createJsonStateStore({ filePath, initialState: createCommonKernelState });
+async function fixture(t, backend) {
+  const { store, reopenStore } = await createScenarioTestStore(t, backend, "health");
   const service = createCommonKernelService({ ownerId: "exerciser", store });
   const image = await fs.readFile(imagePath);
   assert.equal(createHash("sha256").update(image).digest("hex"), imageHash);
@@ -38,7 +33,7 @@ async function fixture(t) {
   const imported = await service.importReviewedCapture({ importId: "home-workout",
     reviewed: true, reviewedAt: "2026-09-27T09:00:00+09:00",
     capture: { id: "home-workout", asset: { status: "unavailable" } }, analysis });
-  return { service, store, filePath, imported, analysis };
+  return { service, store, reopenStore, imported, analysis };
 }
 
 const output = (board, taskId) => {
@@ -46,8 +41,9 @@ const output = (board, taskId) => {
   return board.results.find((item) => item.id === task.latestOutputRef)?.value;
 };
 
-test("real workout screenshot becomes a plan; only reported performance creates a session", async (t) => {
-  const { service, store, filePath } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`real workout screenshot becomes a plan; only reported performance creates a session (${backend})`, async (t) => {
+  const { service, store, reopenStore } = await fixture(t, backend);
   const created = await service.createHealthScenario(scenario);
   assert.equal(created.candidateCount, 3);
   assert.equal((await service.createHealthScenario(scenario)).replayed, true);
@@ -83,7 +79,7 @@ test("real workout screenshot becomes a plan; only reported performance creates 
     item.predicate === "health.performance_of_exercise").map((item) => item.objectEntityId),
   [plan.exercises[0].id]);
   const reopened = createCommonKernelService({ ownerId: "exerciser",
-    store: createJsonStateStore({ filePath, initialState: createCommonKernelState }) });
+    store: reopenStore() });
   assert.equal((await reopened.confirmHealthExercises({ commandId: "confirm-health",
     activityId: "workout-1", expectedRevision: confirmed.revision - 1,
     factIndexes: [1, 3] })).replayed, true);
@@ -92,8 +88,8 @@ test("real workout screenshot becomes a plan; only reported performance creates 
     exercises })).replayed, true);
 });
 
-test("health flow rejects bypasses, missing actual amounts, and unselected exercises", async (t) => {
-  const { service, store } = await fixture(t);
+test(`health flow rejects bypasses, missing actual amounts, and unselected exercises (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createHealthScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-health" });
@@ -143,8 +139,8 @@ test("health flow rejects bypasses, missing actual amounts, and unselected exerc
     item.type === "health.workout_session").length, 0);
 });
 
-test("source deletion cascades to health plan and reported performance", async (t) => {
-  const { service, store, imported } = await fixture(t);
+test(`source deletion cascades to health plan and reported performance (${backend})`, async (t) => {
+  const { service, store, imported } = await fixture(t, backend);
   const created = await service.createHealthScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-health" });
@@ -168,8 +164,8 @@ test("source deletion cascades to health plan and reported performance", async (
     item.predicate?.startsWith("health.") && item.scope?.id === "workout-1"));
 });
 
-test("changed exercise text invalidates approval; a non-exercise capture is refused", async (t) => {
-  const { service, store, imported, analysis } = await fixture(t);
+test(`changed exercise text invalidates approval; a non-exercise capture is refused (${backend})`, async (t) => {
+  const { service, store, imported, analysis } = await fixture(t, backend);
   const wrong = structuredClone(analysis);
   wrong.tags = wrong.tags.filter((item) => item.value !== "운동");
   await service.importReviewedCapture({ importId: "not-exercise", reviewed: true,
@@ -191,8 +187,8 @@ test("changed exercise text invalidates approval; a non-exercise capture is refu
   (error) => error.code === "CONTEXT_STALE");
 });
 
-test("corrected exercise text reaches the confirmed workout after review", async (t) => {
-  const { service, store, imported } = await fixture(t);
+test(`corrected exercise text reaches the confirmed workout after review (${backend})`, async (t) => {
+  const { service, store, imported } = await fixture(t, backend);
   const created = await service.createHealthScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-before-exercise-correction" });
@@ -216,3 +212,27 @@ test("corrected exercise text reaches the confirmed workout after review", async
   const plan = output(await service.getBoard("workout-1"), "confirm_exercises").plan;
   assert.equal(plan.exercises[0].text, "스쿼트 12회씩 3세트");
 });
+
+test(`retracted exercise order blocks an all-skipped workout report (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createHealthScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-health" });
+  let board = await service.getBoard("workout-1");
+  await service.confirmHealthExercises({ commandId: "confirm-health", activityId: "workout-1",
+    expectedRevision: board.revision, factIndexes: [1, 3] });
+  board = await service.getBoard("workout-1");
+  const plan = output(board, "confirm_exercises").plan;
+  const edge = (await store.snapshot()).knowledge.assertions.find((item) =>
+    item.status === "active" && item.subjectId === plan.exercises[1].id &&
+    item.predicate === "health.exercise_order");
+  await service.knowledgeCommand({ commandId: "retract-exercise-order", type: "assertion.retract",
+    payload: { assertionId: edge.id } });
+  board = await service.getBoard("workout-1");
+  await assert.rejects(service.recordHealthExerciseOutcomes({ commandId: "report-stale-health",
+    activityId: "workout-1", expectedRevision: board.revision,
+    exercises: plan.exercises.map((exercise) => ({ exerciseId: exercise.id, status: "skipped" })) }),
+  (error) => error.code === "CONTEXT_STALE");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "health.performance_of_exercise").length, 0);
+});
+}

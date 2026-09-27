@@ -1,18 +1,12 @@
 import assert from "node:assert/strict";
-import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
-import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
-import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createCommonKernelService } from "../src/common/kernel_service.js";
+import { createScenarioTestStore } from "./relational_fixture.js";
 import { makeFiling, makeTag, makeValidAnalysis } from "./fixtures.js";
 import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-dining-scenario-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const store = createJsonStateStore({ filePath: join(folder, "state.json"),
-    initialState: createCommonKernelState });
+async function fixture(t, backend) {
+  const { store } = await createScenarioTestStore(t, backend, "dining");
   return { store, service: createCommonKernelService({ ownerId: "diner", store }) };
 }
 
@@ -33,8 +27,9 @@ async function imported(service, id, name, area) {
     capture: { id, asset: { status: "unavailable" } }, analysis: analysis(name, area) });
 }
 
-test("reviewed restaurant images form branch-safe candidates and a user-confirmed visit", async (t) => {
-  const { service, store } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`reviewed restaurant images form branch-safe candidates and a user-confirmed visit (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   await imported(service, "a", "모퉁이식당 성수점", "성수");
   await imported(service, "b", "모퉁이식당 연남점", "연남");
   await imported(service, "c", "모퉁이식당 성수점", "성수");
@@ -109,8 +104,8 @@ test("reviewed restaurant images form branch-safe candidates and a user-confirme
     .filter((item) => item.status === "accepted").length, 2);
 });
 
-test("unconfirmed visit creates no visited assertion and direct task bypass is rejected", async (t) => {
-  const { service, store } = await fixture(t);
+test(`unconfirmed visit creates no visited assertion and direct task bypass is rejected (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   await imported(service, "a", "모퉁이식당 성수점", "성수");
   const created = await service.createDiningScenario({ commandId: "create", activityId: "dinner",
     confirmed: true, importIds: ["a"], scheduledAt: "2026-09-27T19:00:00+09:00",
@@ -142,8 +137,8 @@ test("unconfirmed visit creates no visited assertion and direct task bypass is r
     item.predicate === "dining.visited" && item.status === "active").length, 0);
 });
 
-test("corrected restaurant name changes a reviewed candidate before selection", async (t) => {
-  const { service, store } = await fixture(t);
+test(`corrected restaurant name changes a reviewed candidate before selection (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const source = await imported(service, "a", "모퉁이식당 성수점", "성수");
   const created = await service.createDiningScenario({ commandId: "create-review",
     activityId: "dinner-review", confirmed: true, importIds: ["a"],
@@ -170,8 +165,8 @@ test("corrected restaurant name changes a reviewed candidate before selection", 
   assert.equal(after.tasks[1].inputBindings.partySize, 2);
 });
 
-test("deleting a captured source redacts the derived board and tombstones retries", async (t) => {
-  const { service, store } = await fixture(t);
+test(`deleting a captured source redacts the derived board and tombstones retries (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const source = await imported(service, "a", "모퉁이식당 성수점", "성수");
   const request = { commandId: "create", activityId: "dinner", confirmed: true,
     importIds: ["a"], scheduledAt: "2026-09-27T19:00:00+09:00",
@@ -185,3 +180,30 @@ test("deleting a captured source redacts the derived board and tombstones retrie
   const snapshot = await store.snapshot();
   assert.equal(snapshot.diningScenarioReceipts["diner:create"].deleted, true);
 });
+
+test(`retracted restaurant identity prevents a visit report (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  await imported(service, "a", "모퉁이식당 성수점", "성수");
+  const created = await service.createDiningScenario({ commandId: "create", activityId: "dinner",
+    confirmed: true, importIds: ["a"], scheduledAt: "2026-09-27T19:00:00+09:00",
+    area: "성수", partySize: 2 });
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve" });
+  let board = await service.getBoard("dinner");
+  const candidateId = board.tasks.find((item) => item.id === "select_place")
+    .readiness.inputs.candidates[0].id;
+  await service.selectDiningPlace({ commandId: "choose", activityId: "dinner",
+    expectedRevision: board.revision, candidateId });
+  const decision = (await store.snapshot()).knowledge.identityDecisions.find((item) =>
+    item.status === "accepted");
+  await service.knowledgeCommand({ commandId: "retract-place-identity",
+    type: "identity.retract", payload: { decisionId: decision.id,
+      expectedRevision: decision.revision } });
+  board = await service.getBoard("dinner");
+  await assert.rejects(service.recordDiningVisitOutcome({ commandId: "report-stale-visit",
+    activityId: "dinner", expectedRevision: board.revision, status: "visited" }),
+  (error) => ["CONTEXT_STALE", "TASK_BLOCKED"].includes(error.code));
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "dining.visited").length, 0);
+});
+
+}
