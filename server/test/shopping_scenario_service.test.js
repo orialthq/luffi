@@ -134,6 +134,29 @@ test(`shopping rejects task bypasses, out-of-plan choices, and unsupported purch
   const state = await store.snapshot();
   assert.equal(state.knowledge.assertions.filter((item) => item.status === "active" &&
     item.predicate === "shopping.actual_paid_krw").length, 0);
+  const current = await service.getShoppingPurchaseOutcomes("shop-1");
+  assert.equal(current.outcomes[0].status, "not_purchased");
+  await assert.rejects(service.correctShoppingPurchaseOutcome({
+    commandId: "forged-purchase-correction", activityId: "shop-1",
+    choiceId: "another-choice", expectedOutcomeFingerprint: current.fingerprint,
+    status: "purchased", actualPaidKrw: 12000,
+  }), (error) => error.code === "INVALID_PURCHASE_CHOICE");
+  const request = { commandId: "purchase-correction", activityId: "shop-1",
+    choiceId: current.outcomes[0].choiceId,
+    expectedOutcomeFingerprint: current.fingerprint,
+    status: "purchased", actualPaidKrw: 12000 };
+  const corrected = await service.correctShoppingPurchaseOutcome(request);
+  assert.equal((await service.getShoppingPurchaseOutcomes("shop-1"))
+    .outcomes[0].actualPaidKrw, 12000);
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "shopping.purchase_for_choice"
+    && item.objectEntityId === request.choiceId).length, 1);
+  await service.knowledgeCommand({ commandId: "delete-purchase-correction",
+    type: "source.delete", payload: { sourceId: corrected.sourceId } });
+  await assert.rejects(service.getBoard("shop-1"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctShoppingPurchaseOutcome(request),
+    (error) => error.code === "CORRECTION_DELETED");
 });
 
 test(`deleting a source removes its shopping scenario and prevents replay (${backend})`, async (t) => {

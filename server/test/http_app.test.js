@@ -436,7 +436,9 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/shopping/confirm-basket", "confirmShoppingBasket"],
     ["/shopping/purchase-outcome", "recordShoppingPurchaseOutcome"],
     ["/shopping/basket-outcomes", "recordShoppingBasketOutcomes"],
+    ["/shopping/purchase-outcome-corrections", "correctShoppingPurchaseOutcome"],
     ["/shopping/inventory-observations", "recordShoppingInventory"],
+    ["/shopping/inventory-observation-corrections", "correctShoppingInventoryObservation"],
     ["/health/scenarios", "createHealthScenario"],
     ["/health/confirm-exercises", "confirmHealthExercises"],
     ["/health/exercise-outcomes", "recordHealthExerciseOutcomes"],
@@ -499,6 +501,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "getRecipeShoppingPlanReview", shoppingActivityId, connectionId });
   kernelService.listShoppingInventory = async (activityId) =>
     ({ method: "listShoppingInventory", activityId });
+  kernelService.getShoppingPurchaseOutcomes = async (activityId) =>
+    ({ method: "getShoppingPurchaseOutcomes", activityId });
   kernelService.getShoppingBasketReview = async (activityId) =>
     ({ method: "getShoppingBasketReview", activityId });
   const token = "t".repeat(32);
@@ -554,6 +558,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
         connectionId: "link one" }],
     ["/shopping/inventory-observations/shop%20one",
       { method: "listShoppingInventory", activityId: "shop one" }],
+    ["/shopping/purchase-outcomes/shop%20one",
+      { method: "getShoppingPurchaseOutcomes", activityId: "shop one" }],
     ["/shopping/basket-review/shop%20one",
       { method: "getShoppingBasketReview", activityId: "shop one" }],
     ["/boards/meal%20plan", { method: "getBoard", activityId: "meal plan" }],

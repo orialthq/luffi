@@ -296,6 +296,88 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
     observations: [{ ingredientId: "tofu", quantity: { status: "known",
       amount: 700, unit: "g" }, supportingChoiceIds: [choiceId] }] })).replayed, true);
   assert.equal(stock.observations[0].quantity.amount, 700);
+  let purchaseReview = await service.getShoppingPurchaseOutcomes(shoppingBoard.id);
+  assert.equal(purchaseReview.outcomes.length, 2);
+  const paidCorrectionRequest = { commandId: "correct-tofu-payment",
+    activityId: shoppingBoard.id, choiceId,
+    expectedOutcomeFingerprint: purchaseReview.fingerprint,
+    status: "purchased", actualPaidKrw: 4700 };
+  const paidCorrection = await service.correctShoppingPurchaseOutcome(
+    paidCorrectionRequest);
+  assert.equal((await service.correctShoppingPurchaseOutcome(
+    paidCorrectionRequest)).replayed, true);
+  assert.equal(paidCorrection.outcome.actualPaidKrw, 4700);
+  assert.equal(active(await store.snapshot(), "shopping.actual_paid_krw")[0]
+    .typedValue.value, 4700);
+  await assert.rejects(service.correctShoppingPurchaseOutcome({
+    ...paidCorrectionRequest, commandId: "stale-payment", actualPaidKrw: 4600,
+  }), (error) => error.code === "SHOPPING_OUTCOME_CONFLICT");
+  purchaseReview = await service.getShoppingPurchaseOutcomes(shoppingBoard.id);
+  const eggPurchase = await service.correctShoppingPurchaseOutcome({
+    commandId: "correct-egg-purchase", activityId: shoppingBoard.id,
+    choiceId: eggChoiceId, expectedOutcomeFingerprint: purchaseReview.fingerprint,
+    status: "purchased", actualPaidKrw: 3900 });
+  assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice")
+    .some((item) => item.objectEntityId === eggChoiceId), true);
+  const eggStock = await service.recordShoppingInventory({
+    commandId: "observed-egg-after-correction", activityId: shoppingBoard.id,
+    expectedRevision: shoppingBoard.revision,
+    observations: [{ ingredientId: "egg", quantity: { status: "known",
+      amount: 10, unit: "count" }, supportingChoiceIds: [eggChoiceId] }] });
+  const eggObservation = (await service.listShoppingInventory(shoppingBoard.id))
+    .observations.find((item) => item.ingredientId === "egg");
+  const eggInventoryCorrectionRequest = { commandId: "correct-observed-egg",
+    activityId: shoppingBoard.id,
+    observationId: eggStock.observations[0].observationId,
+    expectedAssertionId: eggObservation.assertionId,
+    quantity: { status: "known", amount: 8, unit: "count" } };
+  await service.correctShoppingInventoryObservation(eggInventoryCorrectionRequest);
+  assert.equal((await service.listShoppingInventory(shoppingBoard.id))
+    .observations.find((item) => item.ingredientId === "egg").quantity.amount, 8);
+  await assert.rejects(service.correctShoppingPurchaseOutcome({
+    commandId: "remove-supported-tofu-purchase", activityId: shoppingBoard.id,
+    choiceId, expectedOutcomeFingerprint: eggPurchase.fingerprint,
+    status: "not_purchased",
+  }), (error) => error.code === "INVENTORY_DEPENDS_ON_PURCHASE");
+  await assert.rejects(service.correctShoppingPurchaseOutcome({
+    commandId: "remove-supported-egg-purchase", activityId: shoppingBoard.id,
+    choiceId: eggChoiceId, expectedOutcomeFingerprint: eggPurchase.fingerprint,
+    status: "not_purchased",
+  }), (error) => error.code === "INVENTORY_DEPENDS_ON_PURCHASE");
+  const eggInventorySourceId = eggStock.observations[0].observationId
+    .replace(/:observation:\d+$/, "");
+  await service.knowledgeCommand({ commandId: "delete-egg-inventory-report",
+    type: "source.delete", payload: { sourceId: eggInventorySourceId } });
+  await assert.rejects(service.correctShoppingInventoryObservation(
+    eggInventoryCorrectionRequest),
+  (error) => error.code === "CORRECTION_DELETED");
+  assert.equal((await service.listShoppingInventory(shoppingBoard.id))
+    .observations.some((item) => item.ingredientId === "egg"), false);
+  await service.correctShoppingPurchaseOutcome({
+    commandId: "correct-egg-unpurchased", activityId: shoppingBoard.id,
+    choiceId: eggChoiceId, expectedOutcomeFingerprint: eggPurchase.fingerprint,
+    status: "not_purchased" });
+  assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice")
+    .some((item) => item.objectEntityId === eggChoiceId), false);
+  let observations = (await service.listShoppingInventory(shoppingBoard.id)).observations;
+  assert.equal(observations[0].quantity.amount, 700);
+  const inventoryCorrectionRequest = { commandId: "correct-observed-tofu",
+    activityId: shoppingBoard.id, observationId: stock.observations[0].observationId,
+    expectedAssertionId: observations[0].assertionId,
+    quantity: { status: "known", amount: 650, unit: "g" } };
+  const inventoryCorrection = await service.correctShoppingInventoryObservation(
+    inventoryCorrectionRequest);
+  assert.equal((await service.correctShoppingInventoryObservation(
+    inventoryCorrectionRequest)).replayed, true);
+  observations = (await service.listShoppingInventory(shoppingBoard.id)).observations;
+  assert.equal(observations[0].quantity.amount, 650);
+  assert.equal(observations[0].assertionId, inventoryCorrection.assertionId);
+  assert.equal(active(await store.snapshot(), "recipe.observes_inventory").length, 1);
+  assert.equal(active(await store.snapshot(), "shopping.inventory_after_choice").length, 1);
+  await assert.rejects(service.correctShoppingInventoryObservation({
+    ...inventoryCorrectionRequest, commandId: "stale-tofu-stock",
+    quantity: { status: "known", amount: 600, unit: "g" },
+  }), (error) => error.code === "INVENTORY_REVISION_CONFLICT");
   const state = await store.snapshot();
   assert.equal(active(state, "shopping.purchase_for_choice").length, 1);
   assert.equal(active(state, "shopping.purchase_for_choice")[0].objectEntityId, choiceId);
@@ -419,6 +501,12 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
   (error) => error.code === "SCENARIO_DELETED");
   await assert.rejects(service.correctShoppingBasket(basketCorrectionRequest),
     (error) => error.code === "CORRECTION_DELETED");
+  await assert.rejects(service.correctShoppingPurchaseOutcome(
+    paidCorrectionRequest),
+  (error) => error.code === "CORRECTION_DELETED");
+  await assert.rejects(service.correctShoppingInventoryObservation(
+    inventoryCorrectionRequest),
+  (error) => error.code === "CORRECTION_DELETED");
 });
 }
 

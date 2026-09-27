@@ -55,7 +55,9 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/shopping/confirm-basket": "confirmShoppingBasket",
   "/shopping/purchase-outcome": "recordShoppingPurchaseOutcome",
   "/shopping/basket-outcomes": "recordShoppingBasketOutcomes",
+  "/shopping/purchase-outcome-corrections": "correctShoppingPurchaseOutcome",
   "/shopping/inventory-observations": "recordShoppingInventory",
+  "/shopping/inventory-observation-corrections": "correctShoppingInventoryObservation",
   "/health/scenarios": "createHealthScenario",
   "/health/confirm-exercises": "confirmHealthExercises",
   "/health/exercise-outcomes": "recordHealthExerciseOutcomes",
@@ -80,7 +82,7 @@ const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "l
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
   "getEditableCaptureFields", "getEditableRecipe", "getEditableDiningSelection", "getEditableFashionOutfit", "getEditableBeautyRoutine",
   "getEditableTravelItinerary", "getEditableLifeTipPlan", "getEditableShoppingChoice", "getEditableShoppingBasket", "getRecipeShoppingPlanReview",
-  "getRecipeShoppingTransferReview", "listShoppingInventory",
+  "getRecipeShoppingTransferReview", "listShoppingInventory", "getShoppingPurchaseOutcomes",
   "getShoppingBasketReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
@@ -221,6 +223,16 @@ export function createHttpServer({
         const recipeShoppingReviewMatch =
           /^\/shopping\/recipe-needs\/review\/([^/]+)\/([^/]+)$/.exec(route);
         const shoppingInventoryMatch = /^\/shopping\/inventory-observations\/([^/]+)$/.exec(route);
+        const shoppingPurchaseOutcomesMatch = /^\/shopping\/purchase-outcomes\/([^/]+)$/.exec(route);
+        if (shoppingPurchaseOutcomesMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(shoppingPurchaseOutcomesMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200,
+            await kernelService.getShoppingPurchaseOutcomes(activityId));
+        }
         if (shoppingInventoryMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");
           let activityId;

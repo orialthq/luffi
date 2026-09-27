@@ -1170,6 +1170,31 @@ final class FakeKernelClient implements CommonKernelClient {
   }
 
   @override
+  Future<KernelJson> getShoppingPurchaseOutcomes(String activityId) async {
+    final results = (board['results'] as List? ?? []).whereType<Map>();
+    final outcome = results
+        .where((item) => item['taskId'] == 'record_purchase_outcome')
+        .firstOrNull?['value'];
+    final value = outcome is Map ? outcome : <String, Object?>{};
+    return {
+      'activityId': activityId,
+      'basketId': value['basketId'],
+      'outcomes': value['outcomes'] is List
+          ? value['outcomes']
+          : value.isNotEmpty
+          ? [value]
+          : <Object?>[],
+      'fingerprint': 'fake-shopping-outcome-fingerprint',
+    };
+  }
+
+  @override
+  Future<KernelJson> correctShoppingPurchaseOutcome(KernelJson request) async {
+    commands.add(request);
+    return {'activityId': request['activityId']};
+  }
+
+  @override
   Future<KernelJson> recordShoppingInventory(KernelJson request) async {
     commands.add(request);
     return {
@@ -1183,6 +1208,14 @@ final class FakeKernelClient implements CommonKernelClient {
     'activityId': activityId,
     'observations': <Object?>[],
   };
+
+  @override
+  Future<KernelJson> correctShoppingInventoryObservation(
+    KernelJson request,
+  ) async {
+    commands.add(request);
+    return {'activityId': request['activityId']};
+  }
 
   @override
   Future<KernelJson> getShoppingBasketReview(String activityId) async => {

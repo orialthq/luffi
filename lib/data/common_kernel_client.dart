@@ -545,8 +545,11 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> confirmShoppingBasket(KernelJson request);
   Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request);
   Future<KernelJson> recordShoppingBasketOutcomes(KernelJson request);
+  Future<KernelJson> getShoppingPurchaseOutcomes(String activityId);
+  Future<KernelJson> correctShoppingPurchaseOutcome(KernelJson request);
   Future<KernelJson> recordShoppingInventory(KernelJson request);
   Future<KernelJson> listShoppingInventory(String activityId);
+  Future<KernelJson> correctShoppingInventoryObservation(KernelJson request);
   Future<KernelJson> getShoppingBasketReview(String activityId);
   Future<KernelJson> createHealthScenario(KernelJson request);
   Future<KernelJson> confirmHealthExercises(KernelJson request);
@@ -914,6 +917,20 @@ final class HttpCommonKernelClient implements CommonKernelClient {
       _request('POST', '/v1/kernel/shopping/basket-outcomes', request);
 
   @override
+  Future<KernelJson> getShoppingPurchaseOutcomes(String activityId) => _request(
+    'GET',
+    '/v1/kernel/shopping/purchase-outcomes/${Uri.encodeComponent(activityId)}',
+  );
+
+  @override
+  Future<KernelJson> correctShoppingPurchaseOutcome(KernelJson request) =>
+      _request(
+        'POST',
+        '/v1/kernel/shopping/purchase-outcome-corrections',
+        request,
+      );
+
+  @override
   Future<KernelJson> recordShoppingInventory(KernelJson request) =>
       _request('POST', '/v1/kernel/shopping/inventory-observations', request);
 
@@ -922,6 +939,14 @@ final class HttpCommonKernelClient implements CommonKernelClient {
     'GET',
     '/v1/kernel/shopping/inventory-observations/${Uri.encodeComponent(activityId)}',
   );
+
+  @override
+  Future<KernelJson> correctShoppingInventoryObservation(KernelJson request) =>
+      _request(
+        'POST',
+        '/v1/kernel/shopping/inventory-observation-corrections',
+        request,
+      );
 
   @override
   Future<KernelJson> getShoppingBasketReview(String activityId) => _request(

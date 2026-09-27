@@ -47,6 +47,13 @@ Object? _taskInputs(KernelJson task) {
 
 String _text(Object? value, [String fallback = '']) =>
     value is String ? value : fallback;
+String _shoppingQuantityLabel(Object? value) {
+  final quantity = _object(value);
+  return quantity['status'] == 'known'
+      ? '${quantity['amount']}${_text(quantity['unit'])}'
+      : '수량 미확인';
+}
+
 String _summary(Object? value) => value is String
     ? value
     : value == null
@@ -2259,6 +2266,8 @@ final class CommonBoardScreen extends StatefulWidget {
 
 final class _CommonBoardScreenState extends State<CommonBoardScreen> {
   KernelJson? _board;
+  KernelJson? _shoppingPurchaseProjection;
+  List<KernelJson> _shoppingInventoryObservations = [];
   KernelJson? _review;
   Object? _reviewError;
   Object? _error;
@@ -2388,6 +2397,22 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     });
     try {
       final board = await widget.client.getBoard(widget.activityId);
+      KernelJson? shoppingPurchaseProjection;
+      List<KernelJson> shoppingInventoryObservations = [];
+      if (board['scenario'] == 'shopping' &&
+          _objects(
+            board['results'],
+          ).any((item) => item['taskId'] == 'record_purchase_outcome')) {
+        shoppingPurchaseProjection = await widget.client
+            .getShoppingPurchaseOutcomes(widget.activityId);
+        if (shoppingPurchaseProjection['basketId'] != null) {
+          shoppingInventoryObservations = _objects(
+            (await widget.client.listShoppingInventory(
+              widget.activityId,
+            ))['observations'],
+          );
+        }
+      }
       KernelJson? review;
       Object? reviewError;
       try {
@@ -2398,6 +2423,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _board = board;
+        _shoppingPurchaseProjection = shoppingPurchaseProjection;
+        _shoppingInventoryObservations = shoppingInventoryObservations;
         _review = review;
         _reviewError = reviewError;
         _needsRefresh = false;
@@ -3556,6 +3583,65 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     }
   }
 
+  Future<void> _correctShoppingPurchaseOutcome() async {
+    if (_busy || _needsRefresh) return;
+    try {
+      final confirmed = _objects(
+        _board?['results'],
+      ).firstWhere((item) => item['taskId'] == 'confirm_choice');
+      final choice = _object(_object(confirmed['value'])['choice']);
+      final current = await widget.client.getShoppingPurchaseOutcomes(
+        widget.activityId,
+      );
+      if (!mounted) return;
+      final selection = await showDialog<KernelJson>(
+        context: context,
+        builder: (_) => ShoppingPurchaseCorrectionDialog(
+          choice: choice,
+          outcomes: _objects(current['outcomes']),
+        ),
+      );
+      if (selection == null || !mounted) return;
+      await _mutate((_, commandId) async {
+        await widget.client.correctShoppingPurchaseOutcome({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedOutcomeFingerprint': current['fingerprint'],
+          ...selection,
+        });
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
+  Future<void> _correctShoppingInventoryObservation() async {
+    if (_busy || _needsRefresh) return;
+    try {
+      final current = await widget.client.listShoppingInventory(
+        widget.activityId,
+      );
+      if (!mounted) return;
+      final observations = _objects(current['observations']);
+      if (observations.isEmpty) return;
+      final selection = await showDialog<KernelJson>(
+        context: context,
+        builder: (_) =>
+            ShoppingInventoryCorrectionDialog(observations: observations),
+      );
+      if (selection == null || !mounted) return;
+      await _mutate((_, commandId) async {
+        await widget.client.correctShoppingInventoryObservation({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          ...selection,
+        });
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
   Future<void> _reviewShoppingBasket() async {
     try {
       final review = await widget.client.getShoppingBasketReview(
@@ -3612,7 +3698,12 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final result = _objects(
       _board?['results'],
     ).where((item) => item['id'] == task['latestOutputRef']).firstOrNull;
-    final value = _object(result?['value']);
+    final purchase = _shoppingPurchaseProjection;
+    final value = task['id'] == 'record_purchase_outcome' && purchase != null
+        ? purchase['basketId'] == null
+              ? _object(_objects(purchase['outcomes']).firstOrNull)
+              : purchase
+        : _object(result?['value']);
     if (task['id'] == 'confirm_choice') {
       final choice = _object(value['choice']);
       if (choice['kind'] == 'basket') {
@@ -3696,7 +3787,30 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           for (final item in _objects(value['outcomes']))
             Text(
               '• ${titles[_text(item['choiceId'])] ?? _text(item['choiceId'])} · '
-              '${statuses[_text(item['status'])] ?? '상태 미확인'}',
+              '${statuses[_text(item['status'])] ?? '상태 미확인'}'
+              '${item['actualPaidKrw'] is int ? ' · ${item['actualPaidKrw']}원' : ''}',
+            ),
+          TextButton.icon(
+            key: const Key('shopping-correct-purchase'),
+            onPressed: _busy || _needsRefresh
+                ? null
+                : _correctShoppingPurchaseOutcome,
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('실제 구매 결과 정정'),
+          ),
+          for (final observation in _shoppingInventoryObservations)
+            Text(
+              '• ${_text(observation['ingredientId'])} 현재 보유량 '
+              '${_shoppingQuantityLabel(observation['quantity'])}',
+            ),
+          if (_shoppingInventoryObservations.isNotEmpty)
+            TextButton.icon(
+              key: const Key('shopping-correct-inventory'),
+              onPressed: _busy || _needsRefresh
+                  ? null
+                  : _correctShoppingInventoryObservation,
+              icon: const Icon(Icons.edit_note),
+              label: const Text('기록한 보유량 정정'),
             ),
           if (_objects(
             value['outcomes'],
@@ -3719,6 +3833,14 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
         Text(statuses[_text(value['status'])] ?? '상태 미확인'),
         if (value['actualPaidKrw'] case final int amount)
           Text('실제 지불액: $amount원'),
+        TextButton.icon(
+          key: const Key('shopping-correct-purchase'),
+          onPressed: _busy || _needsRefresh
+              ? null
+              : _correctShoppingPurchaseOutcome,
+          icon: const Icon(Icons.edit_outlined),
+          label: const Text('실제 구매 결과 정정'),
+        ),
       ],
     );
   }

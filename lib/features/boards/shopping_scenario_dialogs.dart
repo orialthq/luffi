@@ -1152,6 +1152,268 @@ final class _ShoppingInventoryDialogState
   }
 }
 
+final class ShoppingPurchaseCorrectionDialog extends StatefulWidget {
+  const ShoppingPurchaseCorrectionDialog({
+    required this.choice,
+    required this.outcomes,
+    super.key,
+  });
+
+  final KernelJson choice;
+  final List<KernelJson> outcomes;
+
+  @override
+  State<ShoppingPurchaseCorrectionDialog> createState() =>
+      _ShoppingPurchaseCorrectionDialogState();
+}
+
+final class _ShoppingPurchaseCorrectionDialogState
+    extends State<ShoppingPurchaseCorrectionDialog> {
+  String? _choiceId;
+  String? _status;
+  final _paid = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _paid.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final choices = widget.choice['kind'] == 'basket'
+        ? (widget.choice['lines'] as List? ?? [])
+              .whereType<Map>()
+              .expand(
+                (line) => (line['choices'] as List? ?? []).whereType<Map>(),
+              )
+              .toList()
+        : <Map>[widget.choice];
+    final choiceId = _choiceId ?? _text(choices.first['id']);
+    final current = widget.outcomes.firstWhere(
+      (item) => item['choiceId'] == choiceId,
+      orElse: () => <String, Object?>{},
+    );
+    final status = _status ?? _text(current['status']);
+    return AlertDialog(
+      title: const Text('실제 구매 결과 정정'),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('선택 당시 기록은 이력으로 남고, 현재 유효한 구매 결과를 고칩니다.'),
+              DropdownButtonFormField<String>(
+                key: const Key('shopping-correct-choice'),
+                initialValue: choiceId,
+                decoration: const InputDecoration(labelText: '정정할 상품'),
+                items: choices
+                    .map(
+                      (item) => DropdownMenuItem<String>(
+                        value: _text(item['id']),
+                        child: Text(_text(item['title'])),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() {
+                  _choiceId = value;
+                  _status = null;
+                  _paid.clear();
+                }),
+              ),
+              for (final (value, label) in [
+                ('purchased', '구매했어요'),
+                ('not_purchased', '구매하지 않았어요'),
+                ('unknown', '아직 몰라요'),
+              ])
+                ListTile(
+                  key: ValueKey('shopping-correct-status-$value'),
+                  title: Text(label),
+                  leading: Icon(
+                    status == value
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  onTap: () => setState(() => _status = value),
+                ),
+              if (status == 'purchased')
+                TextField(
+                  key: const Key('shopping-correct-paid'),
+                  controller: _paid,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: '실제 지불액 (원)',
+                    hintText: current['actualPaidKrw'] is int
+                        ? '${current['actualPaidKrw']}'
+                        : null,
+                  ),
+                ),
+              if (_error != null)
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('shopping-correct-purchase-confirm'),
+          onPressed: () {
+            final amount =
+                int.tryParse(_paid.text.trim()) ??
+                (current['actualPaidKrw'] is int
+                    ? current['actualPaidKrw'] as int
+                    : null);
+            if (status == 'purchased' &&
+                (amount == null || amount < 1 || amount > 1000000000)) {
+              setState(() => _error = '실제 지불액을 확인해 주세요.');
+              return;
+            }
+            Navigator.pop(context, <String, Object?>{
+              'choiceId': choiceId,
+              'status': status,
+              if (status == 'purchased') 'actualPaidKrw': amount,
+            });
+          },
+          child: const Text('정정'),
+        ),
+      ],
+    );
+  }
+}
+
+final class ShoppingInventoryCorrectionDialog extends StatefulWidget {
+  const ShoppingInventoryCorrectionDialog({
+    required this.observations,
+    super.key,
+  });
+
+  final List<KernelJson> observations;
+
+  @override
+  State<ShoppingInventoryCorrectionDialog> createState() =>
+      _ShoppingInventoryCorrectionDialogState();
+}
+
+final class _ShoppingInventoryCorrectionDialogState
+    extends State<ShoppingInventoryCorrectionDialog> {
+  String? _observationId;
+  final _amount = TextEditingController();
+  String? _unit;
+  String? _error;
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final observationId =
+        _observationId ?? _text(widget.observations.first['observationId']);
+    final current = widget.observations.firstWhere(
+      (item) => item['observationId'] == observationId,
+    );
+    final quantity = current['quantity'] as Map? ?? {};
+    final unit = _unit ?? _text(quantity['unit']);
+    return AlertDialog(
+      title: const Text('실제 보유량 정정'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('같은 관측 기록의 수치만 고칩니다. 새로 확인한 재고는 별도 기록으로 남겨 주세요.'),
+            DropdownButtonFormField<String>(
+              key: const Key('shopping-correct-inventory-choice'),
+              initialValue: observationId,
+              decoration: const InputDecoration(labelText: '정정할 관측'),
+              items: widget.observations
+                  .map(
+                    (item) => DropdownMenuItem<String>(
+                      value: _text(item['observationId']),
+                      child: Text(
+                        '${_text(item['ingredientId'])} · '
+                        '${_quantityLabel(item['quantity'])}',
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() {
+                _observationId = value;
+                _amount.clear();
+                _unit = null;
+              }),
+            ),
+            TextField(
+              key: const Key('shopping-correct-inventory-amount'),
+              controller: _amount,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: InputDecoration(
+                labelText: '정정한 실제 보유량',
+                hintText: '${quantity['amount']}',
+              ),
+            ),
+            DropdownButton<String>(
+              value: unit,
+              items: const ['g', 'kg', 'ml', 'l', 'count', 'tsp', 'tbsp']
+                  .map(
+                    (value) =>
+                        DropdownMenuItem(value: value, child: Text(value)),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _unit = value),
+            ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('shopping-correct-inventory-confirm'),
+          onPressed: () {
+            final amount = double.tryParse(_amount.text.trim());
+            if (amount == null ||
+                !amount.isFinite ||
+                amount < 0 ||
+                amount > 1000000000) {
+              setState(() => _error = '정정한 보유량을 0 이상 숫자로 입력해 주세요.');
+              return;
+            }
+            Navigator.pop(context, <String, Object?>{
+              'observationId': observationId,
+              'expectedAssertionId': current['assertionId'],
+              'quantity': {'status': 'known', 'amount': amount, 'unit': unit},
+            });
+          },
+          child: const Text('정정'),
+        ),
+      ],
+    );
+  }
+}
+
 final class ShoppingOutcomeDialog extends StatefulWidget {
   const ShoppingOutcomeDialog({required this.choice, super.key});
   final KernelJson choice;
