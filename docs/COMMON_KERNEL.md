@@ -63,6 +63,8 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/travel/stop-outcomes` | 장소별 실제 방문을 직접 보고. `visited`에만 방문 관계 생성 |
 | `POST /v1/kernel/life-tip/scenarios` | 확인한 단계형 생활 꿀팁 캡처 하나로 승인 대기 실천 계획 제안 |
 | `POST /v1/kernel/life-tip/confirm-actions` | 사용자가 실천할 원본 단계를 고르고 출처 있는 ActionPlan 구성 |
+| `GET /v1/kernel/life-tip/editable/:activityId` | 현재 실천 단계 관계·원본 후보·정정 버전 조회 |
+| `POST /v1/kernel/life-tip/corrections` | 캡처 단계의 추가·제외·재배열을 근거와 함께 정정하고 기존 실행 기록 보존 |
 | `POST /v1/kernel/life-tip/outcomes` | 단계별 실제 실행을 직접 보고. `done`에만 실행 관계 생성 |
 | `POST /v1/kernel/shopping/scenarios` | 확인한 상품 캡처 1~8개로 비교·선택 계획 제안 |
 | `GET /v1/kernel/shopping/recipe-needs/review/{shoppingActivityId}/{connectionId}` | 연결된 레시피의 이전·현재 필요 재료와 차이를 최신 결과에서 계산 |
@@ -206,6 +208,8 @@ Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 �
 `POST /v1/kernel/life-tip/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importId` 하나를 받는다. 서버는 `unknown` 분석 전체가 아니라 화면 근거가 있는 `생활·팁` 제목과 연속된 단계 fact만 후보로 삼고, `confirm_actions → record_outcomes` 계획을 승인 대기로 만든다. 제목이나 단계 근거가 바뀌면 기존 계획은 승인할 수 없다.
 
 사용자는 `confirm-actions`의 `factIndexes`로 실천할 단계를 원본 순서대로 고른다. 각 Action의 텍스트는 캡처 fact와 사용자 확인 출처에 연결한다. `outcomes`는 모든 Action에 `done/skipped/unknown`을 명시하며, `done`에만 사용자 보고 출처와 `life_tip.execution_for_action` 관계를 만든다. 자세한 범위와 검증 이미지는 [첫 생활 꿀팁 시나리오](LIFE_TIP_FIRST_SCENARIO.md)를 참조한다.
+
+확정 후에는 `GET /v1/kernel/life-tip/editable/:activityId`의 `graphFingerprint`와 새 순서의 `factIndexes`를 `POST /v1/kernel/life-tip/corrections`에 보낼 수 있다. 서버는 같은 캡처에 있는 단계만 허용한다. 기존 Action을 유지하면 식별자를 유지하고 순서 관계만 정정한다. 제외된 Action의 계획 연결과 순서는 철회하되 텍스트와 과거 실행 관계는 남긴다. 새로 추가한 Action에는 새 식별자와 `life_tip.action_fact_index` 근거를 부여한다. 원래 작업 결과는 바꾸지 않고 보드를 재검토 상태로 전환해 새 활동에서 다시 확인한다. 정정 근거를 삭제하면 원래 확인 출처와 종속 활동도 함께 제거한다.
 
 ### 첫 쇼핑 시나리오
 

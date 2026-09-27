@@ -20,7 +20,7 @@
 | 캡처 | Source → SourceVersion → Evidence, `ingestion.extracted_field` | 화면에 보이던 제목과 단계 문구. 조언의 효과·정확성 검증은 아님 |
 | 팁 언급 | 캡처별 `life_tip.tip` Mention → 사용자 확인 IdentityDecision → Tip Entity | 제목이 같은 다른 캡처를 자동으로 합치지 않음 |
 | 실천 계획 | `life_tip.action_plan` Entity, `life_tip.plan_uses_tip` | 사용자가 이 팁으로 활동을 시작함 |
-| 선택한 단계 | `life_tip.action` Entity, `life_tip.plan_has_action`, `life_tip.action_order`, `life_tip.action_text` | 원본 fact Evidence와 사용자 확인 Evidence가 함께 붙은 이번 계획의 항목 |
+| 선택한 단계 | `life_tip.action` Entity, `life_tip.plan_has_action`, `life_tip.action_order`, `life_tip.action_text`, `life_tip.action_fact_index` | 원본 fact Evidence와 사용자 확인 Evidence가 함께 붙은 이번 계획의 항목. 정정 뒤에도 기존 실행이 가리키는 Action은 보존 |
 | 실제 실행 | `life_tip.execution` Entity, `life_tip.execution_for_action` | 사용자가 `done`을 보고한 항목. 효과나 습관 형성을 증명하지 않음 |
 
 단계 ID는 이 계획에 귀속된다. 원본 팁의 문구와 선택한 단계, 실행 보고는 각각 다른 출처다. 같은 제목만으로 별도 캡처의 Identity를 병합하지 않는다. 서버는 소유자, revision, 준비된 작업, 후보·단계 ID, 중복 및 현재 근거를 확인한다. 전용 명령 외 일반 작업 완료로 결과를 우회할 수 없고, 명령 재전송은 저장된 영수증을 재생한다. 캡처나 파생 출처를 삭제하면 현재 개발 저장소는 관련 활동과 파생 출처를 함께 제거하고 명령 재전송을 막는다.

@@ -260,4 +260,93 @@ test(`retracted checklist text blocks an all-skipped report (${backend})`, async
   assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
     item.status === "active" && item.predicate === "life_tip.execution_for_action").length, 0);
 });
+
+test(`life-tip correction changes selected source steps without rewriting done history (${backend})`, async (t) => {
+  const { service, store, reopenStore } = await fixture(t, backend);
+  const created = await service.createLifeTipScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-correction" });
+  let board = await service.getBoard("tip-1");
+  await service.confirmLifeTipActions({ commandId: "confirm-correction",
+    activityId: "tip-1", expectedRevision: board.revision, factIndexes: [1, 3] });
+  board = await service.getBoard("tip-1");
+  const originalPlan = resultValue(board, "confirm_actions").plan;
+  const doneActionId = originalPlan.actions[0].id;
+  await service.recordLifeTipOutcomes({ commandId: "report-correction",
+    activityId: "tip-1", expectedRevision: board.revision,
+    actions: originalPlan.actions.map((item, index) => ({ actionId: item.id,
+      status: index === 0 ? "done" : "skipped" })) });
+  const editable = await service.getEditableLifeTipPlan("tip-1");
+  assert.deepEqual(editable.actions.map((item) => item.factIndex), [1, 3]);
+  const correction = { commandId: "correct-tip-plan", activityId: "tip-1",
+    expectedGraphFingerprint: editable.graphFingerprint, factIndexes: [3, 2],
+    confirmed: true };
+  const changed = await service.correctLifeTipPlan(correction);
+  assert.equal((await service.correctLifeTipPlan(correction)).replayed, true);
+  const restartedStore = reopenStore();
+  if (backend === "postgres") await restartedStore.ready();
+  const resumed = createCommonKernelService({ ownerId: "reader", store: restartedStore });
+  const next = await resumed.getEditableLifeTipPlan("tip-1");
+  assert.deepEqual(next.actions.map((item) => item.factIndex), [3, 2]);
+  assert.equal(next.actions[0].id, originalPlan.actions[1].id);
+  assert.notEqual(next.actions[1].id, doneActionId);
+  assert.equal(next.revision, 2);
+  await assert.rejects(resumed.correctLifeTipPlan({ ...correction,
+    commandId: "stale-tip-correction", factIndexes: [1, 2] }),
+  (error) => error.code === "LIFE_TIP_REVISION_CONFLICT");
+  await assert.rejects(resumed.correctLifeTipPlan({ ...correction,
+    commandId: "invented-tip-step", expectedGraphFingerprint: next.graphFingerprint,
+    factIndexes: [2, 8] }), (error) => error.code === "INVALID_REQUEST");
+  board = await resumed.getBoard("tip-1");
+  assert.deepEqual(resultValue(board, "confirm_actions").plan, originalPlan);
+  assert.deepEqual(resultValue(board, "record_outcomes").actions.find((item) =>
+    item.actionId === doneActionId).status, "done");
+  const snapshot = await store.snapshot();
+  assert.equal(snapshot.knowledge.assertions.find((item) =>
+    item.predicate === "life_tip.execution_for_action" && item.status === "active")
+    .objectEntityId, doneActionId);
+  assert.equal(snapshot.knowledge.assertions.some((item) =>
+    item.predicate === "life_tip.plan_has_action" && item.status === "active" &&
+    item.objectEntityId === doneActionId), false);
+  assert.equal(snapshot.knowledge.assertions.some((item) =>
+    item.predicate === "life_tip.action_text" && item.status === "active" &&
+    item.subjectId === doneActionId), true);
+  const review = await resumed.getBoardReview("tip-1");
+  assert.equal(review.status, "blocked");
+  assert.deepEqual(review.affectedTasks.map((item) => item.id), ["record_outcomes"]);
+  const successor = await resumed.createReviewSuccessor({ activityId: "tip-1",
+    commandId: "continue-corrected-tip", expectedRevision: board.revision,
+    confirmed: true });
+  assert.notEqual(successor.activityId, "tip-1");
+  assert.equal((await resumed.getBoard(successor.activityId)).pendingProposals.length, 1);
+  const again = await resumed.correctLifeTipPlan({ commandId: "reorder-corrected-tip",
+    activityId: "tip-1", expectedGraphFingerprint: next.graphFingerprint,
+    factIndexes: [2, 3], confirmed: true });
+  const reordered = await resumed.getEditableLifeTipPlan("tip-1");
+  assert.deepEqual(reordered.actions.map((item) => item.factIndex), [2, 3]);
+  assert.equal(reordered.actions.find((item) => item.factIndex === 2).id,
+    next.actions.find((item) => item.factIndex === 2).id);
+  const readded = await resumed.correctLifeTipPlan({ commandId: "readd-old-fact",
+    activityId: "tip-1", expectedGraphFingerprint: reordered.graphFingerprint,
+    factIndexes: [1, 2], confirmed: true });
+  const current = await resumed.getEditableLifeTipPlan("tip-1");
+  assert.deepEqual(current.actions.map((item) => item.factIndex), [1, 2]);
+  assert.notEqual(current.actions[0].id, doneActionId);
+  const reportSourceId = snapshot.knowledge.sources.find((item) =>
+    item.kind === "user_report" && item.provenance?.scenario === "life_tip" &&
+    item.provenance.activityId === "tip-1").id;
+  await resumed.knowledgeCommand({ commandId: "delete-tip-correction",
+    type: "source.delete", payload: { sourceId: changed.sourceId } });
+  await assert.rejects(resumed.getBoard("tip-1"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(resumed.correctLifeTipPlan(correction),
+    (error) => error.code === "CORRECTION_DELETED");
+  const redacted = await restartedStore.snapshot();
+  assert.equal(redacted.knowledge.sources.find((item) => item.id === again.sourceId).status,
+    "deleted");
+  assert.equal(redacted.knowledge.sources.find((item) => item.id === readded.sourceId).status,
+    "deleted");
+  assert.equal(redacted.knowledge.sources.find((item) => item.id === reportSourceId).status,
+    "deleted");
+});
 }

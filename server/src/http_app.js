@@ -45,6 +45,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/travel/stop-outcomes": "recordTravelStopOutcomes",
   "/life-tip/scenarios": "createLifeTipScenario",
   "/life-tip/confirm-actions": "confirmLifeTipActions",
+  "/life-tip/corrections": "correctLifeTipPlan",
   "/life-tip/outcomes": "recordLifeTipOutcomes",
   "/shopping/scenarios": "createShoppingScenario",
   "/shopping/recipe-needs/proposals": "proposeRecipeShoppingPlan",
@@ -76,7 +77,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
   "getEditableCaptureFields", "getEditableRecipe", "getEditableDiningSelection", "getEditableFashionOutfit", "getEditableBeautyRoutine",
-  "getEditableTravelItinerary", "getRecipeShoppingPlanReview",
+  "getEditableTravelItinerary", "getEditableLifeTipPlan", "getRecipeShoppingPlanReview",
   "getRecipeShoppingTransferReview", "listShoppingInventory",
   "getShoppingBasketReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
@@ -294,6 +295,15 @@ export function createHttpServer({
           catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
             { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.getEditableTravelItinerary(activityId));
+        }
+        const editableLifeTipMatch = /^\/life-tip\/editable\/([^/]+)$/.exec(route);
+        if (editableLifeTipMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableLifeTipMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableLifeTipPlan(activityId));
         }
         const editableFieldsMatch = /^\/ingestion\/editable-fields\/([^/]+)$/.exec(route);
         if (editableFieldsMatch) {

@@ -7,7 +7,7 @@ const plan = object({ id: text, revision: ref("core.revision"),
   tipId: text, title: text, actions: array(ref("life_tip.action"), 1) });
 
 export const lifeTipPack = {
-  id: "life_tip", version: 1, compatibleKernelVersions: [1],
+  id: "life_tip", version: 2, compatibleKernelVersions: [1],
   entityTypes: ["life_tip.tip", "life_tip.action_plan", "life_tip.action",
     "life_tip.execution"],
   types: [
@@ -44,6 +44,8 @@ export const lifeTipPack = {
     relation("life_tip.plan_has_action", ["life_tip.action_plan"],
       ["life_tip.action"]),
     valueRelation("life_tip.action_order", ["life_tip.action"],
+      "core.revision", "explicit_user_confirmation"),
+    valueRelation("life_tip.action_fact_index", ["life_tip.action"],
       "core.revision", "explicit_user_confirmation"),
     valueRelation("life_tip.action_text", ["life_tip.action"],
       "core.text", "explicit_user_confirmation"),

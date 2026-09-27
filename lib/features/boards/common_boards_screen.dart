@@ -15,6 +15,7 @@ import 'recipe_correction_screen.dart';
 import 'ordered_graph_correction_screen.dart';
 import 'fashion_correction_screen.dart';
 import 'dining_correction_screen.dart';
+import 'life_tip_correction_screen.dart';
 
 bool _connectionKindsVisible(KernelJson board) => const {
   'recipe',
@@ -2333,6 +2334,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openLifeTipEditor() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => LifeTipCorrectionScreen(
+          client: widget.client,
+          activityId: widget.activityId,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3870,6 +3883,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             onPressed: _busy || _needsRefresh ? null : _openDiningEditor,
             icon: const Icon(Icons.edit_note_rounded),
             label: const Text('선택한 식당 정정'),
+          ),
+        if (board['scenario'] == 'life_tip' &&
+            _objects(board['tasks']).any(
+              (task) =>
+                  task['id'] == 'confirm_actions' &&
+                  task['executionStatus'] == 'completed',
+            ))
+          OutlinedButton.icon(
+            key: const Key('kernel-open-life-tip-correction'),
+            onPressed: _busy || _needsRefresh ? null : _openLifeTipEditor,
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('꿀팁 단계·순서 정정'),
           ),
         if (board['scenario'] == 'beauty' &&
             _objects(board['tasks']).any(

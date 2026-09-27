@@ -52,6 +52,7 @@ export function createCommonKernelState() {
     fieldCorrectionReceipts: {},
     recipeCorrectionReceipts: {},
     diningCorrectionReceipts: {},
+    lifeTipCorrectionReceipts: {},
     beautyCorrectionReceipts: {},
     travelCorrectionReceipts: {},
     fashionCorrectionReceipts: {},
@@ -976,6 +977,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           item.result = { activityId };
         }
       }
+      for (const item of Object.values(state.lifeTipCorrectionReceipts ?? {})) {
+        if (item.ownerId === ownerId && item.activityId === activityId) {
+          item.deleted = true;
+          item.result = { activityId };
+        }
+      }
       for (const item of Object.values(state.shoppingInventoryReceipts ?? {})) {
         if (item.activityId !== activityId) continue;
         if (item.sourceId !== sourceId && state.knowledge.sources.some((entry) =>
@@ -1191,7 +1198,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "travel_correction" &&
           item.provenance.importedSourceIds?.includes(source.id)) ||
           (item.provenance?.scenario === "dining_correction" &&
-          item.provenance.importedSourceIds?.includes(source.id)))).map((item) => item.id) : [];
+          item.provenance.importedSourceIds?.includes(source.id)) ||
+          (item.provenance?.scenario === "life_tip_correction" &&
+          item.provenance.importedSourceId === source.id))).map((item) => item.id) : [];
     const linkedRecipeCorrections = source?.provenance?.scenario === "recipe"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.provenance?.scenario === "recipe_correction" &&
@@ -1200,6 +1209,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const linkedDiningCorrections = source?.provenance?.scenario === "dining"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.provenance?.scenario === "dining_correction" &&
+        item.provenance.confirmationSourceId === source.id).map((item) => item.id)
+      : [];
+    const linkedLifeTipCorrections = source?.provenance?.scenario === "life_tip"
+      ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
+        item.status === "active" && item.provenance?.scenario === "life_tip_correction" &&
         item.provenance.confirmationSourceId === source.id).map((item) => item.id)
       : [];
     const linkedBeautyCorrections = source?.provenance?.scenario === "beauty"
@@ -1261,6 +1275,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       .map((item) => item.id);
     return { source, linkedConfirmations, linkedRecipeCorrections,
       linkedDiningCorrections,
+      linkedLifeTipCorrections,
       linkedBeautyCorrections,
       linkedFashionCorrections,
       linkedTravelCorrections,
@@ -1272,6 +1287,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
 
   function finishSourceDeletion(state, { source, linkedConfirmations, linkedRecipeCorrections,
     linkedDiningCorrections,
+    linkedLifeTipCorrections,
     linkedBeautyCorrections,
     linkedFashionCorrections,
     linkedTravelCorrections,
@@ -1313,6 +1329,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     if (source?.provenance?.scenario === "dining_correction") {
       for (const receipt of Object.values(state.diningCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    if (source?.provenance?.scenario === "life_tip_correction") {
+      for (const receipt of Object.values(state.lifeTipCorrectionReceipts ?? {})) {
         if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
           receipt.deleted = true;
           receipt.result = { activityId: receipt.activityId };
@@ -1375,6 +1399,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       for (const receipt of Object.values(state.diningCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    for (const sourceId of linkedLifeTipCorrections ?? []) {
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      for (const receipt of Object.values(state.lifeTipCorrectionReceipts ?? {})) {
         if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
           receipt.deleted = true;
           receipt.result = { activityId: receipt.activityId };
@@ -1498,6 +1535,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             receipt.result = { activityId: receipt.activityId };
           }
         }
+        for (const receipt of Object.values(state.lifeTipCorrectionReceipts ?? {})) {
+          if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+            receipt.deleted = true;
+            receipt.result = { activityId: receipt.activityId };
+          }
+        }
         redactRecipeScenario(state, sourceId);
         redactDiningScenario(state, sourceId);
         redactFashionScenario(state, sourceId);
@@ -1581,7 +1624,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     // A correction supersedes the old assertions. Deleting its evidence cannot
     // reactivate those assertions, so remove the dependent confirmation instead
     // of leaving an activity backed by a partial graph.
-    if (["recipe_correction", "dining_correction", "fashion_correction", "beauty_correction",
+    if (["recipe_correction", "dining_correction", "life_tip_correction", "fashion_correction", "beauty_correction",
       "travel_correction"].includes(source?.provenance?.scenario) &&
       source.provenance.confirmationSourceId) {
       const confirmationId = source.provenance.confirmationSourceId;
@@ -2033,6 +2076,80 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       item.ownerId === ownerId && item.activityId === activityId && !item.deleted).length;
     return { current, scenario, source, itinerary, stops, lines,
       scope, graphFingerprint, revision };
+  }
+
+  function editableLifeTipGraph(state, activityId) {
+    const current = board(state, activityId);
+    const scenario = Object.values(state.lifeTipScenarioReceipts ?? {}).find((item) =>
+      !item.deleted && item.result?.activityId === activityId);
+    const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
+      item.id === scenario?.result?.confirmationSourceId && item.status === "active");
+    const task = current.tasks.find((item) => item.id === "confirm_actions" &&
+      item.capabilityId === "life_tip.confirm_actions" &&
+      item.executionStatus === "completed");
+    const result = current.results.find((item) => item.id === task?.latestOutputRef)?.value;
+    const plan = result?.plan;
+    if (!scenario || !source || !plan || result.planId !== plan.id ||
+        !activeScenarioEntity(state, plan.id, "life_tip.action_plan") ||
+        !activeScenarioEntity(state, plan.tipId, "life_tip.tip")) {
+      throw new AppError("NOT_FOUND", "확정한 꿀팁 계획을 찾지 못했어요.",
+        { httpStatus: 404 });
+    }
+    const candidate = lifeTipCandidate(state, scenario.importId).candidate;
+    if (requestFingerprint(candidate) !== requestFingerprint(task.inputBindings)) {
+      throw new AppError("CONTEXT_STALE", "꿀팁 캡처의 단계가 변경됐어요.",
+        { httpStatus: 409 });
+    }
+    const scope = { type: "activity", id: activityId };
+    const active = (predicate) => state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.predicate === predicate && item.scope?.type === scope.type &&
+      item.scope.id === scope.id);
+    const tipLinks = active("life_tip.plan_uses_tip").filter((item) =>
+      item.subjectId === plan.id && item.objectEntityId === plan.tipId);
+    const links = active("life_tip.plan_has_action").filter((item) =>
+      item.subjectId === plan.id);
+    if (tipLinks.length !== 1 || links.length < 1 || links.length > 8) {
+      throw new AppError("LIFE_TIP_GRAPH_CONFLICT", "실천 계획의 단계 연결이 맞지 않아요.",
+        { httpStatus: 409 });
+    }
+    const original = new Map(plan.actions.map((item) => [item.id, item]));
+    const lines = new Map();
+    for (const link of links) {
+      const id = link.objectEntityId;
+      const orders = active("life_tip.action_order").filter((item) => item.subjectId === id);
+      const texts = active("life_tip.action_text").filter((item) => item.subjectId === id);
+      const indexes = active("life_tip.action_fact_index").filter((item) =>
+        item.subjectId === id);
+      const factIndex = indexes[0]?.typedValue?.value ?? original.get(id)?.factIndex;
+      const fact = candidate.candidates.find((item) => item.factIndex === factIndex);
+      if (!activeScenarioEntity(state, id, "life_tip.action") ||
+          orders.length !== 1 || texts.length !== 1 || indexes.length > 1 ||
+          !fact || fact.text !== texts[0].typedValue?.value ||
+          !Number.isSafeInteger(orders[0].typedValue?.value) ||
+          (indexes.length === 1 && indexes[0].typedValue?.value !== factIndex) ||
+          lines.has(factIndex)) {
+        throw new AppError("LIFE_TIP_GRAPH_CONFLICT", "실천 단계와 캡처 근거가 달라요.",
+          { httpStatus: 409 });
+      }
+      lines.set(factIndex, { id, factIndex, fact, has: link,
+        order: orders[0], text: texts[0], index: indexes[0] ?? null });
+    }
+    const actions = [...lines.values()].sort((a, b) =>
+      a.order.typedValue.value - b.order.typedValue.value);
+    if (actions.some((item, index) => item.order.typedValue.value !== index + 1)) {
+      throw new AppError("LIFE_TIP_GRAPH_CONFLICT", "실천 단계 순서가 중복됐어요.",
+        { httpStatus: 409 });
+    }
+    const graphFingerprint = requestFingerprint(actions.map((item) => [
+      item.id, item.factIndex, item.has.id, item.order.id,
+      item.text.id, item.index?.id ?? null]));
+    const revision = 1 + Object.values(state.lifeTipCorrectionReceipts ?? {}).filter((item) =>
+      item.ownerId === ownerId && item.activityId === activityId && !item.deleted).length;
+    return { current, scenario, source, plan, candidate, scope, lines,
+      actions: actions.map((item) => ({ id: item.id, factIndex: item.factIndex,
+        text: item.fact.text, order: item.order.typedValue.value })),
+      graphFingerprint, revision };
   }
 
   function diningCandidates(state, importIds, area) {
@@ -2891,7 +3008,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     const recovered = recoveryDraft(state, activityId, current,
       { allowStartedShoppingSuccessor: true });
-    if (["dining", "fashion", "beauty", "travel"].includes(scenario) && current.pendingChanges.some((item) =>
+    if (["dining", "fashion", "beauty", "travel", "life_tip"].includes(scenario) && current.pendingChanges.some((item) =>
       item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
       if (requested) {
         const expected = reviewSuccessorDetails(state, activityId,
@@ -3005,7 +3122,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
             return { activityId, status: "blocked", revision: current.revision,
               scenario: scenarioForActivity(state, activityId), changes,
-              affectedTasks: (scenarioForActivity(state, activityId) === "dining"
+              affectedTasks: (scenarioForActivity(state, activityId) === "life_tip"
+                ? ["record_outcomes"]
+                : scenarioForActivity(state, activityId) === "dining"
                 ? ["review_visit_details", "record_visit_outcome"]
                 : scenarioForActivity(state, activityId) === "beauty"
                 ? ["instantiate_routine", "record_routine_outcome"]
@@ -6572,6 +6691,147 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         });
       } catch (error) { throw toHttpError(error); }
     },
+    async getEditableLifeTipPlan(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => {
+          const graph = editableLifeTipGraph(state, activityId);
+          return { activityId, planId: graph.plan.id,
+            revision: graph.revision, graphFingerprint: graph.graphFingerprint,
+            actions: graph.actions, originalActions: graph.plan.actions,
+            candidates: graph.candidate.candidates.map((item) => ({
+              factIndex: item.factIndex, text: item.text })) };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctLifeTipPlan(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedGraphFingerprint", "factIndexes", "confirmed"].includes(key)) ||
+          input.confirmed !== true || typeof input.expectedGraphFingerprint !== "string" ||
+          !/^[a-f0-9]{64}$/.test(input.expectedGraphFingerprint) ||
+          !Array.isArray(input.factIndexes) || input.factIndexes.length < 1 ||
+          input.factIndexes.length > 8 || input.factIndexes.some((index) =>
+            !Number.isSafeInteger(index) || index < 1 || index > 8) ||
+          new Set(input.factIndexes).size !== input.factIndexes.length) {
+          throw new AppError("INVALID_REQUEST", "정정할 꿀팁 단계와 순서를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const factIndexes = [...input.factIndexes];
+        const hash = requestFingerprint({ activityId,
+          expectedGraphFingerprint: input.expectedGraphFingerprint, factIndexes });
+        return await store.transact((state) => {
+          assertState(state);
+          state.lifeTipCorrectionReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const prior = state.lifeTipCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 꿀팁 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 꿀팁 정정은 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const graph = editableLifeTipGraph(state, activityId);
+          if (graph.graphFingerprint !== input.expectedGraphFingerprint) {
+            throw new AppError("LIFE_TIP_REVISION_CONFLICT",
+              "꿀팁 단계 관계가 먼저 변경됐어요.", { httpStatus: 409 });
+          }
+          if (factIndexes.some((index) => !graph.candidate.candidates.some((item) =>
+            item.factIndex === index))) {
+            throw new AppError("INVALID_REQUEST", "캡처에 있는 단계만 고를 수 있어요.",
+              { httpStatus: 400 });
+          }
+          if (requestFingerprint(factIndexes) === requestFingerprint(
+            graph.actions.map((item) => item.factIndex))) {
+            throw new AppError("UNCHANGED_PLAN", "변경된 꿀팁 단계가 없어요.",
+              { httpStatus: 409 });
+          }
+          const stem = `life-tip-correction:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const now = new Date().toISOString();
+          const beforeSequence = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId,
+            kind: "user_confirmation", title: "사용자가 정정한 생활 꿀팁 단계",
+            provenance: { scenario: "life_tip_correction", activityId,
+              confirmationSourceId: graph.source.id,
+              importedSourceId: state.importReceipts[graph.scenario.importId].sourceId } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(factIndexes), content: { factIndexes },
+            capturedAt: now });
+          const selected = new Set(factIndexes);
+          for (const line of graph.lines.values()) {
+            if (selected.has(line.factIndex)) continue;
+            const role = fingerprint(line.id).slice(0, 16);
+            apply(`remove-link:${role}`, "assertion.retract", {
+              assertionId: line.has.id, expectedRevision: line.has.revision });
+            apply(`remove-order:${role}`, "assertion.retract", {
+              assertionId: line.order.id, expectedRevision: line.order.revision });
+          }
+          for (const [index, factIndex] of factIndexes.entries()) {
+            const fact = graph.candidate.candidates.find((item) =>
+              item.factIndex === factIndex);
+            const line = graph.lines.get(factIndex);
+            const role = `fact:${factIndex}`;
+            const evidenceId = `${stem}:evidence:${factIndex}`;
+            apply(`evidence:${role}`, "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId, quote: fact.text,
+              locator: { kind: "user_confirmation",
+                jsonPointer: `/factIndexes/${index}` } });
+            const assertion = (field, subjectId, predicate, value,
+              typed = false) => ({ id: `${stem}:${field}:${factIndex}`, subjectId,
+              predicate, scope: graph.scope, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [evidenceId, ...fact.evidenceIds], observedAt: now,
+              ...(typed ? { typedValue: { type: typed, value } } :
+                { objectEntityId: value }) });
+            if (line) {
+              if (line.order.typedValue.value !== index + 1) {
+                apply(`order:${role}`, "assertion.correct", {
+                  assertionId: line.order.id, expectedRevision: line.order.revision,
+                  assertion: assertion("order", line.id,
+                    "life_tip.action_order", index + 1, "core.revision") });
+              }
+              continue;
+            }
+            const actionId = `${stem}:action:${factIndex}`;
+            apply(`action:${role}`, "entity.create", { id: actionId,
+              type: "life_tip.action", label: "사용자가 추가한 생활 꿀팁 단계" });
+            apply(`link:${role}`, "assertion.add", assertion("link", graph.plan.id,
+              "life_tip.plan_has_action", actionId));
+            apply(`order:${role}`, "assertion.add", assertion("order", actionId,
+              "life_tip.action_order", index + 1, "core.revision"));
+            apply(`index:${role}`, "assertion.add", assertion("index", actionId,
+              "life_tip.action_fact_index", factIndex, "core.revision"));
+            apply(`text:${role}`, "assertion.add", assertion("text", actionId,
+              "life_tip.action_text", fact.text, "core.text"));
+          }
+          recordAffectedConsumers(state, beforeSequence);
+          state.reviewEvents.push({ key: `${activityId}:life-tip-correction:${commandId}`,
+            activityId, reasonCode: "SCENARIO_GRAPH_CORRECTED",
+            eventIds: state.knowledge.events.filter((event) =>
+              event.sequence > beforeSequence).map((event) => event.id), timeDue: false });
+          state.lifeTipCorrectionReceipts[key] = { ownerId, activityId,
+            sourceId, hash };
+          const next = editableLifeTipGraph(state, activityId);
+          const result = { activityId, revision: next.revision,
+            graphFingerprint: next.graphFingerprint, sourceId,
+            knowledgeSequence: state.knowledge.sequence };
+          state.lifeTipCorrectionReceipts[key].result = result;
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
     async createLifeTipScenario(raw) {
       try {
         const input = requestObject(raw);
@@ -6755,9 +7015,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               type: "life_tip.action", label: "사용자가 선택한 생활 꿀팁 단계" });
             assertion(`plan-has-action:${index + 1}`, planId,
               "life_tip.plan_has_action", [confirmationEvidenceId], actionId);
-            assertion(`action-order:${index + 1}`, actionId,
+          assertion(`action-order:${index + 1}`, actionId,
               "life_tip.action_order", [confirmationEvidenceId], null,
               { type: "core.revision", value: index + 1 });
+            assertion(`action-fact-index:${index + 1}`, actionId,
+              "life_tip.action_fact_index", [...fact.evidenceIds, confirmationEvidenceId], null,
+              { type: "core.revision", value: factIndex });
             assertion(`action-text:${index + 1}`, actionId,
               "life_tip.action_text", [...fact.evidenceIds, confirmationEvidenceId],
               null, { type: "core.text", value: fact.text });

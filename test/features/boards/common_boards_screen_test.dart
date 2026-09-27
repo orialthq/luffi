@@ -186,6 +186,22 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   @override
+  Future<KernelJson> getEditableLifeTipPlan(String activityId) async => {
+    'activityId': activityId,
+    'graphFingerprint': 'e' * 64,
+    'actions': [
+      {'id': 'step-1', 'factIndex': 1, 'text': '영수증 모으기', 'order': 1},
+    ],
+    'candidates': [
+      {'factIndex': 1, 'text': '영수증 모으기'},
+      {'factIndex': 2, 'text': '날짜별 정리'},
+    ],
+  };
+
+  @override
+  Future<KernelJson> correctLifeTipPlan(KernelJson request) async => request;
+
+  @override
   Future<KernelJson> getEditableDiningSelection(String activityId) async => {
     'activityId': activityId,
     'graphFingerprint': 'd' * 64,
@@ -1249,6 +1265,21 @@ Future<void> _pump(WidgetTester tester, FakeKernelClient client) async {
 }
 
 void main() {
+  testWidgets('confirmed life-tip board opens the action correction editor', (
+    tester,
+  ) async {
+    final client = FakeKernelClient()..board['scenario'] = 'life_tip';
+    (client.board['tasks'] as List).add({
+      'id': 'confirm_actions',
+      'executionStatus': 'completed',
+    });
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('kernel-open-life-tip-correction')));
+    await tester.pumpAndSettle();
+    expect(find.text('꿀팁 단계·순서 정정'), findsWidgets);
+    expect(find.textContaining('영수증 모으기'), findsWidgets);
+  });
+
   testWidgets('selected dining board opens the place correction editor', (
     tester,
   ) async {
