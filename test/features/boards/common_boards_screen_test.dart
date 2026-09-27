@@ -1218,6 +1218,20 @@ final class FakeKernelClient implements CommonKernelClient {
   }
 
   @override
+  Future<KernelJson> correctShoppingInventorySupport(KernelJson request) async {
+    commands.add(request);
+    return {'activityId': request['activityId']};
+  }
+
+  @override
+  Future<KernelJson> cancelShoppingInventoryObservation(
+    KernelJson request,
+  ) async {
+    commands.add(request);
+    return {'activityId': request['activityId']};
+  }
+
+  @override
   Future<KernelJson> getShoppingBasketReview(String activityId) async => {
     'status': 'current',
     'items': <Object?>[],

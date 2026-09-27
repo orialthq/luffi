@@ -392,44 +392,60 @@ void main() {
     ]);
   });
 
-  testWidgets('purchase correction targets one product and requires the paid amount', (
-    tester,
-  ) async {
-    Map<String, Object?>? result;
-    await openDialog(
-      tester,
-      const ShoppingPurchaseCorrectionDialog(
-        choice: {
-          'kind': 'basket',
-          'lines': [
-            {'choices': [
-              {'id': 'tofu', 'title': '두부'},
-              {'id': 'egg', 'title': '달걀'},
-            ]},
+  testWidgets(
+    'purchase correction targets one product and requires the paid amount',
+    (tester) async {
+      Map<String, Object?>? result;
+      await openDialog(
+        tester,
+        const ShoppingPurchaseCorrectionDialog(
+          choice: {
+            'kind': 'basket',
+            'lines': [
+              {
+                'choices': [
+                  {'id': 'tofu', 'title': '두부'},
+                  {'id': 'egg', 'title': '달걀'},
+                ],
+              },
+            ],
+          },
+          outcomes: [
+            {'choiceId': 'tofu', 'status': 'purchased', 'actualPaidKrw': 2400},
+            {'choiceId': 'egg', 'status': 'not_purchased'},
           ],
-        },
-        outcomes: [
-          {'choiceId': 'tofu', 'status': 'purchased', 'actualPaidKrw': 2400},
-          {'choiceId': 'egg', 'status': 'not_purchased'},
-        ],
-      ),
-      (value) => result = value,
-    );
-    await tester.tap(find.byKey(const Key('shopping-correct-choice')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('달걀').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('shopping-correct-status-purchased')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('shopping-correct-purchase-confirm')));
-    await tester.pumpAndSettle();
-    expect(result, isNull);
-    expect(find.text('실제 지불액을 확인해 주세요.'), findsOneWidget);
-    await tester.enterText(find.byKey(const Key('shopping-correct-paid')), '3900');
-    await tester.tap(find.byKey(const Key('shopping-correct-purchase-confirm')));
-    await tester.pumpAndSettle();
-    expect(result, {'choiceId': 'egg', 'status': 'purchased', 'actualPaidKrw': 3900});
-  });
+        ),
+        (value) => result = value,
+      );
+      await tester.tap(find.byKey(const Key('shopping-correct-choice')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('달걀').last);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('shopping-correct-status-purchased')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('shopping-correct-purchase-confirm')),
+      );
+      await tester.pumpAndSettle();
+      expect(result, isNull);
+      expect(find.text('실제 지불액을 확인해 주세요.'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('shopping-correct-paid')),
+        '3900',
+      );
+      await tester.tap(
+        find.byKey(const Key('shopping-correct-purchase-confirm')),
+      );
+      await tester.pumpAndSettle();
+      expect(result, {
+        'choiceId': 'egg',
+        'status': 'purchased',
+        'actualPaidKrw': 3900,
+      });
+    },
+  );
 
   testWidgets('inventory correction keeps the exact observation revision', (
     tester,
@@ -453,12 +469,104 @@ void main() {
       find.byKey(const Key('shopping-correct-inventory-amount')),
       '650',
     );
-    await tester.tap(find.byKey(const Key('shopping-correct-inventory-confirm')));
+    await tester.tap(
+      find.byKey(const Key('shopping-correct-inventory-confirm')),
+    );
     await tester.pumpAndSettle();
     expect(result, {
       'observationId': 'stock-a',
       'expectedAssertionId': 'assertion-2',
       'quantity': {'status': 'known', 'amount': 650.0, 'unit': 'g'},
+    });
+  });
+
+  testWidgets(
+    'inventory support correction selects a purchased choice on the same line',
+    (tester) async {
+      Map<String, Object?>? result;
+      await openDialog(
+        tester,
+        const ShoppingInventorySupportDialog(
+          basket: {
+            'kind': 'basket',
+            'lines': [
+              {
+                'ingredientId': 'tofu',
+                'choices': [
+                  {'id': 'choice-a', 'title': '두부 A'},
+                  {'id': 'choice-b', 'title': '두부 B'},
+                ],
+              },
+              {
+                'ingredientId': 'egg',
+                'choices': [
+                  {'id': 'choice-egg', 'title': '달걀'},
+                ],
+              },
+            ],
+          },
+          outcomes: [
+            {'choiceId': 'choice-a', 'status': 'purchased'},
+            {'choiceId': 'choice-b', 'status': 'purchased'},
+            {'choiceId': 'choice-egg', 'status': 'purchased'},
+          ],
+          observations: [
+            {
+              'observationId': 'stock-a',
+              'ingredientId': 'tofu',
+              'graphFingerprint': 'fp-a',
+              'quantity': {'status': 'known', 'amount': 400, 'unit': 'g'},
+              'supportingChoiceIds': ['choice-a'],
+            },
+          ],
+        ),
+        (value) => result = value,
+      );
+      expect(find.text('달걀'), findsNothing);
+      await tester.tap(find.byKey(const Key('shopping-support-confirm')));
+      await tester.pumpAndSettle();
+      expect(find.text('현재 근거 상품과 같아요.'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('shopping-support-choice-choice-a')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('shopping-support-choice-choice-b')),
+      );
+      await tester.tap(find.byKey(const Key('shopping-support-confirm')));
+      await tester.pumpAndSettle();
+      expect(result, {
+        'observationId': 'stock-a',
+        'expectedGraphFingerprint': 'fp-a',
+        'supportingChoiceIds': ['choice-b'],
+      });
+    },
+  );
+
+  testWidgets('inventory cancellation names the exact observed graph', (
+    tester,
+  ) async {
+    Map<String, Object?>? result;
+    await openDialog(
+      tester,
+      const ShoppingInventoryCancellationDialog(
+        observations: [
+          {
+            'observationId': 'stock-a',
+            'ingredientId': 'tofu',
+            'graphFingerprint': 'fp-a',
+            'quantity': {'status': 'known', 'amount': 400, 'unit': 'g'},
+          },
+        ],
+      ),
+      (value) => result = value,
+    );
+    await tester.tap(
+      find.byKey(const Key('shopping-cancel-inventory-confirm')),
+    );
+    await tester.pumpAndSettle();
+    expect(result, {
+      'observationId': 'stock-a',
+      'expectedGraphFingerprint': 'fp-a',
     });
   });
 }

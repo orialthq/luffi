@@ -3642,6 +3642,71 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     }
   }
 
+  Future<void> _correctShoppingInventorySupport() async {
+    if (_busy || _needsRefresh) return;
+    try {
+      final observations = _objects(
+        (await widget.client.listShoppingInventory(
+          widget.activityId,
+        ))['observations'],
+      );
+      if (observations.isEmpty || !mounted) return;
+      final purchase = await widget.client.getShoppingPurchaseOutcomes(
+        widget.activityId,
+      );
+      final confirmed = _objects(
+        _board?['results'],
+      ).firstWhere((item) => item['taskId'] == 'confirm_choice');
+      final basket = _object(_object(confirmed['value'])['choice']);
+      if (!mounted) return;
+      final selection = await showDialog<KernelJson>(
+        context: context,
+        builder: (_) => ShoppingInventorySupportDialog(
+          basket: basket,
+          outcomes: _objects(purchase['outcomes']),
+          observations: observations,
+        ),
+      );
+      if (selection == null || !mounted) return;
+      await _mutate((_, commandId) async {
+        await widget.client.correctShoppingInventorySupport({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          ...selection,
+        });
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
+  Future<void> _cancelShoppingInventoryObservation() async {
+    if (_busy || _needsRefresh) return;
+    try {
+      final observations = _objects(
+        (await widget.client.listShoppingInventory(
+          widget.activityId,
+        ))['observations'],
+      );
+      if (observations.isEmpty || !mounted) return;
+      final selection = await showDialog<KernelJson>(
+        context: context,
+        builder: (_) =>
+            ShoppingInventoryCancellationDialog(observations: observations),
+      );
+      if (selection == null || !mounted) return;
+      await _mutate((_, commandId) async {
+        await widget.client.cancelShoppingInventoryObservation({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          ...selection,
+        });
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
   Future<void> _reviewShoppingBasket() async {
     try {
       final review = await widget.client.getShoppingBasketReview(
@@ -3804,13 +3869,33 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               '${_shoppingQuantityLabel(observation['quantity'])}',
             ),
           if (_shoppingInventoryObservations.isNotEmpty)
-            TextButton.icon(
-              key: const Key('shopping-correct-inventory'),
-              onPressed: _busy || _needsRefresh
-                  ? null
-                  : _correctShoppingInventoryObservation,
-              icon: const Icon(Icons.edit_note),
-              label: const Text('기록한 보유량 정정'),
+            Wrap(
+              children: [
+                TextButton.icon(
+                  key: const Key('shopping-correct-inventory'),
+                  onPressed: _busy || _needsRefresh
+                      ? null
+                      : _correctShoppingInventoryObservation,
+                  icon: const Icon(Icons.edit_note),
+                  label: const Text('보유량 정정'),
+                ),
+                TextButton.icon(
+                  key: const Key('shopping-correct-inventory-support'),
+                  onPressed: _busy || _needsRefresh
+                      ? null
+                      : _correctShoppingInventorySupport,
+                  icon: const Icon(Icons.link),
+                  label: const Text('근거 상품 정정'),
+                ),
+                TextButton.icon(
+                  key: const Key('shopping-cancel-inventory'),
+                  onPressed: _busy || _needsRefresh
+                      ? null
+                      : _cancelShoppingInventoryObservation,
+                  icon: const Icon(Icons.remove_circle_outline),
+                  label: const Text('관측 취소'),
+                ),
+              ],
             ),
           if (_objects(
             value['outcomes'],

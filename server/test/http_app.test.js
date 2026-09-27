@@ -439,6 +439,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/shopping/purchase-outcome-corrections", "correctShoppingPurchaseOutcome"],
     ["/shopping/inventory-observations", "recordShoppingInventory"],
     ["/shopping/inventory-observation-corrections", "correctShoppingInventoryObservation"],
+    ["/shopping/inventory-support-corrections", "correctShoppingInventorySupport"],
+    ["/shopping/inventory-observation-cancellations", "cancelShoppingInventoryObservation"],
     ["/health/scenarios", "createHealthScenario"],
     ["/health/confirm-exercises", "confirmHealthExercises"],
     ["/health/exercise-outcomes", "recordHealthExerciseOutcomes"],

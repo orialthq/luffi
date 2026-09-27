@@ -1304,6 +1304,210 @@ final class ShoppingInventoryCorrectionDialog extends StatefulWidget {
       _ShoppingInventoryCorrectionDialogState();
 }
 
+final class ShoppingInventorySupportDialog extends StatefulWidget {
+  const ShoppingInventorySupportDialog({
+    required this.basket,
+    required this.outcomes,
+    required this.observations,
+    super.key,
+  });
+
+  final KernelJson basket;
+  final List<KernelJson> outcomes;
+  final List<KernelJson> observations;
+
+  @override
+  State<ShoppingInventorySupportDialog> createState() =>
+      _ShoppingInventorySupportDialogState();
+}
+
+final class _ShoppingInventorySupportDialogState
+    extends State<ShoppingInventorySupportDialog> {
+  String? _observationId;
+  final _selected = <String, Set<String>>{};
+  String? _error;
+
+  @override
+  Widget build(BuildContext context) {
+    final observationId =
+        _observationId ?? _text(widget.observations.first['observationId']);
+    final observation = widget.observations.firstWhere(
+      (item) => item['observationId'] == observationId,
+    );
+    final purchased = widget.outcomes
+        .where((item) => item['status'] == 'purchased')
+        .map((item) => _text(item['choiceId']))
+        .toSet();
+    final line = (widget.basket['lines'] as List? ?? [])
+        .whereType<Map>()
+        .where((item) => item['ingredientId'] == observation['ingredientId'])
+        .firstOrNull;
+    final choices = (line?['choices'] as List? ?? [])
+        .whereType<Map>()
+        .where((item) => purchased.contains(_text(item['id'])))
+        .toList();
+    final selected = _selected.putIfAbsent(
+      observationId,
+      () => (observation['supportingChoiceIds'] as List? ?? [])
+          .whereType<String>()
+          .toSet(),
+    );
+    return AlertDialog(
+      title: const Text('재고 관측의 근거 상품 정정'),
+      content: SizedBox(
+        width: 470,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('같은 재료에서 실제 구매한 상품만 근거로 연결할 수 있습니다.'),
+              DropdownButtonFormField<String>(
+                key: const Key('shopping-support-observation'),
+                initialValue: observationId,
+                decoration: const InputDecoration(labelText: '정정할 관측'),
+                items: widget.observations
+                    .map(
+                      (item) => DropdownMenuItem<String>(
+                        value: _text(item['observationId']),
+                        child: Text(
+                          '${_text(item['ingredientId'])} · '
+                          '${_quantityLabel(item['quantity'])}',
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() {
+                  _observationId = value;
+                  _error = null;
+                }),
+              ),
+              for (final choice in choices)
+                CheckboxListTile(
+                  key: ValueKey('shopping-support-choice-${choice['id']}'),
+                  title: Text(_text(choice['title'])),
+                  value: selected.contains(_text(choice['id'])),
+                  onChanged: (value) => setState(() {
+                    final id = _text(choice['id']);
+                    if (value == true) {
+                      selected.add(id);
+                    } else {
+                      selected.remove(id);
+                    }
+                  }),
+                ),
+              if (_error != null)
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('shopping-support-confirm'),
+          onPressed: () {
+            if (selected.isEmpty) {
+              setState(() => _error = '근거 상품을 하나 이상 선택해 주세요.');
+              return;
+            }
+            final old = (observation['supportingChoiceIds'] as List? ?? [])
+                .whereType<String>()
+                .toSet();
+            if (old.length == selected.length && old.containsAll(selected)) {
+              setState(() => _error = '현재 근거 상품과 같아요.');
+              return;
+            }
+            Navigator.pop(context, <String, Object?>{
+              'observationId': observationId,
+              'expectedGraphFingerprint': observation['graphFingerprint'],
+              'supportingChoiceIds': selected.toList()..sort(),
+            });
+          },
+          child: const Text('근거 정정'),
+        ),
+      ],
+    );
+  }
+}
+
+final class ShoppingInventoryCancellationDialog extends StatefulWidget {
+  const ShoppingInventoryCancellationDialog({
+    required this.observations,
+    super.key,
+  });
+
+  final List<KernelJson> observations;
+
+  @override
+  State<ShoppingInventoryCancellationDialog> createState() =>
+      _ShoppingInventoryCancellationDialogState();
+}
+
+final class _ShoppingInventoryCancellationDialogState
+    extends State<ShoppingInventoryCancellationDialog> {
+  String? _observationId;
+
+  @override
+  Widget build(BuildContext context) {
+    final observationId =
+        _observationId ?? _text(widget.observations.first['observationId']);
+    final observation = widget.observations.firstWhere(
+      (item) => item['observationId'] == observationId,
+    );
+    return AlertDialog(
+      title: const Text('재고 관측 취소'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('이 관측은 현재 재고 판단에서 제외됩니다. 원래 보고와 취소 이력은 남습니다.'),
+            DropdownButtonFormField<String>(
+              key: const Key('shopping-cancel-observation'),
+              initialValue: observationId,
+              decoration: const InputDecoration(labelText: '취소할 관측'),
+              items: widget.observations
+                  .map(
+                    (item) => DropdownMenuItem<String>(
+                      value: _text(item['observationId']),
+                      child: Text(
+                        '${_text(item['ingredientId'])} · '
+                        '${_quantityLabel(item['quantity'])}',
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _observationId = value),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('돌아가기'),
+        ),
+        FilledButton(
+          key: const Key('shopping-cancel-inventory-confirm'),
+          onPressed: () => Navigator.pop(context, <String, Object?>{
+            'observationId': observationId,
+            'expectedGraphFingerprint': observation['graphFingerprint'],
+          }),
+          child: const Text('관측 취소'),
+        ),
+      ],
+    );
+  }
+}
+
 final class _ShoppingInventoryCorrectionDialogState
     extends State<ShoppingInventoryCorrectionDialog> {
   String? _observationId;

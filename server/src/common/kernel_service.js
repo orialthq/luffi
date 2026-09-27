@@ -2341,6 +2341,48 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       revision: corrections.length };
   }
 
+  function shoppingInventoryGraph(state, activityId, observationId) {
+    board(state, activityId);
+    const report = Object.entries(state.shoppingInventoryReceipts ?? {})
+      .find(([key, item]) => key.startsWith(`${ownerId}:`) &&
+        item.activityId === activityId && !item.deleted &&
+        item.result.observations.some((entry) =>
+          entry.observationId === observationId))?.[1];
+    if (!report || !state.knowledge.sources.some((item) =>
+      item.ownerId === ownerId && item.id === report.sourceId &&
+      item.status === "active")) {
+      throw new AppError("INVENTORY_OBSERVATION_NOT_FOUND",
+        "재고 관측을 찾지 못했어요.", { httpStatus: 404 });
+    }
+    const active = (predicate) => state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.subjectId === observationId && item.predicate === predicate &&
+      item.scope?.type === "activity" && item.scope.id === activityId);
+    const quantity = active("recipe.observed_inventory");
+    const ingredient = active("recipe.observes_inventory");
+    const supports = active("shopping.inventory_after_choice");
+    if (quantity.length !== 1 || ingredient.length !== 1 ||
+        supports.length < 1 || supports.length > 8 ||
+        new Set(supports.map((item) => item.objectEntityId)).size !== supports.length) {
+      throw new AppError("INVENTORY_GRAPH_CONFLICT",
+        "재고 관측 관계가 변경됐어요.", { httpStatus: 409 });
+    }
+    const original = report.result.observations.find((entry) =>
+      entry.observationId === observationId);
+    if (quantity[0].typedValue?.value?.ingredientId !== original.ingredientId) {
+      throw new AppError("INVENTORY_GRAPH_CONFLICT",
+        "재고 관측의 재료가 달라졌어요.", { httpStatus: 409 });
+    }
+    const supportingChoiceIds = supports.map((item) => item.objectEntityId).sort();
+    const graphFingerprint = requestFingerprint({ observationId,
+      quantityAssertionId: quantity[0].id,
+      ingredientAssertionId: ingredient[0].id,
+      supports: supports.map((item) => [item.id, item.objectEntityId]).sort((a, b) =>
+        a[0].localeCompare(b[0])) });
+    return { report, original, quantity: quantity[0], ingredient: ingredient[0],
+      supports, supportingChoiceIds, graphFingerprint };
+  }
+
   function editableShoppingBasketGraph(state, activityId) {
     const current = board(state, activityId);
     const scenario = Object.values(state.shoppingScenarioReceipts ?? {}).find((item) =>
@@ -9412,9 +9454,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
                 entry.subjectId === item.observationId &&
                 entry.predicate === "recipe.observed_inventory" &&
                 entry.scope?.type === "activity" && entry.scope.id === activityId);
-              return current ? [{ ...structuredClone(item),
-                quantity: structuredClone(current.typedValue.value.quantity),
-                revision: current.revision, assertionId: current.id }] : [];
+              if (!current) return [];
+              const graph = shoppingInventoryGraph(state, activityId, item.observationId);
+              return [{ ...structuredClone(item),
+                quantity: structuredClone(graph.quantity.typedValue.value.quantity),
+                supportingChoiceIds: graph.supportingChoiceIds,
+                revision: graph.quantity.revision,
+                assertionId: graph.quantity.id,
+                graphFingerprint: graph.graphFingerprint }];
             }) };
         });
       } catch (error) { throw toHttpError(error); }
@@ -9547,6 +9594,223 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             assertionId, sourceId };
           state.shoppingInventoryCorrectionReceipts[key] = { ownerId, activityId,
             observationId, sourceId, originalSourceId: report.sourceId,
+            hash, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctShoppingInventorySupport(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "observationId", "expectedGraphFingerprint",
+          "supportingChoiceIds"].includes(key)) ||
+          typeof input.expectedGraphFingerprint !== "string" ||
+          !Array.isArray(input.supportingChoiceIds) ||
+          input.supportingChoiceIds.length < 1 ||
+          input.supportingChoiceIds.length > 8) {
+          throw new AppError("INVALID_REQUEST", "재고 근거 상품을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const observationId = safeId(input.observationId, "observationId");
+        const supportingChoiceIds = input.supportingChoiceIds.map((id) =>
+          safeId(id, "choiceId")).sort();
+        if (new Set(supportingChoiceIds).size !== supportingChoiceIds.length) {
+          throw new AppError("INVALID_REQUEST", "근거 상품이 중복됐어요.",
+            { httpStatus: 400 });
+        }
+        const hash = requestFingerprint({ operation: "relink", activityId,
+          observationId, expectedGraphFingerprint: input.expectedGraphFingerprint,
+          supportingChoiceIds });
+        return await store.transact((state) => {
+          assertState(state);
+          state.shoppingInventoryCorrectionReceipts ??= {};
+          const key = `${ownerId}:${commandId}`;
+          const prior = state.shoppingInventoryCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 재고 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 재고 정정이에요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const graph = shoppingInventoryGraph(state, activityId, observationId);
+          if (graph.graphFingerprint !== input.expectedGraphFingerprint) {
+            throw new AppError("INVENTORY_REVISION_CONFLICT",
+              "재고 근거가 먼저 변경됐어요.", { httpStatus: 409 });
+          }
+          if (requestFingerprint(graph.supportingChoiceIds) ===
+              requestFingerprint(supportingChoiceIds)) {
+            throw new AppError("UNCHANGED_INVENTORY_SUPPORT",
+              "현재 근거 상품과 같아요.", { httpStatus: 400 });
+          }
+          const current = board(state, activityId);
+          const basket = current.results.find((item) =>
+            item.taskId === "confirm_choice")?.value?.choice;
+          const line = basket?.kind === "basket" ? basket.lines.find((item) =>
+            item.ingredientId === graph.original.ingredientId) : null;
+          const purchase = shoppingPurchaseProjection(state, activityId);
+          const bought = new Set(purchase.outcomes.filter((item) =>
+            item.status === "purchased").map((item) => item.choiceId));
+          const connection = Object.values(state.scenarioConnections ?? {}).find((item) =>
+            item.ownerId === ownerId && item.kind === "recipe_shopping" &&
+            item.toActivityId === activityId && connectionLive(state, item));
+          const recipe = connection ? editableRecipeGraph(state, connection.fromActivityId) : null;
+          const ingredient = recipe ? [...recipe.ingredientLines.values()].find((item) =>
+            item.value.typedValue?.value?.ingredientId === graph.original.ingredientId) : null;
+          if (!line || !ingredient?.requires?.objectEntityId ||
+              graph.ingredient.objectEntityId !== ingredient.requires.objectEntityId ||
+              supportingChoiceIds.some((id) => !line.choices.some((choice) =>
+                choice.id === id) || !bought.has(id) ||
+                !state.knowledge.entities.some((item) =>
+                  item.ownerId === ownerId && item.id === id &&
+                  item.type === "shopping.purchase_choice" && item.status === "active") ||
+                !state.knowledge.assertions.some((item) =>
+                  item.ownerId === ownerId && item.status === "active" &&
+                  item.subjectId === basket.id &&
+                  item.predicate === "shopping.basket_contains_choice" &&
+                  item.objectEntityId === id && item.scope?.id === activityId) ||
+                !state.knowledge.assertions.some((item) =>
+                  item.ownerId === ownerId && item.status === "active" &&
+                  item.subjectId === id &&
+                  item.predicate === "shopping.choice_matches_ingredient" &&
+                  item.objectEntityId === ingredient.requires.objectEntityId &&
+                  item.scope?.id === activityId) ||
+                state.knowledge.assertions.filter((item) =>
+                  item.ownerId === ownerId && item.status === "active" &&
+                  item.predicate === "shopping.purchase_for_choice" &&
+                  item.objectEntityId === id && item.scope?.type === "activity" &&
+                  item.scope.id === activityId).length !== 1)) {
+            throw new AppError("INVALID_INVENTORY_SUPPORT",
+              "같은 재료에 연결된 실제 구매 상품만 근거로 선택할 수 있어요.",
+              { httpStatus: 422 });
+          }
+          const confirmationSourceId = Object.values(state.shoppingScenarioReceipts ?? {})
+            .find((item) => !item.deleted && item.result?.activityId === activityId)
+            ?.result?.confirmationSourceId;
+          if (!state.knowledge.sources.some((item) => item.ownerId === ownerId &&
+              item.id === confirmationSourceId && item.status === "active")) {
+            throw new AppError("CONTEXT_STALE", "쇼핑 확인 근거를 찾지 못했어요.",
+              { httpStatus: 409 });
+          }
+          const now = new Date().toISOString();
+          const stem = `shopping-inventory-support:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const evidenceId = `${stem}:evidence`;
+          const content = { observationId,
+            previousSupportingChoiceIds: graph.supportingChoiceIds,
+            supportingChoiceIds };
+          const before = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_report",
+            title: "사용자가 정정한 재고 근거 상품", provenance: {
+              scenario: "shopping_inventory_correction", activityId,
+              confirmationSourceId, originalSourceId: graph.report.sourceId } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(content), content, capturedAt: now });
+          apply("evidence", "evidence.add", { id: evidenceId,
+            sourceVersionId: versionId,
+            quote: `재고 관측 근거 상품 ${supportingChoiceIds.length}개 정정`,
+            locator: { kind: "user_report", jsonPointer: "/supportingChoiceIds" } });
+          for (const assertion of graph.supports) apply(`retract:${assertion.id}`,
+            "assertion.retract", { assertionId: assertion.id,
+              expectedRevision: assertion.revision });
+          for (const [index, choiceId] of supportingChoiceIds.entries()) {
+            apply(`assertion:${index}`, "assertion.add", {
+              id: `${stem}:choice:${index}`, subjectId: observationId,
+              predicate: "shopping.inventory_after_choice",
+              scope: { type: "activity", id: activityId },
+              origin: "user_reported", assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [evidenceId], observedAt: now,
+              objectEntityId: choiceId,
+            });
+          }
+          recordAffectedConsumers(state, before);
+          const result = { activityId, observationId, sourceId,
+            previousSupportingChoiceIds: graph.supportingChoiceIds,
+            supportingChoiceIds,
+            graphFingerprint: shoppingInventoryGraph(state, activityId,
+              observationId).graphFingerprint };
+          state.shoppingInventoryCorrectionReceipts[key] = { ownerId, activityId,
+            observationId, sourceId, originalSourceId: graph.report.sourceId,
+            hash, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async cancelShoppingInventoryObservation(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "observationId", "expectedGraphFingerprint"].includes(key)) ||
+          typeof input.expectedGraphFingerprint !== "string") {
+          throw new AppError("INVALID_REQUEST", "취소할 재고 관측을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const observationId = safeId(input.observationId, "observationId");
+        const hash = requestFingerprint({ operation: "cancel", activityId,
+          observationId, expectedGraphFingerprint: input.expectedGraphFingerprint });
+        return await store.transact((state) => {
+          assertState(state);
+          state.shoppingInventoryCorrectionReceipts ??= {};
+          const key = `${ownerId}:${commandId}`;
+          const prior = state.shoppingInventoryCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 재고 취소에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 재고 취소예요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const graph = shoppingInventoryGraph(state, activityId, observationId);
+          if (graph.graphFingerprint !== input.expectedGraphFingerprint) {
+            throw new AppError("INVENTORY_REVISION_CONFLICT",
+              "재고 관측이 먼저 변경됐어요.", { httpStatus: 409 });
+          }
+          const confirmationSourceId = Object.values(state.shoppingScenarioReceipts ?? {})
+            .find((item) => !item.deleted && item.result?.activityId === activityId)
+            ?.result?.confirmationSourceId;
+          if (!state.knowledge.sources.some((item) => item.ownerId === ownerId &&
+              item.id === confirmationSourceId && item.status === "active")) {
+            throw new AppError("CONTEXT_STALE", "쇼핑 확인 근거를 찾지 못했어요.",
+              { httpStatus: 409 });
+          }
+          const now = new Date().toISOString();
+          const stem = `shopping-inventory-cancel:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const content = { observationId,
+            previousQuantity: graph.quantity.typedValue.value.quantity,
+            previousSupportingChoiceIds: graph.supportingChoiceIds,
+            canceledAt: now };
+          const before = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_report",
+            title: "사용자가 취소한 재고 관측", provenance: {
+              scenario: "shopping_inventory_correction", activityId,
+              confirmationSourceId, originalSourceId: graph.report.sourceId } });
+          apply("version", "source.version.add", { id: `${stem}:version`, sourceId,
+            contentHash: fingerprint(content), content, capturedAt: now });
+          for (const assertion of [graph.quantity, graph.ingredient,
+            ...graph.supports]) apply(`retract:${assertion.id}`,
+            "assertion.retract", { assertionId: assertion.id,
+              expectedRevision: assertion.revision });
+          recordAffectedConsumers(state, before);
+          const result = { activityId, observationId, canceled: true,
+            canceledAt: now, sourceId };
+          state.shoppingInventoryCorrectionReceipts[key] = { ownerId, activityId,
+            observationId, sourceId, originalSourceId: graph.report.sourceId,
             hash, result };
           return { state, result: { ...result, replayed: false } };
         });
