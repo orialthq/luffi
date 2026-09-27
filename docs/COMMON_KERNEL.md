@@ -49,6 +49,8 @@ Flutter 개발 빌드에도 같은 토큰을 `--dart-define=LUFFI_KERNEL_TOKEN=.
 | `POST /v1/kernel/recipe/scenarios` | 사용자가 직접 확인한 레시피로 근거 그래프·Activity·승인 대기 계획을 한 트랜잭션에서 생성 |
 | `POST /v1/kernel/dining/scenarios` | 확인해 가져온 식당·카페 캡처, 지역·시각·인원으로 승인 대기 맛집 계획 생성 |
 | `POST /v1/kernel/dining/select-place` | 사용자가 후보 지점을 고르고 캡처 Mention의 장소 신원을 연결한 뒤 선택 작업 완료 |
+| `GET /v1/kernel/dining/editable/:activityId` | 확정한 식당의 현재 그래프 선택 관계와 같은 활동의 후보·정정 버전 조회 |
+| `POST /v1/kernel/dining/corrections` | 식당 선택 관계를 근거와 함께 정정하고 이전 방문 결과를 보존하며 새 활동 검토 요구 |
 | `POST /v1/kernel/dining/visit-outcome` | 사용자가 방문 여부를 기록. `visited`일 때만 출처가 있는 방문 관계 생성 |
 | `POST /v1/kernel/fashion/scenarios` | 확인해 가져온 패션 상품 캡처로 일정별 코디 계획 제안 |
 | `POST /v1/kernel/fashion/confirm-outfit` | 사용자가 코디 슬롯·색상·사이즈·소유 상태를 확인하고 출처가 있는 Outfit 구성 |
@@ -174,7 +176,10 @@ Flutter에서 캡처 분석을 명시적으로 확인하면 `/ingestion/reviewed
 
 ## 첫 맛집 시나리오
 
-`POST /v1/kernel/dining/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importIds`(1~20개), `scheduledAt`, `area`, `partySize`(1~20명)를 받는다. 서버는 식당·카페 자료의 관측 상호·지역·주소로 임시 후보를 만들고 승인 대기 계획을 반환한다. 계획 승인 후 `select_place → review_visit_details → record_visit_outcome`을 수행한다. 두 특수 명령은 활동의 현재 revision, 준비된 작업, 후보 ID를 검사하며 같은 명령 ID 재전송에 안전하다. 선택 명령은 캡처 Mention의 IdentityDecision을 연결하고, 방문 결과 명령은 `visited`일 때만 사용자 보고 출처와 `dining.visited` 관계를 저장한다.
+`POST /v1/kernel/dining/scenarios`는 `commandId`, `activityId`, `confirmed: true`, 확인해 가져온 `importIds`(1~20개), `scheduledAt`, `area`, `partySize`(1~20명)를 받는다. 서버는 식당·카페 자료의 관측 상호·지역·주소로 임시 후보를 만들고 승인 대기 계획을 반환한다. 계획 승인 후 `select_place → review_visit_details → record_visit_outcome`을 수행한다. 선택 명령은 캡처 Mention의 IdentityDecision을 연결하고, 사용자 확인 Source/Evidence가 뒷받침하는 활동 범위 `dining.choice → dining.choice_place → dining.place` 관계를 저장한다. 방문 결과 명령은 `visited`일 때만 별도 사용자 보고 출처와 `dining.visited` 관계를 저장한다. 각 명령은 활동의 현재 revision과 준비 상태를 검사하며 같은 명령 ID 재전송에 안전하다.
+
+선택을 정정할 때는 `GET /v1/kernel/dining/editable/:activityId`의 `graphFingerprint`와 새 `candidateId`를 `POST /v1/kernel/dining/corrections`에 보낸다. 서버는 같은 활동의 유효한 캡처 후보와 신원을 재검증하고 `dining.choice_place`만 버전 있는 Assertion으로 교체한다. 원래 `select_place` TaskResult와 완료한 방문 기록은 당시 사실로 남는다. 기존 보드는 재검토 상태가 되며 새 활동으로 이어서 선택·방문 조건을 다시 확인한다. 연결된 다른 활동에 남은 옛 식당 지점 투영은 철회해 현재 선택으로 오해하지 않게 한다. 정정 근거 또는 원래 선택 근거를 삭제하면 부분 그래프를 남기지 않도록 해당 활동과 종속 사용자 기록을 함께 제거한다.
+이전 버전에서 작업 결과에만 저장한 선택은 조회 시 읽기 전용으로 표시하고, 첫 정정 요청의 원자적 트랜잭션 안에서 원래 선택 근거와 관계를 생성한 뒤 정정한다. 기존 활동을 조회하는 것만으로 저장 내용을 바꾸지 않는다.
 
 Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 활동을 만들고 원본·지도 검색을 열 수 있다. 지도 검색은 실장소 확정이 아니며, 방문 전 정보는 현재 `unknown`으로만 기록한다. 제공자 지점 대조·근거 기반 비교·예약 확인·부분 근거 삭제 재계획은 아직 연결되지 않았다. 세부 계약과 검증 이미지는 [첫 맛집 시나리오](DINING_FIRST_SCENARIO.md)를 참조한다.
 

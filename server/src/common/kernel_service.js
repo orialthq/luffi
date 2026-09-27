@@ -51,6 +51,7 @@ export function createCommonKernelState() {
     fieldReviewReceipts: {},
     fieldCorrectionReceipts: {},
     recipeCorrectionReceipts: {},
+    diningCorrectionReceipts: {},
     beautyCorrectionReceipts: {},
     travelCorrectionReceipts: {},
     fashionCorrectionReceipts: {},
@@ -756,6 +757,77 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       item.predicate === predicate && matches(item));
   }
 
+  function editableDiningGraph(state, activityId) {
+    const current = board(state, activityId);
+    const scenario = Object.values(state.diningScenarioReceipts ?? {}).find((item) =>
+      !item.deleted && item.result?.activityId === activityId);
+    const sourceId = scenario?.result?.confirmationSourceId;
+    const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
+      item.id === sourceId && item.status === "active");
+    const task = current.tasks.find((item) => item.id === "select_place" &&
+      item.capabilityId === "dining.select_place" && item.executionStatus === "completed");
+    const selected = current.results.find((item) => item.id === task?.latestOutputRef)?.value;
+    if (!scenario || !selected) throw new AppError("NOT_FOUND",
+      "확정한 식당 선택을 찾지 못했어요.", { httpStatus: 404 });
+    const candidates = task.inputBindings?.candidates ?? task.readiness?.inputs?.candidates;
+    const original = candidates?.find((item) => item.id === selected.candidateId);
+    const stem = `dining:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+    const choiceId = `${stem}:choice`;
+    const scope = { type: "activity", id: activityId };
+    if (!source && !sourceId && original &&
+        activeScenarioEntity(state, selected.placeId, "dining.place") &&
+        original.mentionIds.every((mentionId) =>
+          state.knowledge.entityMentions.some((item) => item.ownerId === ownerId &&
+            item.id === mentionId && item.status === "active") &&
+          state.knowledge.identityDecisions.some((item) => item.ownerId === ownerId &&
+            item.mentionId === mentionId && item.entityId === selected.placeId &&
+            item.status === "accepted"))) {
+      return { current, scenario, source: null, selected, original, candidates,
+        candidate: original, choiceId, link: null, scope, legacy: true,
+        graphFingerprint: requestFingerprint(["legacy-dining-selection",
+          task.latestOutputRef, selected.candidateId, selected.placeId,
+          original.mentionIds]), revision: 0 };
+    }
+    if (!source) throw new AppError("DINING_GRAPH_CONFLICT",
+      "식당 선택 근거가 사라졌어요.", { httpStatus: 409 });
+    const links = state.knowledge.assertions.filter((item) => item.ownerId === ownerId &&
+      item.status === "active" && item.subjectId === choiceId &&
+      item.predicate === "dining.choice_place" &&
+      item.scope?.type === scope.type && item.scope.id === scope.id);
+    const link = links[0];
+    const evidence = state.knowledge.evidence.find((item) => item.ownerId === ownerId &&
+      item.status === "active" && link?.evidenceIds.includes(item.id));
+    const version = state.knowledge.sourceVersions.find((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.id === evidence?.sourceVersionId);
+    const assertedSource = state.knowledge.sources.find((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.id === version?.sourceId);
+    const candidate = candidates?.find((item) => item.id === version?.content?.candidateId);
+    if (!activeScenarioEntity(state, choiceId, "dining.choice") || links.length !== 1 ||
+        !candidate || !original || !assertedSource ||
+        !(assertedSource.id === source.id ||
+          (assertedSource.provenance?.scenario === "dining_correction" &&
+            assertedSource.provenance?.activityId === activityId &&
+            assertedSource.provenance?.confirmationSourceId === source.id)) ||
+        !activeScenarioEntity(state, link.objectEntityId, "dining.place") ||
+        candidate.mentionIds.some((mentionId) =>
+          !state.knowledge.entityMentions.some((item) => item.ownerId === ownerId &&
+            item.id === mentionId && item.status === "active") ||
+          !state.knowledge.identityDecisions.some((item) => item.ownerId === ownerId &&
+            item.mentionId === mentionId && item.entityId === link.objectEntityId &&
+            item.status === "accepted"))) {
+      throw new AppError("DINING_GRAPH_CONFLICT", "선택한 식당과 근거 연결이 서로 달라요.",
+        { httpStatus: 409 });
+    }
+    return { current, scenario, source, selected, original, candidates,
+      candidate, choiceId, link, scope,
+      graphFingerprint: requestFingerprint([choiceId, link.id, link.revision,
+        link.objectEntityId, candidate.id]),
+      revision: 1 + Object.values(state.diningCorrectionReceipts ?? {}).filter((item) =>
+        item.ownerId === ownerId && item.activityId === activityId && !item.deleted).length };
+  }
+
   function registerContextWatch(state, activityId, context) {
     const watch = registerKnowledgeWatch(state.knowledge, { ownerId, consumerId: activityId, context });
     state.knowledge = watch.state;
@@ -896,6 +968,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             item.deleted = true;
             item.result = { activityId };
           }
+        }
+      }
+      for (const item of Object.values(state.diningCorrectionReceipts ?? {})) {
+        if (item.ownerId === ownerId && item.activityId === activityId) {
+          item.deleted = true;
+          item.result = { activityId };
         }
       }
       for (const item of Object.values(state.shoppingInventoryReceipts ?? {})) {
@@ -1044,6 +1122,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.importReceipts[id]?.sourceId === source.id)).map((item) => item.result.activityId))
       : new Set(source?.provenance?.scenario === "fashion" && source.provenance.activityId
         ? [source.provenance.activityId] : []);
+    const diningActivityIds = source?.kind === "capture_analysis"
+      ? new Set(Object.values(state.diningScenarioReceipts ?? {}).filter((item) =>
+        !item.deleted && item.importIds?.some((id) =>
+          state.importReceipts[id]?.sourceId === source.id)).map((item) => item.result.activityId))
+      : new Set(source?.provenance?.scenario === "dining" && source.provenance.activityId
+        ? [source.provenance.activityId] : []);
     const beautyActivityIds = source?.kind === "capture_analysis"
       ? new Set(Object.values(state.beautyScenarioReceipts ?? {}).filter((item) =>
         !item.deleted && item.importIds?.some((id) =>
@@ -1082,6 +1166,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           item.provenance?.importedSourceId === source.id) ||
           (item.provenance?.scenario === "fashion" &&
             fashionActivityIds.has(item.provenance.activityId)) ||
+          (item.provenance?.scenario === "dining" &&
+            diningActivityIds.has(item.provenance.activityId)) ||
           (item.provenance?.scenario === "beauty" &&
             beautyActivityIds.has(item.provenance.activityId)) ||
           (item.provenance?.scenario === "travel" &&
@@ -1103,10 +1189,17 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "fashion_correction" &&
           item.provenance.importedSourceIds?.includes(source.id)) ||
           (item.provenance?.scenario === "travel_correction" &&
+          item.provenance.importedSourceIds?.includes(source.id)) ||
+          (item.provenance?.scenario === "dining_correction" &&
           item.provenance.importedSourceIds?.includes(source.id)))).map((item) => item.id) : [];
     const linkedRecipeCorrections = source?.provenance?.scenario === "recipe"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.provenance?.scenario === "recipe_correction" &&
+        item.provenance.confirmationSourceId === source.id).map((item) => item.id)
+      : [];
+    const linkedDiningCorrections = source?.provenance?.scenario === "dining"
+      ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
+        item.status === "active" && item.provenance?.scenario === "dining_correction" &&
         item.provenance.confirmationSourceId === source.id).map((item) => item.id)
       : [];
     const linkedBeautyCorrections = source?.provenance?.scenario === "beauty"
@@ -1128,6 +1221,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
       item.provenance?.scenario === "fashion" &&
       fashionActivityIds.has(item.provenance.activityId) &&
+      (item.kind === "user_confirmation" || item.kind === "user_report"))
+      .map((item) => item.id);
+    const linkedDiningSources = state.knowledge.sources.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" && item.id !== sourceId &&
+      item.provenance?.scenario === "dining" &&
+      diningActivityIds.has(item.provenance.activityId) &&
       (item.kind === "user_confirmation" || item.kind === "user_report"))
       .map((item) => item.id);
     const linkedBeautySources = state.knowledge.sources.filter((item) =>
@@ -1161,19 +1260,23 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       (item.kind === "user_confirmation" || item.kind === "user_report"))
       .map((item) => item.id);
     return { source, linkedConfirmations, linkedRecipeCorrections,
+      linkedDiningCorrections,
       linkedBeautyCorrections,
       linkedFashionCorrections,
       linkedTravelCorrections,
       linkedFashionSources, linkedBeautySources,
+      linkedDiningSources,
       linkedTravelSources, linkedLifeTipSources, linkedShoppingSources,
       linkedHealthSources };
   }
 
   function finishSourceDeletion(state, { source, linkedConfirmations, linkedRecipeCorrections,
+    linkedDiningCorrections,
     linkedBeautyCorrections,
     linkedFashionCorrections,
     linkedTravelCorrections,
     linkedFashionSources,
+    linkedDiningSources,
     linkedBeautySources, linkedTravelSources, linkedLifeTipSources,
     linkedShoppingSources, linkedHealthSources }) {
     if (source) purgeIssuedContextsFromSource(state, source.id);
@@ -1202,6 +1305,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     if (source?.provenance?.scenario === "recipe_correction") {
       for (const receipt of Object.values(state.recipeCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    if (source?.provenance?.scenario === "dining_correction") {
+      for (const receipt of Object.values(state.diningCorrectionReceipts ?? {})) {
         if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
           receipt.deleted = true;
           receipt.result = { activityId: receipt.activityId };
@@ -1241,6 +1352,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (source?.kind === "user_confirmation" && source.provenance?.scenario === "recipe") {
       redactRecipeScenario(state, source.id);
     }
+    if (source?.kind === "user_confirmation" && source.provenance?.scenario === "dining") {
+      redactDiningScenario(state, source.id, source.provenance.activityId);
+    }
     for (const sourceId of linkedRecipeCorrections ?? []) {
       state.knowledge = applyKnowledgeCommand(state.knowledge, {
         ownerId, commandId: `kernel:source-cascade:${sourceId}`,
@@ -1248,6 +1362,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       for (const receipt of Object.values(state.recipeCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    for (const sourceId of linkedDiningCorrections ?? []) {
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      for (const receipt of Object.values(state.diningCorrectionReceipts ?? {})) {
         if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
           receipt.deleted = true;
           receipt.result = { activityId: receipt.activityId };
@@ -1365,7 +1492,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             receipt.result = { activityId: receipt.activityId };
           }
         }
+        for (const receipt of Object.values(state.diningCorrectionReceipts ?? {})) {
+          if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+            receipt.deleted = true;
+            receipt.result = { activityId: receipt.activityId };
+          }
+        }
         redactRecipeScenario(state, sourceId);
+        redactDiningScenario(state, sourceId);
         redactFashionScenario(state, sourceId);
         redactBeautyScenario(state, sourceId);
         redactTravelScenario(state, sourceId);
@@ -1383,6 +1517,16 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       redactFashionScenario(state, sourceId);
+    }
+    for (const sourceId of linkedDiningSources) {
+      const linked = state.knowledge.sources.find((item) => item.id === sourceId);
+      if (linked?.status !== "active") continue;
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      redactDiningScenario(state, sourceId);
     }
     for (const sourceId of linkedBeautySources) {
       const linked = state.knowledge.sources.find((item) => item.id === sourceId);
@@ -1437,7 +1581,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     // A correction supersedes the old assertions. Deleting its evidence cannot
     // reactivate those assertions, so remove the dependent confirmation instead
     // of leaving an activity backed by a partial graph.
-    if (["recipe_correction", "fashion_correction", "beauty_correction",
+    if (["recipe_correction", "dining_correction", "fashion_correction", "beauty_correction",
       "travel_correction"].includes(source?.provenance?.scenario) &&
       source.provenance.confirmationSourceId) {
       const confirmationId = source.provenance.confirmationSourceId;
@@ -2747,7 +2891,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     const recovered = recoveryDraft(state, activityId, current,
       { allowStartedShoppingSuccessor: true });
-    if (["fashion", "beauty", "travel"].includes(scenario) && current.pendingChanges.some((item) =>
+    if (["dining", "fashion", "beauty", "travel"].includes(scenario) && current.pendingChanges.some((item) =>
       item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
       if (requested) {
         const expected = reviewSuccessorDetails(state, activityId,
@@ -2861,7 +3005,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
             return { activityId, status: "blocked", revision: current.revision,
               scenario: scenarioForActivity(state, activityId), changes,
-              affectedTasks: (scenarioForActivity(state, activityId) === "beauty"
+              affectedTasks: (scenarioForActivity(state, activityId) === "dining"
+                ? ["review_visit_details", "record_visit_outcome"]
+                : scenarioForActivity(state, activityId) === "beauty"
                 ? ["instantiate_routine", "record_routine_outcome"]
                 : scenarioForActivity(state, activityId) === "fashion"
                   ? ["record_wear"] : ["record_stop_outcomes"])
@@ -4921,8 +5067,33 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               decisionId, expectedRevision: 1,
             });
           }
+          const selectedAt = new Date().toISOString();
+          const sourceId = `${stem}:selection-source`;
+          const versionId = `${stem}:selection-version`;
+          const evidenceId = `${stem}:selection-evidence`;
+          const choiceId = `${stem}:choice`;
+          const content = { candidateId, placeId, selectedAt };
+          applyKnowledge("selection-source", "source.create", { id: sourceId,
+            kind: "user_confirmation", title: "사용자가 선택한 식당",
+            provenance: { scenario: "dining", activityId,
+              importedSourceIds: scenario.importIds.map((id) =>
+                state.importReceipts[id].sourceId) } });
+          applyKnowledge("selection-version", "source.version.add", { id: versionId,
+            sourceId, contentHash: fingerprint(content), content, capturedAt: selectedAt });
+          applyKnowledge("selection-evidence", "evidence.add", { id: evidenceId,
+            sourceVersionId: versionId, quote: candidate.name,
+            locator: { kind: "user_confirmation", jsonPointer: "/candidateId" } });
+          applyKnowledge("choice", "entity.create", { id: choiceId,
+            type: "dining.choice", label: "이 식사 활동의 식당 선택" });
+          const choice = { id: `${stem}:choice-place`, subjectId: choiceId,
+            predicate: "dining.choice_place", objectEntityId: placeId,
+            scope: { type: "activity", id: activityId }, origin: "user_reported",
+            assertedBy: { type: "user", id: ownerId }, evidenceIds: [evidenceId],
+            observedAt: selectedAt };
+          validateAssertionRelation(state, choice);
+          applyKnowledge("choice-place", "assertion.add", choice);
           recordAffectedConsumers(state, beforeSequence);
-          const output = { candidateId, placeId, selectedAt: new Date().toISOString() };
+          const output = content;
           const applied = applyActivityCommand(state.activities, {
             ownerId, commandId: `${stem}:selected`, type: "task.transition", activityId,
             expectedRevision: input.expectedRevision,
@@ -4930,9 +5101,182 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               to: "completed", output },
           }, activityOptions(state));
           state.activities = applied.state;
+          scenario.result.confirmationSourceId = sourceId;
           const result = { activityId, placeId, candidateId, revision: applied.result.revision };
           state.diningCommandReceipts[receiptKey] = { hash: requestHash, result, activityId };
           syncConnectionSubjects(state, activityId);
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async getEditableDiningSelection(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => {
+          const graph = editableDiningGraph(state, activityId);
+          return { activityId, revision: graph.revision,
+            graphFingerprint: graph.graphFingerprint,
+            candidateId: graph.candidate.id,
+            placeId: graph.link?.objectEntityId ?? graph.selected.placeId,
+            candidates: graph.candidates.map((item) => ({ id: item.id,
+              name: item.name, searchArea: item.searchArea,
+              importIds: item.importIds })) };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctDiningPlace(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedGraphFingerprint", "candidateId", "confirmed"].includes(key)) ||
+          input.confirmed !== true || typeof input.expectedGraphFingerprint !== "string" ||
+          !/^[a-f0-9]{64}$/.test(input.expectedGraphFingerprint)) {
+          throw new AppError("INVALID_REQUEST", "식당 정정 요청을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const candidateId = safeId(input.candidateId, "candidateId");
+        const hash = requestFingerprint({ activityId,
+          expectedGraphFingerprint: input.expectedGraphFingerprint, candidateId });
+        return await store.transact((state) => {
+          assertState(state);
+          state.diningCorrectionReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const prior = state.diningCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 식당 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 식당 정정은 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          let graph = editableDiningGraph(state, activityId);
+          if (graph.graphFingerprint !== input.expectedGraphFingerprint) {
+            throw new AppError("DINING_REVISION_CONFLICT", "식당 선택 관계가 먼저 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          const candidate = graph.candidates.find((item) => item.id === candidateId);
+          if (!candidate) throw new AppError("INVALID_REQUEST",
+            "이 활동의 식당 후보가 아니에요.", { httpStatus: 400 });
+          if (candidateId === graph.candidate.id) throw new AppError("UNCHANGED_SELECTION",
+            "변경된 식당 선택이 없어요.", { httpStatus: 409 });
+          const fresh = diningCandidates(state, graph.scenario.importIds,
+            graph.scenario.area).candidates.find((item) => item.id === candidateId);
+          if (!fresh || requestFingerprint(fresh) !== requestFingerprint(candidate)) {
+            throw new AppError("CONTEXT_STALE", "식당 후보의 근거가 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          const mentions = candidate.mentionIds.map((id) =>
+            state.knowledge.entityMentions.find((item) => item.ownerId === ownerId &&
+              item.id === id && item.status === "active"));
+          if (mentions.some((item) => !item)) throw new AppError("CONTEXT_STALE",
+            "식당 후보의 캡처 근거가 변경됐어요.", { httpStatus: 409 });
+          const accepted = mentions.map((mention) => state.knowledge.identityDecisions.find((item) =>
+            item.ownerId === ownerId && item.mentionId === mention.id && item.status === "accepted"));
+          const existingPlaceIds = new Set(accepted.filter(Boolean).map((item) => item.entityId));
+          if (existingPlaceIds.size > 1) throw new AppError("IDENTITY_CONFLICT",
+            "후보 캡처가 서로 다른 식당 지점에 연결돼 있어요.", { httpStatus: 409 });
+          const stem = `dining-correction:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const placeId = [...existingPlaceIds][0] ??
+            `dining:${fingerprint([ownerId, activityId]).slice(0, 32)}:place:${fingerprint(candidateId).slice(0, 16)}`;
+          if (placeId === (graph.link?.objectEntityId ?? graph.selected.placeId)) throw new AppError("UNCHANGED_SELECTION",
+            "같은 식당 지점으로 연결된 후보예요.", { httpStatus: 409 });
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const evidenceId = `${stem}:evidence`;
+          const now = new Date().toISOString();
+          const beforeSequence = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          if (graph.legacy) {
+            const baseStem = `dining:${fingerprint([ownerId, activityId]).slice(0, 32)}`;
+            const baseSourceId = `${baseStem}:selection-source`;
+            const baseVersionId = `${baseStem}:selection-version`;
+            const baseEvidenceId = `${baseStem}:selection-evidence`;
+            apply("legacy-source", "source.create", { id: baseSourceId,
+              kind: "user_confirmation", title: "사용자가 선택한 식당",
+              provenance: { scenario: "dining", activityId,
+                importedSourceIds: graph.scenario.importIds.map((id) =>
+                  state.importReceipts[id].sourceId) } });
+            apply("legacy-version", "source.version.add", { id: baseVersionId,
+              sourceId: baseSourceId, contentHash: fingerprint(graph.selected),
+              content: graph.selected, capturedAt: graph.selected.selectedAt });
+            apply("legacy-evidence", "evidence.add", { id: baseEvidenceId,
+              sourceVersionId: baseVersionId, quote: graph.original.name,
+              locator: { kind: "user_confirmation", jsonPointer: "/candidateId" } });
+            apply("legacy-choice", "entity.create", { id: baseStem + ":choice",
+              type: "dining.choice", label: "이 식사 활동의 식당 선택" });
+            const initialChoice = { id: `${baseStem}:choice-place`,
+              subjectId: `${baseStem}:choice`, predicate: "dining.choice_place",
+              objectEntityId: graph.selected.placeId, scope: graph.scope,
+              origin: "user_reported", assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [baseEvidenceId], observedAt: graph.selected.selectedAt };
+            validateAssertionRelation(state, initialChoice);
+            apply("legacy-choice-place", "assertion.add", initialChoice);
+            graph.scenario.result.confirmationSourceId = baseSourceId;
+            graph = editableDiningGraph(state, activityId);
+          }
+          if (existingPlaceIds.size === 0) apply("place", "entity.create", {
+            id: placeId, type: "dining.place", label: "사용자가 정정한 식당 지점" });
+          for (const mention of mentions) {
+            if (accepted.some((item) => item?.mentionId === mention.id)) continue;
+            const role = fingerprint(mention.id).slice(0, 16);
+            const decisionId = `${stem}:identity:${role}`;
+            apply(`identity-propose:${role}`, "identity.propose", { id: decisionId,
+              mentionId: mention.id, entityId: placeId,
+              evidenceIds: mention.evidenceIds, reason: "사용자가 정정한 식당 지점" });
+            apply(`identity-accept:${role}`, "identity.accept", { decisionId,
+              expectedRevision: 1 });
+          }
+          const content = { candidateId, placeId, correctedAt: now };
+          apply("source", "source.create", { id: sourceId,
+            kind: "user_confirmation", title: "사용자가 정정한 식당 선택",
+            provenance: { scenario: "dining_correction", activityId,
+              confirmationSourceId: graph.source.id,
+              importedSourceIds: graph.scenario.importIds.map((id) =>
+                state.importReceipts[id].sourceId) } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(content), content, capturedAt: now });
+          apply("evidence", "evidence.add", { id: evidenceId,
+            sourceVersionId: versionId, quote: candidate.name,
+            locator: { kind: "user_confirmation", jsonPointer: "/candidateId" } });
+          apply("choice-place", "assertion.correct", {
+            assertionId: graph.link.id, expectedRevision: graph.link.revision,
+            assertion: { id: `${stem}:choice-place`, subjectId: graph.choiceId,
+              predicate: "dining.choice_place", objectEntityId: placeId,
+              scope: graph.scope, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [evidenceId], observedAt: now } });
+          // An existing cross-activity link still names this activity, but its
+          // old place projection must not masquerade as the corrected choice.
+          for (const connection of Object.values(state.scenarioConnections ?? {})) {
+            if (connection.ownerId !== ownerId || !connectionLive(state, connection)) continue;
+            const side = connection.fromActivityId === activityId ? "from" :
+              connection.toActivityId === activityId ? "to" : null;
+            if (!side) continue;
+            const subject = state.knowledge.assertions.find((item) =>
+              item.ownerId === ownerId && item.id === `${connection.id}:${side}-subject` &&
+              item.status === "active");
+            if (subject) apply(`unlink:${fingerprint(connection.id).slice(0, 16)}:${side}`,
+              "assertion.retract", { assertionId: subject.id,
+                expectedRevision: subject.revision });
+          }
+          recordAffectedConsumers(state, beforeSequence);
+          state.reviewEvents.push({ key: `${activityId}:dining-correction:${commandId}`,
+            activityId, reasonCode: "SCENARIO_GRAPH_CORRECTED",
+            eventIds: state.knowledge.events.filter((event) =>
+              event.sequence > beforeSequence).map((event) => event.id), timeDue: false });
+          state.diningCorrectionReceipts[key] = { ownerId, activityId,
+            sourceId, candidateId, hash };
+          const next = editableDiningGraph(state, activityId);
+          const result = { activityId, revision: next.revision,
+            candidateId, placeId, graphFingerprint: next.graphFingerprint,
+            sourceId, knowledgeSequence: state.knowledge.sequence };
+          state.diningCorrectionReceipts[key].result = result;
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

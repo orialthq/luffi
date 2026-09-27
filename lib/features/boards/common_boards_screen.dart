@@ -14,6 +14,7 @@ import 'scenario_connections_section.dart';
 import 'recipe_correction_screen.dart';
 import 'ordered_graph_correction_screen.dart';
 import 'fashion_correction_screen.dart';
+import 'dining_correction_screen.dart';
 
 bool _connectionKindsVisible(KernelJson board) => const {
   'recipe',
@@ -2320,6 +2321,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openDiningEditor() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => DiningCorrectionScreen(
+          client: widget.client,
+          activityId: widget.activityId,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3845,6 +3858,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             onPressed: _busy || _needsRefresh ? null : _openRecipeEditor,
             icon: const Icon(Icons.edit_note_rounded),
             label: const Text('레시피 재료·순서 정정'),
+          ),
+        if (board['scenario'] == 'dining' &&
+            _objects(board['tasks']).any(
+              (task) =>
+                  task['id'] == 'select_place' &&
+                  task['executionStatus'] == 'completed',
+            ))
+          OutlinedButton.icon(
+            key: const Key('kernel-open-dining-correction'),
+            onPressed: _busy || _needsRefresh ? null : _openDiningEditor,
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('선택한 식당 정정'),
           ),
         if (board['scenario'] == 'beauty' &&
             _objects(board['tasks']).any(

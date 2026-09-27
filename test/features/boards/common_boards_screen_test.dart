@@ -186,6 +186,21 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   @override
+  Future<KernelJson> getEditableDiningSelection(String activityId) async => {
+    'activityId': activityId,
+    'graphFingerprint': 'd' * 64,
+    'candidateId': 'place-a',
+    'placeId': 'entity-a',
+    'candidates': [
+      {'id': 'place-a', 'name': '성수국수집', 'searchArea': '성수'},
+      {'id': 'place-b', 'name': '성수밥집', 'searchArea': '성수'},
+    ],
+  };
+
+  @override
+  Future<KernelJson> correctDiningPlace(KernelJson request) async => request;
+
+  @override
   Future<KernelJson> getEditableFashionOutfit(String activityId) async => {
     'activityId': activityId,
   };
@@ -1234,6 +1249,21 @@ Future<void> _pump(WidgetTester tester, FakeKernelClient client) async {
 }
 
 void main() {
+  testWidgets('selected dining board opens the place correction editor', (
+    tester,
+  ) async {
+    final client = FakeKernelClient()..board['scenario'] = 'dining';
+    (client.board['tasks'] as List).add({
+      'id': 'select_place',
+      'executionStatus': 'completed',
+    });
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('kernel-open-dining-correction')));
+    await tester.pumpAndSettle();
+    expect(find.text('선택한 식당 정정'), findsWidgets);
+    expect(find.text('성수밥집'), findsOneWidget);
+  });
+
   testWidgets('recipe board opens the linked graph correction editor', (
     tester,
   ) async {

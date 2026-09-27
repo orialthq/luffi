@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCommonKernelService } from "../src/common/kernel_service.js";
-import { createScenarioTestStore } from "./relational_fixture.js";
+import { createRelationalTestPool, createScenarioTestStore } from "./relational_fixture.js";
+import { createPostgresRelationalStore } from "../src/storage/postgres_relational_store.js";
 import { makeFiling, makeTag, makeValidAnalysis } from "./fixtures.js";
 import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 async function fixture(t, backend) {
-  const { store } = await createScenarioTestStore(t, backend, "dining");
-  return { store, service: createCommonKernelService({ ownerId: "diner", store }) };
+  const { store, reopenStore } = await createScenarioTestStore(t, backend, "dining");
+  return { store, reopenStore,
+    service: createCommonKernelService({ ownerId: "diner", store }) };
 }
 
 function analysis(name, area) {
@@ -204,6 +206,209 @@ test(`retracted restaurant identity prevents a visit report (${backend})`, async
   (error) => ["CONTEXT_STALE", "TASK_BLOCKED"].includes(error.code));
   assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
     item.status === "active" && item.predicate === "dining.visited").length, 0);
+});
+
+test(`correcting a selected branch preserves visit history and requires a new board (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  await imported(service, "first", "성수국수집", "성수");
+  await imported(service, "second", "성수밥집", "성수");
+  const created = await service.createDiningScenario({ commandId: "create-correctable",
+    activityId: "correctable-dinner", confirmed: true, importIds: ["first", "second"],
+    scheduledAt: "2026-09-27T19:00:00+09:00", area: "성수", partySize: 2 });
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-correctable" });
+  let board = await service.getBoard("correctable-dinner");
+  const originalCandidate = board.tasks.find((item) => item.id === "select_place")
+    .readiness.inputs.candidates[0];
+  const original = await service.selectDiningPlace({ commandId: "select-original",
+    activityId: "correctable-dinner", expectedRevision: board.revision,
+    candidateId: originalCandidate.id });
+  await service.activityCommand({ commandId: "create-connected-travel", type: "activity.create",
+    activityId: "connected-travel", expectedRevision: 0,
+    payload: { title: "성수 여행", goal: { description: "식사 장소 연동" } } });
+  await store.transact((state) => {
+    state.activities.activities["connected-travel"].currentPlanRevision = 1;
+    state.travelScenarioReceipts["connected-travel"] = {
+      result: { activityId: "connected-travel" } };
+    return { state, result: null };
+  });
+  board = await service.getBoard("correctable-dinner");
+  await service.createScenarioConnection({ commandId: "connected-dinner",
+    fromActivityId: "connected-travel", toActivityId: "correctable-dinner",
+    kind: "travel_dining", expectedFromRevision: 1,
+    expectedToRevision: board.revision, confirmed: true });
+  assert.equal((await service.listScenarioConnections("connected-travel"))
+    .connections[0].otherSubject.entityId, original.placeId);
+  board = await service.getBoard("correctable-dinner");
+  const details = board.tasks.find((item) => item.id === "review_visit_details");
+  await service.activityCommand({ commandId: "review-original", type: "task.transition",
+    activityId: "correctable-dinner", expectedRevision: board.revision,
+    payload: { taskId: details.id, expectedTaskRevision: details.revision,
+      to: "completed", output: { placeId: original.placeId, status: "unknown",
+        reviewedAt: "2026-09-27T09:00:00+09:00" } } });
+  board = await service.getBoard("correctable-dinner");
+  const visit = await service.recordDiningVisitOutcome({ commandId: "visit-original",
+    activityId: "correctable-dinner", expectedRevision: board.revision, status: "visited" });
+  const editable = await service.getEditableDiningSelection("correctable-dinner");
+  assert.equal(editable.candidateId, originalCandidate.id);
+  const replacement = editable.candidates.find((item) => item.id !== originalCandidate.id);
+  const correction = { commandId: "change-place", activityId: "correctable-dinner",
+    expectedGraphFingerprint: editable.graphFingerprint, candidateId: replacement.id,
+    confirmed: true };
+  const changed = await service.correctDiningPlace(correction);
+  assert.equal((await service.correctDiningPlace(correction)).replayed, true);
+  assert.notEqual(changed.placeId, original.placeId);
+  assert.equal((await service.getEditableDiningSelection("correctable-dinner")).candidateId,
+    replacement.id);
+  await assert.rejects(service.correctDiningPlace({ ...correction,
+    commandId: "stale-correction", candidateId: originalCandidate.id }),
+  (error) => error.code === "DINING_REVISION_CONFLICT");
+  const snapshot = await store.snapshot();
+  const choice = snapshot.knowledge.assertions.filter((item) =>
+    item.predicate === "dining.choice_place");
+  assert.equal(choice.filter((item) => item.status === "active").length, 1);
+  assert.equal(choice.find((item) => item.status === "active").objectEntityId, changed.placeId);
+  assert.equal(choice.find((item) => item.status === "corrected").objectEntityId, original.placeId);
+  assert.equal((await service.listScenarioConnections("connected-travel"))
+    .connections[0].otherSubject, null);
+  assert.equal(snapshot.knowledge.assertions.find((item) =>
+    item.predicate === "scenario.connection_to_subject").status, "retracted");
+  assert.equal(snapshot.knowledge.assertions.find((item) =>
+    item.predicate === "dining.visited" && item.status === "active").objectEntityId,
+  original.placeId);
+  assert.equal((await service.resolveKnowledge({ subjectId: visit.visitId,
+    predicate: "dining.visited", scope: { type: "activity", id: "correctable-dinner" } }))
+    .values[0].objectEntityId, original.placeId);
+  board = await service.getBoard("correctable-dinner");
+  const review = await service.getBoardReview("correctable-dinner");
+  assert.equal(review.status, "blocked");
+  assert.deepEqual(review.affectedTasks.map((item) => item.id),
+    ["review_visit_details", "record_visit_outcome"]);
+  const continued = await service.createReviewSuccessor({ activityId: "correctable-dinner",
+    commandId: "continue-corrected", expectedRevision: board.revision, confirmed: true });
+  assert.notEqual(continued.activityId, "correctable-dinner");
+  const next = await service.getBoard(continued.activityId);
+  assert.equal(next.pendingProposals.length, 1);
+  const visitSourceId = snapshot.knowledge.sources.find((item) =>
+    item.provenance?.scenario === "dining" && item.provenance.activityId === "correctable-dinner" &&
+    item.kind === "user_report").id;
+  await service.knowledgeCommand({ commandId: "delete-corrected-dinner-source",
+    type: "source.delete", payload: { sourceId: changed.sourceId } });
+  assert.equal((await store.snapshot()).knowledge.sources.find((item) =>
+    item.id === visitSourceId).status, "deleted");
+});
+
+test(`deleting a dining correction removes its dependent selection board (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  await imported(service, "first", "성수국수집", "성수");
+  await imported(service, "second", "성수밥집", "성수");
+  const created = await service.createDiningScenario({ commandId: "create-delete-correction",
+    activityId: "delete-correction-dinner", confirmed: true, importIds: ["first", "second"],
+    scheduledAt: "2026-09-27T19:00:00+09:00", area: "성수", partySize: 2 });
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-delete" });
+  const board = await service.getBoard("delete-correction-dinner");
+  const first = board.tasks[0].readiness.inputs.candidates[0];
+  await service.selectDiningPlace({ commandId: "select-delete", activityId: "delete-correction-dinner",
+    expectedRevision: board.revision, candidateId: first.id });
+  const editable = await service.getEditableDiningSelection("delete-correction-dinner");
+  const request = { commandId: "correct-delete", activityId: "delete-correction-dinner",
+    expectedGraphFingerprint: editable.graphFingerprint,
+    candidateId: editable.candidates.find((item) => item.id !== first.id).id,
+    confirmed: true };
+  const correction = await service.correctDiningPlace(request);
+  await service.knowledgeCommand({ commandId: "delete-dining-correction", type: "source.delete",
+    payload: { sourceId: correction.sourceId } });
+  await assert.rejects(service.getBoard("delete-correction-dinner"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctDiningPlace(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  const snapshot = await store.snapshot();
+  assert.equal(snapshot.knowledge.sources.find((item) =>
+    item.id === correction.sourceId).status, "deleted");
+  assert.equal(snapshot.diningScenarioReceipts["diner:create-delete-correction"].deleted, true);
+});
+
+test(`an older task-result-only dining choice is upgraded when corrected (${backend})`, async (t) => {
+  // Build an old JSON snapshot, then import that snapshot into either backend.
+  // Relational graph rows are append-only after import, as they are in production.
+  let { service, store } = await fixture(t, "json");
+  await imported(service, "first", "성수국수집", "성수");
+  await imported(service, "second", "성수밥집", "성수");
+  const created = await service.createDiningScenario({ commandId: "create-legacy",
+    activityId: "legacy-dinner", confirmed: true, importIds: ["first", "second"],
+    scheduledAt: "2026-09-27T19:00:00+09:00", area: "성수", partySize: 2 });
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-legacy" });
+  const board = await service.getBoard("legacy-dinner");
+  await service.selectDiningPlace({ commandId: "select-legacy", activityId: "legacy-dinner",
+    expectedRevision: board.revision, candidateId: board.tasks[0].readiness.inputs.candidates[0].id });
+  await store.transact((state) => {
+    const receipt = state.diningScenarioReceipts["diner:create-legacy"];
+    const sourceId = receipt.result.confirmationSourceId;
+    const versionIds = state.knowledge.sourceVersions.filter((item) =>
+      item.sourceId === sourceId).map((item) => item.id);
+    const evidenceIds = state.knowledge.evidence.filter((item) =>
+      versionIds.includes(item.sourceVersionId)).map((item) => item.id);
+    state.knowledge.sources = state.knowledge.sources.filter((item) => item.id !== sourceId);
+    state.knowledge.sourceVersions = state.knowledge.sourceVersions.filter((item) =>
+      !versionIds.includes(item.id));
+    state.knowledge.evidence = state.knowledge.evidence.filter((item) =>
+      !evidenceIds.includes(item.id));
+    state.knowledge.assertions = state.knowledge.assertions.filter((item) =>
+      item.predicate !== "dining.choice_place");
+    state.knowledge.entities = state.knowledge.entities.filter((item) =>
+      item.type !== "dining.choice");
+    delete receipt.result.confirmationSourceId;
+    return { state, result: null };
+  });
+  if (backend === "postgres") {
+    const legacy = await store.snapshot();
+    const { pool } = await createRelationalTestPool(t);
+    store = createPostgresRelationalStore({ pool, initialState: () => legacy });
+    await store.ready();
+    service = createCommonKernelService({ ownerId: "diner", store });
+  }
+  const editable = await service.getEditableDiningSelection("legacy-dinner");
+  assert.equal(editable.revision, 0);
+  const changed = await service.correctDiningPlace({ commandId: "correct-legacy",
+    activityId: "legacy-dinner", expectedGraphFingerprint: editable.graphFingerprint,
+    candidateId: editable.candidates.find((item) => item.id !== editable.candidateId).id,
+    confirmed: true });
+  assert.equal((await service.getEditableDiningSelection("legacy-dinner")).revision, 2);
+  const snapshot = await store.snapshot();
+  assert.equal(snapshot.knowledge.assertions.filter((item) =>
+    item.predicate === "dining.choice_place" && item.status === "active").length, 1);
+  assert.equal(snapshot.knowledge.assertions.find((item) =>
+    item.predicate === "dining.choice_place" && item.status === "active").objectEntityId,
+  changed.placeId);
+});
+
+test(`repeated dining corrections resolve the active evidence after restart (${backend})`, async (t) => {
+  const { service, reopenStore } = await fixture(t, backend);
+  await imported(service, "first", "성수국수집", "성수");
+  await imported(service, "second", "성수밥집", "성수");
+  const created = await service.createDiningScenario({ commandId: "create-repeat",
+    activityId: "repeat-dinner", confirmed: true, importIds: ["first", "second"],
+    scheduledAt: "2026-09-27T19:00:00+09:00", area: "성수", partySize: 2 });
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-repeat" });
+  const board = await service.getBoard("repeat-dinner");
+  const firstId = board.tasks[0].readiness.inputs.candidates[0].id;
+  await service.selectDiningPlace({ commandId: "select-repeat", activityId: "repeat-dinner",
+    expectedRevision: board.revision, candidateId: firstId });
+  const initial = await service.getEditableDiningSelection("repeat-dinner");
+  const secondId = initial.candidates.find((item) => item.id !== firstId).id;
+  await service.correctDiningPlace({ commandId: "repeat-change-b",
+    activityId: "repeat-dinner", expectedGraphFingerprint: initial.graphFingerprint,
+    candidateId: secondId, confirmed: true });
+  const restarted = reopenStore();
+  if (backend === "postgres") await restarted.ready();
+  const resumed = createCommonKernelService({ ownerId: "diner", store: restarted });
+  const middle = await resumed.getEditableDiningSelection("repeat-dinner");
+  assert.equal(middle.candidateId, secondId);
+  await resumed.correctDiningPlace({ commandId: "repeat-change-a",
+    activityId: "repeat-dinner", expectedGraphFingerprint: middle.graphFingerprint,
+    candidateId: firstId, confirmed: true });
+  const final = await resumed.getEditableDiningSelection("repeat-dinner");
+  assert.equal(final.candidateId, firstId);
+  assert.equal(final.revision, 3);
 });
 
 }

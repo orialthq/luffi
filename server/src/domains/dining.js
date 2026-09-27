@@ -2,10 +2,11 @@ import { array, enumeration, integer, object, ref, text } from "./schema.js";
 import { artifact, capability, relation, slot, valueRelation } from "./shared.js";
 
 export const diningPack = {
-  id: "dining", version: 2, compatibleKernelVersions: [1],
-  entityTypes: ["dining.place", "dining.reservation", "dining.visit"],
+  id: "dining", version: 3, compatibleKernelVersions: [1],
+  entityTypes: ["dining.place", "dining.choice", "dining.reservation", "dining.visit"],
   types: [
     { id: "dining.place", schema: object({ id: text, name: text, branchName: text, providerId: text, address: text }, ["id", "name"]) },
+    { id: "dining.choice", schema: object({ id: text, activityId: text }) },
     { id: "dining.reservation_status", schema: enumeration("unconfirmed", "confirmed", "cancelled", "unknown") },
     { id: "dining.reservation", schema: object({ id: text, placeId: text, scheduledAt: ref("core.timestamp"), partySize: ref("core.revision"), status: ref("dining.reservation_status") }) },
     { id: "dining.visit", schema: object({ id: text, placeId: text, visitedAt: ref("core.timestamp"), reportedBy: text }) },
@@ -30,6 +31,7 @@ export const diningPack = {
       reportedAt: ref("core.timestamp") }) },
   ],
   relations: [
+    relation("dining.choice_place", ["dining.choice"], ["dining.place"], "one"),
     relation("dining.reservation_at", ["dining.reservation"], ["dining.place"], "one"),
     relation("dining.visited", ["dining.visit"], ["dining.place"], "one"),
     { ...valueRelation("dining.reservation_status", ["dining.reservation"], "dining.reservation_status", "confirmed_evidence_required"), allowedValues: ["unconfirmed", "confirmed", "cancelled", "unknown"], unknownValues: ["unknown"] },

@@ -29,6 +29,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/recipe/corrections": "correctRecipe",
   "/dining/scenarios": "createDiningScenario",
   "/dining/select-place": "selectDiningPlace",
+  "/dining/corrections": "correctDiningPlace",
   "/dining/visit-outcome": "recordDiningVisitOutcome",
   "/fashion/scenarios": "createFashionScenario",
   "/fashion/confirm-outfit": "confirmFashionOutfit",
@@ -74,7 +75,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
-  "getEditableCaptureFields", "getEditableRecipe", "getEditableFashionOutfit", "getEditableBeautyRoutine",
+  "getEditableCaptureFields", "getEditableRecipe", "getEditableDiningSelection", "getEditableFashionOutfit", "getEditableBeautyRoutine",
   "getEditableTravelItinerary", "getRecipeShoppingPlanReview",
   "getRecipeShoppingTransferReview", "listShoppingInventory",
   "getShoppingBasketReview"];
@@ -250,6 +251,15 @@ export function createHttpServer({
         }
         const fieldReviewMatch = /^\/ingestion\/field-reviews\/([^/]+)$/.exec(route);
         const editableRecipeMatch = /^\/recipe\/editable\/([^/]+)$/.exec(route);
+        const editableDiningMatch = /^\/dining\/editable\/([^/]+)$/.exec(route);
+        if (editableDiningMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableDiningMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableDiningSelection(activityId));
+        }
         if (editableRecipeMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");
           let activityId;

@@ -514,6 +514,8 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> getEditableTravelItinerary(String activityId);
   Future<KernelJson> correctTravelItinerary(KernelJson request);
   Future<KernelJson> createDiningScenario(KernelJson request);
+  Future<KernelJson> getEditableDiningSelection(String activityId);
+  Future<KernelJson> correctDiningPlace(KernelJson request);
   Future<KernelJson> selectDiningPlace(KernelJson request);
   Future<KernelJson> recordDiningVisitOutcome(KernelJson request);
   Future<KernelJson> createFashionScenario(KernelJson request);
@@ -767,6 +769,16 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> createDiningScenario(KernelJson request) =>
       _request('POST', '/v1/kernel/dining/scenarios', request);
+
+  @override
+  Future<KernelJson> getEditableDiningSelection(String activityId) => _request(
+    'GET',
+    '/v1/kernel/dining/editable/${Uri.encodeComponent(activityId)}',
+  );
+
+  @override
+  Future<KernelJson> correctDiningPlace(KernelJson request) =>
+      _request('POST', '/v1/kernel/dining/corrections', request);
 
   @override
   Future<KernelJson> selectDiningPlace(KernelJson request) =>
