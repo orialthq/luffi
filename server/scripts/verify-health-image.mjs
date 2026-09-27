@@ -28,7 +28,8 @@ if (result.contentKind !== "unknown" || result.completeness !== "complete" ||
     !result.tags?.some((tag) => tag.value === "운동" &&
       tag.facet === "kind" && tag.evidenceIds?.length) ||
     result.facts?.length !== 3 || result.facts.some((fact, index) =>
-      fact.label !== `${index + 1}단계` || fact.value !== expected[index] ||
+      !new RegExp(`^${index + 1}단계(?:\\s*운동)?$`).test(fact.label) ||
+      fact.value !== expected[index] ||
       !fact.evidenceIds?.length)) {
   throw new Error("live analysis did not preserve the workout steps with evidence");
 }

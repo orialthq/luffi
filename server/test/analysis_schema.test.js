@@ -91,6 +91,9 @@ test("the instructions keep 맛집·카페 and 장소 from doubling up", () => {
     model: "test-model",
   });
   const { instructions } = request;
+  assert.match(instructions, /Every emitted fact must have at least one evidenceIds reference/);
+  assert.match(instructions, /omit the fact rather than returning it/);
+  assert.match(instructions, /choose beauty_product even if the app has a cart button/);
 
   // The field list is closed and no longer carries 여행, which was the half
   // that invited itself onto every restaurant.

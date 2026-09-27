@@ -59,7 +59,7 @@ test("builds the stateless original-detail Luna request and parses output", asyn
   assert.equal(capturedBody.store, false);
   assert.equal(
     capturedBody.prompt_cache_key,
-    "trun-on-analysis-gpt-5.6-luna-p1-s2.1",
+    "trun-on-analysis-gpt-5.6-luna-p3-s2.1",
   );
   assert.deepEqual(capturedBody.prompt_cache_options, {
     mode: "implicit",

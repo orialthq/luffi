@@ -1310,6 +1310,36 @@ test(`workout and preparation tip link without implied execution (${backend})`, 
   assert.equal(active(state, "life_tip.execution_for_action").length, 0);
   assert.equal(active(state, "health.performance_in_session").length, 0);
   assert.equal(active(state, "health.session_for_plan").length, 0);
+  healthBoard = await service.getBoard("health-board");
+  tipBoard = await service.getBoard("tip-board");
+  const exercises = healthBoard.tasks.find((item) =>
+    item.id === "record_exercise_outcomes").readiness.inputs.plan.exercises;
+  const actions = tipBoard.tasks.find((item) =>
+    item.id === "record_outcomes").readiness.inputs.plan.actions;
+  await service.recordHealthExerciseOutcomes({ commandId: "report-health-tip-pair",
+    activityId: "health-board", expectedRevision: healthBoard.revision,
+    exercises: [{ exerciseId: exercises[0].id, status: "done",
+      actualAmount: 10, actualUnit: "repetitions" },
+    { exerciseId: exercises[1].id, status: "unknown" }] });
+  await service.recordLifeTipOutcomes({ commandId: "report-tip-health-pair",
+    activityId: "tip-board", expectedRevision: tipBoard.revision,
+    actions: [{ actionId: actions[0].id, status: "done" },
+      { actionId: actions[1].id, status: "skipped" },
+      { actionId: actions[2].id, status: "unknown" }] });
+  const reported = await store.snapshot();
+  assert.equal(active(reported, "health.performance_of_exercise").length, 1);
+  assert.equal(active(reported, "life_tip.execution_for_action").length, 1);
+  assert.equal(active(reported, "health.performance_in_session").length, 1);
+  await service.deleteReviewedCapture({ importId: "tip",
+    commandId: "delete-health-pair-tip" });
+  assert.deepEqual((await service.listScenarioConnections("health-board")).connections,
+    []);
+  await assert.rejects(service.getBoard("tip-board"),
+    (error) => error.code === "NOT_FOUND");
+  assert.equal((await service.getBoard("health-board")).scenario, "health");
+  const afterTipDeletion = await store.snapshot();
+  assert.equal(active(afterTipDeletion, "health.performance_of_exercise").length, 1);
+  assert.equal(active(afterTipDeletion, "life_tip.execution_for_action").length, 0);
 });
 }
 

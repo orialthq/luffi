@@ -542,4 +542,52 @@ test(`one beauty correction changes order, title and product links without rewri
   await assert.rejects(service.correctBeautyRoutine(request),
     (error) => error.code === "CORRECTION_DELETED");
 });
+
+test(`a routine may reuse one confirmed product in two distinct steps without merging use history (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createBeautyScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-reused-beauty-product" });
+  let board = await service.getBoard("beauty-1");
+  await service.confirmBeautyRoutine({ commandId: "confirm-reused-beauty-product",
+    activityId: "beauty-1", expectedRevision: board.revision, selections });
+  board = await service.getBoard("beauty-1");
+  await service.runTask({ commandId: "instantiate-before-reuse",
+    activityId: "beauty-1", taskId: "instantiate_routine",
+    expectedRevision: board.revision });
+  board = await service.getBoard("beauty-1");
+  const occurrence = board.tasks.find((item) =>
+    item.id === "record_routine_outcome").readiness.inputs.occurrence;
+  const report = await service.recordBeautyRoutineOutcome({
+    commandId: "report-before-reuse", activityId: "beauty-1",
+    expectedRevision: board.revision,
+    steps: occurrence.steps.map((step) => ({
+      templateStepId: step.templateStepId, status: "completed" })) });
+  assert.equal(report.experienceIds.length, 2);
+  const history = structuredClone((await service.getBoard("beauty-1")).results);
+  const editable = await service.getEditableBeautyRoutine("beauty-1");
+  const request = { commandId: "reuse-beauty-product", activityId: "beauty-1",
+    expectedGraphFingerprint: editable.graphFingerprint, confirmed: true,
+    steps: editable.steps.map((step, index) => ({ id: step.id,
+      title: index === 1 ? "같은 제품으로 마무리" : step.title,
+      variantId: editable.steps[0].variantId })) };
+  const corrected = await service.correctBeautyRoutine(request);
+  assert.equal((await service.correctBeautyRoutine(request)).replayed, true);
+  const current = await service.getEditableBeautyRoutine("beauty-1");
+  assert.equal(new Set(current.steps.map((step) => step.variantId)).size, 1);
+  assert.equal(new Set(current.steps.map((step) => step.id)).size, 2);
+  assert.deepEqual((await service.getBoard("beauty-1")).results, history);
+  const assertions = (await store.snapshot()).knowledge.assertions;
+  const uses = assertions.filter((item) => item.status === "active" &&
+    item.predicate === "beauty.uses_variant" && item.scope?.id === "beauty-1");
+  assert.equal(uses.length, 2);
+  assert.equal(new Set(uses.map((item) => item.objectEntityId)).size, 1);
+  const reportedUses = assertions.filter((item) => item.status === "active" &&
+    item.predicate === "beauty.experience_for_step" &&
+    report.experienceIds.includes(item.subjectId));
+  assert.equal(new Set(reportedUses.map((item) => item.objectEntityId)).size, 2);
+  assert.equal((await service.getBoardReview("beauty-1")).reasonCode,
+    "STARTED_TASK_PROTECTED");
+  assert.ok(corrected.sourceId);
+});
 }

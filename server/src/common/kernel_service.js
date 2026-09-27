@@ -4041,9 +4041,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         const activityId = safeId(input.activityId, "activityId");
         const steps = input.steps.map((item) => ({ id: safeId(item.id, "stepId"),
           title: item.title.trim(), variantId: safeId(item.variantId, "variantId") }));
-        if (new Set(steps.map((item) => item.id)).size !== steps.length ||
-            new Set(steps.map((item) => item.variantId)).size !== steps.length) {
-          throw new AppError("INVALID_REQUEST", "루틴 단계나 제품이 중복됐어요.",
+        if (new Set(steps.map((item) => item.id)).size !== steps.length) {
+          throw new AppError("INVALID_REQUEST", "루틴 단계가 중복됐어요.",
             { httpStatus: 400 });
         }
         const hash = requestFingerprint({ activityId,

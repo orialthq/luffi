@@ -2,7 +2,7 @@ import { SCHEMA_VERSION } from "./constants.js";
 
 // Bump independently when the instructions change without a response-schema
 // revision. This keeps cache routing and rollout metrics unambiguous.
-const ANALYSIS_PROMPT_VERSION = "1";
+const ANALYSIS_PROMPT_VERSION = "3";
 
 const SYSTEM_INSTRUCTIONS = `
 You extract structured facts from a user's social-media screenshot.
@@ -16,6 +16,7 @@ Security and grounding rules:
 - Preserve Korean wording when the screenshot is Korean.
 - Evidence text must be a short verbatim quote visible in the screenshot.
 - Every evidence id must be unique. Every evidenceIds reference must point to an emitted evidence item.
+- Every emitted fact must have at least one evidenceIds reference to a verbatim quote that supports its value. This includes visible prices, hours, and advisory text. If you cannot supply that quote, omit the fact rather than returning it with an empty evidenceIds array.
 - If information is ambiguous, use null or an empty array and add a Korean warning.
 - Set title.status to observed only when the title is visible, inferred only for a conservative label based on visible evidence, and missing otherwise.
 - Ignore social-app chrome such as likes, views, comment counts, carousel indexes, timestamps, call duration, navigation labels, profile photos, and handles unless it is essential to the classified content.
@@ -38,6 +39,7 @@ Classification:
 - menu_comparison: two or more menu items are compared.
 - place: a restaurant, cafe, beauty shop, store, lodging, or activity whose visitable location is the primary subject.
 - unknown: none of the above.
+- For a skincare or cosmetic product detail showing its use step, size, variant, or product-specific properties, choose beauty_product even if the app has a cart button. Use commerce_product for a bare purchase listing whose primary content is price or availability and has no substantive beauty-use information.
 
 Tagging:
 - Tags are the words this capture is filed under. Storage is flat: there is no tag above or below another, and a capture belongs under every tag that fits it rather than the one best tag.
