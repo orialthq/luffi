@@ -289,6 +289,19 @@ test("delete by importId redacts a committed import and its scenario", async (t)
     analysis: makeValidAnalysis() };
   const imported = await service.importReviewedCapture(input);
   const created = await service.createRecipeScenario(scenario({ importId: "import-to-delete" }));
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "accept-before-import-delete" });
+  const board = await service.getBoard(created.activityId);
+  const result = await service.runTask({ activityId: created.activityId,
+    taskId: "scale_servings", expectedRevision: board.revision,
+    commandId: "scale-before-import-delete" });
+  assert.ok((await service.getBoard(created.activityId)).results.some((item) =>
+    item.id === result.resultId));
+  await service.activityCommand({ commandId: "create-independent", type: "activity.create",
+    activityId: "independent", expectedRevision: 0,
+    payload: { title: "독립 활동", goal: { text: "유지하기" } } });
+  assert.deepEqual(await service.checkReviewedCaptureImports({ importIds: [input.importId] }),
+    { imports: [{ importId: input.importId, status: "active", sourceId: imported.sourceId }] });
   const deletion = await service.deleteReviewedCapture({ importId: "import-to-delete",
     commandId: "delete-import-to-delete" });
   assert.equal(deletion.sourceId, imported.sourceId);
@@ -296,9 +309,16 @@ test("delete by importId redacts a committed import and its scenario", async (t)
   assert.equal((await service.deleteReviewedCapture({ importId: "import-to-delete",
     commandId: "delete-import-to-delete" })).replayed, true);
   await assert.rejects(service.getBoard(created.activityId), (error) => error.code === "NOT_FOUND");
+  assert.deepEqual((await service.listBoards()).map((item) => item.id), ["independent"]);
+  assert.equal((await service.getBoard("independent")).title, "독립 활동");
+  assert.deepEqual(await service.checkReviewedCaptureImports({ importIds: [input.importId] }),
+    { imports: [{ importId: input.importId, status: "deleted" }] });
   await assert.rejects(service.importReviewedCapture(input), (error) => error.code === "IMPORT_DELETED");
   const snapshot = await store.snapshot();
   assert.equal(snapshot.knowledge.sources.find((item) => item.id === imported.sourceId).status, "deleted");
+  assert.equal(snapshot.activities.activities[created.activityId], undefined);
+  assert.ok(!Object.values(snapshot.executionReceipts).some((item) =>
+    item.result?.activityId === created.activityId));
   assert.equal(JSON.stringify(snapshot).includes("capture-to-delete"), false);
 });
 

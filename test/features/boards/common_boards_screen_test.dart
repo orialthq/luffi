@@ -399,6 +399,7 @@ final class FakeKernelClient implements CommonKernelClient {
   bool commitThenTimeout = false;
   bool failContracts = false;
   bool failRead = false;
+  bool deletedBoard = false;
   bool failConnections = false;
   bool failNextPage = false;
   CommonKernelException? scenarioFailure;
@@ -427,6 +428,7 @@ final class FakeKernelClient implements CommonKernelClient {
     String? cursor,
   }) async {
     pageRequests.add(cursor);
+    if (deletedBoard) return KernelBoardPage(boards: [], nextCursor: null);
     if (cursor != null && failNextPage) {
       throw const CommonKernelException('NETWORK_UNAVAILABLE', '목록 연결 실패');
     }
@@ -452,6 +454,9 @@ final class FakeKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> getBoard(String activityId) async {
     reads += 1;
+    if (deletedBoard) {
+      throw const CommonKernelException('NOT_FOUND', 'Activity not found');
+    }
     if (failRead) {
       throw const CommonKernelException('NETWORK_UNAVAILABLE', '보드 연결 실패');
     }
@@ -1904,6 +1909,34 @@ void main() {
           .onPressed,
       isNotNull,
     );
+  });
+
+  testWidgets('source deletion clears an open board and removes it from list', (
+    tester,
+  ) async {
+    final client = FakeKernelClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CommonBoardsScreen(
+          client: client,
+          intentStore: FakeRecipeIntentStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('kernel-board-activity-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('저장한 정보로 외출 준비'), findsOneWidget);
+
+    client.deletedBoard = true;
+    await tester.tap(find.byKey(const Key('kernel-board-refresh')));
+    await tester.pumpAndSettle();
+    expect(find.text('저장한 정보로 외출 준비'), findsNothing);
+    expect(find.byKey(const Key('kernel-complete-task-Z')), findsNothing);
+    expect(find.textContaining('삭제되었거나 더 이상 접근'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('kernel-board-back-to-list')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('kernel-board-activity-1')), findsNothing);
   });
 
   testWidgets('unknown capability remains readable without write actions', (

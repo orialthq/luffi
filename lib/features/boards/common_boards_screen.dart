@@ -2393,12 +2393,14 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
   Future<void> _load({bool afterMutation = false}) async {
     if (_busy && !afterMutation) return;
     final generation = ++_loadGeneration;
+    var boardFetched = false;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final board = await widget.client.getBoard(widget.activityId);
+      boardFetched = true;
       KernelJson? shoppingPurchaseProjection;
       KernelJson? recipeInventoryReview;
       Object? recipeInventoryError;
@@ -2447,8 +2449,19 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       if (mounted && generation == _loadGeneration) {
         setState(() {
           _error = error;
-          // Keep the last board visible, but its revision cannot be trusted
-          // until a successful refresh has checked the current server state.
+          // A deleted source can remove its dependent activity. Do not keep
+          // displaying the old board after the server says it no longer exists.
+          if (!boardFetched &&
+              error is CommonKernelException &&
+              error.code == 'NOT_FOUND') {
+            _board = null;
+            _review = null;
+            _shoppingPurchaseProjection = null;
+            _shoppingInventoryObservations = [];
+            _recipeInventoryReview = null;
+          }
+          // Other failures keep the last board visible, but disable writes
+          // until a successful refresh checks the current server state.
           _needsRefresh = true;
         });
       }
@@ -4563,9 +4576,24 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : board == null
-          ? _ErrorPanel(
-              message: _errorText(_error ?? 'missing'),
-              onRefresh: _load,
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ErrorPanel(
+                  message:
+                      _error is CommonKernelException &&
+                          (_error as CommonKernelException).code == 'NOT_FOUND'
+                      ? '이 활동은 삭제되었거나 더 이상 접근할 수 없어요. 목록에서 현재 활동을 다시 확인해 주세요.'
+                      : _errorText(_error ?? 'missing'),
+                  onRefresh: _load,
+                ),
+                if (Navigator.of(context).canPop())
+                  TextButton(
+                    key: const Key('kernel-board-back-to-list'),
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('목록으로 돌아가기'),
+                  ),
+              ],
             )
           : RefreshIndicator(
               onRefresh: _load,
