@@ -3249,6 +3249,22 @@ void main() {
     );
   });
 
+  testWidgets(
+    'shopping successor explains that stale recipe needs new approval',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.board['scenario'] = 'shopping';
+      client.board['continuedFrom'] = 'previous-shopping';
+      client.board['currentPlanRevision'] = 1;
+      await _pump(tester, client);
+      expect(
+        find.byKey(const Key('kernel-shopping-successor-guide')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('최신 레시피를 연결하고'), findsOneWidget);
+    },
+  );
+
   testWidgets('keeping a reviewed result requires explicit confirmation', (
     tester,
   ) async {

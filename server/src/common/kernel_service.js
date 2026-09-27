@@ -1962,6 +1962,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   }
 
   function boardNeedsReview(state, activityId, current) {
+    if (current.pendingChanges.some((item) => item.reasonCode === "RECIPE_NEEDS_STALE")) {
+      return true;
+    }
     if (activityContextIsStale(state, activityId, current)) return true;
     return Object.values(state.proposals).some((item) => {
       if (item.ownerId !== ownerId || item.activityId !== activityId ||
@@ -2004,7 +2007,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     return task;
   }
 
-  function recoveryDraft(state, activityId, current) {
+  function recoveryDraft(state, activityId, current,
+    { allowStartedShoppingSuccessor = false } = {}) {
     if (current.pendingChanges.some((item) => item.resourceId ||
         item.retrievalReasons?.length) ||
         hasStaleResourceReads(state, state.resourceWatches[activityId]) ||
@@ -2025,12 +2029,21 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       const original = current.currentPlanRevision === 0
         ? Object.values(state.proposals).find((item) => item.ownerId === ownerId &&
           item.activityId === activityId && item.kind === "draft")?.plan : current;
-      const linkedRecipe = original?.tasks?.find((item) => item.id === "confirm_choice")
+      let linkedRecipe = original?.tasks?.find((item) => item.id === "confirm_choice")
         ?.inputBindings?.linkedRecipe ?? null;
       if (linkedRecipe && !linkedRecipeNeedsCurrent(state, linkedRecipe, activityId)) {
-        throw new AppError("RECIPE_NEEDS_STALE",
-          "연결된 레시피 필요량이 바뀌었어요. 최신 결과로 쇼핑 계획을 다시 검토해 주세요.",
-          { httpStatus: 409 });
+        const choice = current.tasks.find((item) => item.id === "confirm_choice" &&
+          item.capabilityId === "shopping.confirm_choice");
+        if (allowStartedShoppingSuccessor && choice &&
+            (choice.executionStatus !== "not_started" || choice.inputsPinned)) {
+          // A successor gets an independent plan. The old result and its stale
+          // recipe reference remain only on the original activity.
+          linkedRecipe = null;
+        } else {
+          throw new AppError("RECIPE_NEEDS_STALE",
+            "연결된 레시피 필요량이 바뀌었어요. 최신 결과로 쇼핑 계획을 다시 검토해 주세요.",
+            { httpStatus: 409 });
+        }
       }
       return { scenario, contextQueries,
         draft: buildShoppingPlanDraft({ candidates, purpose: receipt.purpose,
@@ -2342,7 +2355,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       throw new AppError("CONTINUATION_UNAVAILABLE",
         "현재 활동은 새 활동으로 이어갈 대상이 아니에요.", { httpStatus: 409 });
     }
-    const recovered = recoveryDraft(state, activityId, current);
+    const recovered = recoveryDraft(state, activityId, current,
+      { allowStartedShoppingSuccessor: true });
     try {
       recoveryPlan(current, recovered.draft);
     } catch (error) {
@@ -2409,7 +2423,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const current = board(state, activityId);
           const scenario = scenarioForActivity(state, activityId);
           continuationSource(state, continuationOf, scenario, nextActivityId);
-          const { draft } = recoveryDraft(state, activityId, current);
+          const { draft } = recoveryDraft(state, activityId, current,
+            { allowStartedShoppingSuccessor: true });
           return { scenario, details: reviewSuccessorDetails(state,
             activityId, scenario, current, draft) };
         });
@@ -2436,7 +2451,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           }
           const changes = reviewDescription(state, activityId, current);
           try {
-            const recovered = recoveryDraft(state, activityId, current);
+            const recovered = recoveryDraft(state, activityId, current,
+              { allowStartedShoppingSuccessor: true });
             const planned = recoveryPlan(current, recovered.draft);
             const plan = enrichPlan(planned.kind, planned.plan);
             applyActivityCommand(state.activities, { ownerId,

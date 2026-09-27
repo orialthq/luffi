@@ -336,6 +336,12 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     expectedSourceResultId: secondCandidate.recipeNeeds.sourceResultId });
   const secondLink = { id: secondTransfer.connectionId };
   assert.equal((await service.listScenarioConnections("linked-shopping")).connections.length, 1);
+  assert.equal((await service.getBoardReview("linked-shopping")).reasonCode,
+    "RECIPE_NEEDS_STALE");
+  await assert.rejects(service.createReviewSuccessor({
+    commandId: "do-not-drop-unstarted-recipe-link", activityId: "linked-shopping",
+    expectedRevision: (await service.getBoard("linked-shopping")).revision,
+    confirmed: true }), (error) => error.code === "RECIPE_NEEDS_STALE");
   const secondReview = await service.getRecipeShoppingPlanReview(
     "linked-shopping", secondLink.id);
   assert.equal(secondReview.before.items.find((item) => item.ingredientId === "tofu")
@@ -363,6 +369,72 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     (error) => error.code === "STARTED_TASK_PROTECTED");
   await assert.rejects(service.getRecipeShoppingTransferReview(secondLink.id),
     (error) => error.code === "STARTED_TASK_PROTECTED");
+  const startedShopping = await service.getBoard("linked-shopping");
+  const oldShoppingResults = structuredClone(startedShopping.results);
+  const secondEditable = await service.getEditableRecipe(secondSuccessor.activityId);
+  await service.correctRecipe({ commandId: "change-recipe-after-shopping-choice",
+    activityId: secondSuccessor.activityId,
+    expectedAssertionId: secondEditable.assertionId, confirmed: true,
+    recipe: { title: secondEditable.recipe.title,
+      baseServings: secondEditable.recipe.baseServings,
+      ingredients: secondEditable.recipe.ingredients.map((item) => item.id === "tofu"
+        ? { ...item, quantity: { status: "known", amount: 450, unit: "g" } } : item),
+      steps: secondEditable.recipe.steps ?? [] } });
+  const blockedShopping = await service.getBoardReview("linked-shopping");
+  assert.equal(blockedShopping.reasonCode, "STARTED_TASK_PROTECTED");
+  await assert.rejects(service.proposeBoardReview({ activityId: "linked-shopping",
+    commandId: "do-not-rewrite-started-shopping", expectedRevision: startedShopping.revision,
+    confirmed: true }), (error) => error.code === "RECIPE_NEEDS_STALE");
+  const continuedShopping = await service.createReviewSuccessor({
+    commandId: "continue-started-shopping", activityId: "linked-shopping",
+    expectedRevision: startedShopping.revision, confirmed: true });
+  assert.equal((await service.createReviewSuccessor({
+    commandId: "continue-started-shopping", activityId: "linked-shopping",
+    expectedRevision: startedShopping.revision, confirmed: true })).replayed, true);
+  assert.equal((await service.getBoard(continuedShopping.activityId)).currentPlanRevision, 0);
+  await service.acceptProposal({ proposalId: continuedShopping.proposalId,
+    commandId: "approve-new-shopping" });
+  const newShopping = await service.getBoard(continuedShopping.activityId);
+  assert.equal(newShopping.continuedFrom, "linked-shopping");
+  assert.equal(newShopping.tasks.find((item) => item.id === "confirm_choice")
+    .inputBindings.linkedRecipe, undefined);
+  assert.deepEqual((await service.getBoard("linked-shopping")).results,
+    oldShoppingResults);
+  const thirdRecipe = await service.createReviewSuccessor({
+    commandId: "continue-final-recipe", activityId: secondSuccessor.activityId,
+    expectedRevision: (await service.getBoard(secondSuccessor.activityId)).revision,
+    confirmed: true });
+  await service.acceptProposal({ proposalId: thirdRecipe.proposalId,
+    commandId: "approve-final-recipe" });
+  await calculate(thirdRecipe.activityId, "third");
+  const newLink = await service.createScenarioConnection({
+    commandId: "link-final-recipe-new-shopping", confirmed: true,
+    kind: "recipe_shopping", fromActivityId: thirdRecipe.activityId,
+    toActivityId: continuedShopping.activityId,
+    expectedFromRevision: (await service.getBoard(thirdRecipe.activityId)).revision,
+    expectedToRevision: newShopping.revision });
+  const newShoppingReview = await service.getRecipeShoppingPlanReview(
+    continuedShopping.activityId, newLink.id);
+  assert.equal(newShoppingReview.before, null);
+  assert.equal(newShoppingReview.after.items.find((item) =>
+    item.ingredientId === "tofu").requiredQuantity.amount, 900);
+  const newShoppingProposal = await service.proposeRecipeShoppingPlan({
+    commandId: "propose-new-shopping-recipe-needs", confirmed: true,
+    shoppingActivityId: continuedShopping.activityId, connectionId: newLink.id,
+    expectedRevision: newShoppingReview.expectedRevision,
+    expectedSourceResultId: newShoppingReview.reference.sourceResultId });
+  await service.acceptProposal({ proposalId: newShoppingProposal.proposalId,
+    commandId: "accept-new-shopping-recipe-needs" });
+  const newShoppingReady = await service.getBoard(continuedShopping.activityId);
+  assert.equal(newShoppingReady.tasks.find((item) => item.id === "confirm_choice")
+    .inputBindings.linkedRecipe.connectionId, newLink.id);
+  await service.confirmShoppingChoice({ commandId: "choose-new-shopping-tofu",
+    activityId: continuedShopping.activityId,
+    expectedRevision: newShoppingReady.revision,
+    selectedImportId: "tofu", quantity: 1 });
+  assert.deepEqual((await service.getBoard("linked-shopping")).results,
+    oldShoppingResults);
+  assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice").length, 0);
   await service.deleteReviewedCapture({ importId: "recipe",
     commandId: "delete-linked-recipe-image" });
   assert.deepEqual((await service.listScenarioConnections("linked-shopping")).connections, []);

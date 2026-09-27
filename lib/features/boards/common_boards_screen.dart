@@ -3617,6 +3617,17 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 _openConnectedBoard(board['continuedFrom'] as String),
             child: const Text('이전 활동 보기'),
           ),
+        if (board['scenario'] == 'shopping' &&
+            board['continuedFrom'] is String &&
+            !_objects(board['tasks']).any(
+              (task) =>
+                  task['id'] == 'confirm_choice' &&
+                  _object(task['inputBindings'])['linkedRecipe'] is Map,
+            ))
+          const Text(
+            '이전 쇼핑 결과와 레시피 참조는 이어받지 않았어요. 새 계획을 승인한 뒤 아래 연결된 활동에서 최신 레시피를 연결하고, 필요량을 별도로 검토·승인해 주세요.',
+            key: Key('kernel-shopping-successor-guide'),
+          ),
         for (final nextId in _strings(board['continuations']))
           TextButton(
             onPressed: () => _openConnectedBoard(nextId),
