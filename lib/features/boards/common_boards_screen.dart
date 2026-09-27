@@ -3345,6 +3345,7 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               if (isRecipe)
                 _RecipeResult(
                   capabilityId: _text(task['capabilityId']),
+                  ingredients: _recipeIngredients(),
                   value: _objects(_board?['results'])
                       .where(
                         (result) => result['id'] == task['latestOutputRef'],
@@ -5714,9 +5715,14 @@ final class _RecipeInputs extends StatelessWidget {
 }
 
 final class _RecipeResult extends StatelessWidget {
-  const _RecipeResult({required this.capabilityId, required this.value});
+  const _RecipeResult({
+    required this.capabilityId,
+    required this.value,
+    this.ingredients = const {},
+  });
   final String capabilityId;
   final Object? value;
+  final Map<String, KernelJson> ingredients;
 
   @override
   Widget build(BuildContext context) {
@@ -5750,7 +5756,7 @@ final class _RecipeResult extends StatelessWidget {
           if (capabilityId == 'recipe.check_inventory')
             for (final item in _objects(value))
               Text(
-                '• ${_text(item['ingredientId'], '재료')}: ${_quantity(item['quantity'])}',
+                '• ${_text(ingredients[_text(item['ingredientId'])]?['name'], _text(item['ingredientId'], '재료'))}: ${_quantity(item['quantity'])}',
               ),
           if (capabilityId == 'recipe.cook' && result.isNotEmpty)
             Text('완료 시각: ${_text(result['completedAt'])}'),
