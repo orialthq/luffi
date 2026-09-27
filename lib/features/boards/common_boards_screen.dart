@@ -13,6 +13,7 @@ import 'health_scenario_dialogs.dart';
 import 'scenario_connections_section.dart';
 import 'recipe_correction_screen.dart';
 import 'ordered_graph_correction_screen.dart';
+import 'fashion_correction_screen.dart';
 
 bool _connectionKindsVisible(KernelJson board) => const {
   'recipe',
@@ -2307,6 +2308,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openFashionEditor() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => FashionCorrectionScreen(
+          client: widget.client,
+          activityId: widget.activityId,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3846,6 +3859,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                 : () => _openOrderedGraphEditor('beauty'),
             icon: const Icon(Icons.edit_note_rounded),
             label: const Text('뷰티 루틴 순서·제품 정정'),
+          ),
+        if (board['scenario'] == 'fashion' &&
+            _objects(board['tasks']).any(
+              (task) =>
+                  task['id'] == 'confirm_outfit' &&
+                  task['executionStatus'] == 'completed',
+            ))
+          OutlinedButton.icon(
+            key: const Key('kernel-open-fashion-correction'),
+            onPressed: _busy || _needsRefresh ? null : _openFashionEditor,
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('코디 자리·소유 상태 정정'),
           ),
         if (board['scenario'] == 'travel' &&
             _objects(board['tasks']).any(

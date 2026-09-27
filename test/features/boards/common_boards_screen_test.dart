@@ -186,6 +186,14 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   @override
+  Future<KernelJson> getEditableFashionOutfit(String activityId) async => {
+    'activityId': activityId,
+  };
+
+  @override
+  Future<KernelJson> correctFashionOutfit(KernelJson request) async => request;
+
+  @override
   Future<KernelJson> getEditableBeautyRoutine(String activityId) async => {
     'activityId': activityId,
   };

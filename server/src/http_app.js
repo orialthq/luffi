@@ -32,6 +32,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/dining/visit-outcome": "recordDiningVisitOutcome",
   "/fashion/scenarios": "createFashionScenario",
   "/fashion/confirm-outfit": "confirmFashionOutfit",
+  "/fashion/corrections": "correctFashionOutfit",
   "/fashion/wear-outcome": "recordFashionWearOutcome",
   "/beauty/scenarios": "createBeautyScenario",
   "/beauty/confirm-routine": "confirmBeautyRoutine",
@@ -73,7 +74,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
-  "getEditableCaptureFields", "getEditableRecipe", "getEditableBeautyRoutine",
+  "getEditableCaptureFields", "getEditableRecipe", "getEditableFashionOutfit", "getEditableBeautyRoutine",
   "getEditableTravelItinerary", "getRecipeShoppingPlanReview",
   "getRecipeShoppingTransferReview", "listShoppingInventory",
   "getShoppingBasketReview"];
@@ -258,6 +259,15 @@ export function createHttpServer({
           return sendJson(response, 200, await kernelService.getEditableRecipe(activityId));
         }
         const editableBeautyMatch = /^\/beauty\/editable\/([^/]+)$/.exec(route);
+        const editableFashionMatch = /^\/fashion\/editable\/([^/]+)$/.exec(route);
+        if (editableFashionMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableFashionMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableFashionOutfit(activityId));
+        }
         if (editableBeautyMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");
           let activityId;

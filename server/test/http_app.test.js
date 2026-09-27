@@ -413,6 +413,7 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/dining/visit-outcome", "recordDiningVisitOutcome"],
     ["/fashion/scenarios", "createFashionScenario"],
     ["/fashion/confirm-outfit", "confirmFashionOutfit"],
+    ["/fashion/corrections", "correctFashionOutfit"],
     ["/fashion/wear-outcome", "recordFashionWearOutcome"],
     ["/beauty/scenarios", "createBeautyScenario"],
     ["/beauty/confirm-routine", "confirmBeautyRoutine"],
@@ -476,6 +477,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "getEditableCaptureFields", importId });
   kernelService.getEditableRecipe = async (activityId) =>
     ({ method: "getEditableRecipe", activityId });
+  kernelService.getEditableFashionOutfit = async (activityId) =>
+    ({ method: "getEditableFashionOutfit", activityId });
   kernelService.getEditableBeautyRoutine = async (activityId) =>
     ({ method: "getEditableBeautyRoutine", activityId });
   kernelService.getEditableTravelItinerary = async (activityId) =>
@@ -520,6 +523,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
       { method: "getEditableCaptureFields", importId: "item-1" }],
     ["/recipe/editable/meal%20plan",
       { method: "getEditableRecipe", activityId: "meal plan" }],
+    ["/fashion/editable/outfit%20plan",
+      { method: "getEditableFashionOutfit", activityId: "outfit plan" }],
     ["/beauty/editable/beauty%20plan",
       { method: "getEditableBeautyRoutine", activityId: "beauty plan" }],
     ["/travel/editable/travel%20plan",

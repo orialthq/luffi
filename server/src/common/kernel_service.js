@@ -53,6 +53,7 @@ export function createCommonKernelState() {
     recipeCorrectionReceipts: {},
     beautyCorrectionReceipts: {},
     travelCorrectionReceipts: {},
+    fashionCorrectionReceipts: {},
     recipeScenarioReceipts: {},
     diningScenarioReceipts: {},
     diningCommandReceipts: {},
@@ -1099,6 +1100,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           item.provenance.importedSourceId === source.id) ||
           (item.provenance?.scenario === "beauty_correction" &&
           item.provenance.importedSourceIds?.includes(source.id)) ||
+          (item.provenance?.scenario === "fashion_correction" &&
+          item.provenance.importedSourceIds?.includes(source.id)) ||
           (item.provenance?.scenario === "travel_correction" &&
           item.provenance.importedSourceIds?.includes(source.id)))).map((item) => item.id) : [];
     const linkedRecipeCorrections = source?.provenance?.scenario === "recipe"
@@ -1109,6 +1112,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const linkedBeautyCorrections = source?.provenance?.scenario === "beauty"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.provenance?.scenario === "beauty_correction" &&
+        item.provenance.confirmationSourceId === source.id).map((item) => item.id)
+      : [];
+    const linkedFashionCorrections = source?.provenance?.scenario === "fashion"
+      ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
+        item.status === "active" && item.provenance?.scenario === "fashion_correction" &&
         item.provenance.confirmationSourceId === source.id).map((item) => item.id)
       : [];
     const linkedTravelCorrections = source?.provenance?.scenario === "travel"
@@ -1154,6 +1162,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       .map((item) => item.id);
     return { source, linkedConfirmations, linkedRecipeCorrections,
       linkedBeautyCorrections,
+      linkedFashionCorrections,
       linkedTravelCorrections,
       linkedFashionSources, linkedBeautySources,
       linkedTravelSources, linkedLifeTipSources, linkedShoppingSources,
@@ -1162,6 +1171,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
 
   function finishSourceDeletion(state, { source, linkedConfirmations, linkedRecipeCorrections,
     linkedBeautyCorrections,
+    linkedFashionCorrections,
     linkedTravelCorrections,
     linkedFashionSources,
     linkedBeautySources, linkedTravelSources, linkedLifeTipSources,
@@ -1206,6 +1216,14 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         }
       }
     }
+    if (source?.provenance?.scenario === "fashion_correction") {
+      for (const receipt of Object.values(state.fashionCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
     if (source?.provenance?.scenario === "travel_correction") {
       for (const receipt of Object.values(state.travelCorrectionReceipts ?? {})) {
         if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
@@ -1243,6 +1261,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       for (const receipt of Object.values(state.beautyCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    for (const sourceId of linkedFashionCorrections ?? []) {
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      for (const receipt of Object.values(state.fashionCorrectionReceipts ?? {})) {
         if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
           receipt.deleted = true;
           receipt.result = { activityId: receipt.activityId };
@@ -1317,6 +1348,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         }, { predicates }).state;
         purgeIssuedContextsFromSource(state, sourceId);
         for (const receipt of Object.values(state.beautyCorrectionReceipts ?? {})) {
+          if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+            receipt.deleted = true;
+            receipt.result = { activityId: receipt.activityId };
+          }
+        }
+        for (const receipt of Object.values(state.fashionCorrectionReceipts ?? {})) {
           if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
             receipt.deleted = true;
             receipt.result = { activityId: receipt.activityId };
@@ -1600,6 +1637,83 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     return { receipt, recipe, confirmed: confirmed[0], source, originalEvidence,
       ingredientLines, stepLines, scope };
+  }
+
+  function editableFashionGraph(state, activityId) {
+    const current = board(state, activityId);
+    const scenario = Object.values(state.fashionScenarioReceipts ?? {}).find((item) =>
+      !item.deleted && item.result?.activityId === activityId);
+    if (!scenario?.result?.confirmationSourceId) throw new AppError("NOT_FOUND",
+      "확정한 코디를 찾지 못했어요.", { httpStatus: 404 });
+    const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
+      item.id === scenario.result.confirmationSourceId && item.status === "active");
+    const task = current.tasks.find((item) => item.id === "confirm_outfit" &&
+      item.capabilityId === "fashion.confirm_outfit" && item.executionStatus === "completed");
+    const result = current.results.find((item) => item.id === task?.latestOutputRef)?.value;
+    const outfit = result?.outfit;
+    if (!source || !outfit || result.outfitId !== outfit.id ||
+        !activeScenarioEntity(state, outfit.id, "fashion.outfit")) {
+      throw new AppError("FASHION_GRAPH_CONFLICT", "코디 원본과 그래프가 맞지 않아요.",
+        { httpStatus: 409 });
+    }
+    const scope = { type: "activity", id: activityId };
+    const active = (predicate) => state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.predicate === predicate && item.scope?.type === scope.type &&
+      item.scope.id === scope.id);
+    const has = active("fashion.has_item").filter((item) => item.subjectId === outfit.id);
+    const slots = active("fashion.item_slot");
+    const ownership = active("fashion.ownership");
+    const options = active("fashion.variant_options");
+    const products = active("fashion.variant_of");
+    if (!outfit.items.length || has.length !== outfit.items.length ||
+        ![0, outfit.items.length].includes(slots.length) ||
+        options.length !== outfit.items.length || products.length !== outfit.items.length ||
+        new Set(outfit.items.map((item) => item.variantId)).size !== outfit.items.length) {
+      throw new AppError("FASHION_GRAPH_CONFLICT", "코디 항목 연결 수가 달라요.",
+        { httpStatus: 409 });
+    }
+    const lines = new Map();
+    for (const original of outfit.items) {
+      const variantId = original.variantId;
+      const itemHas = has.filter((item) => item.objectEntityId === variantId);
+      const itemSlot = slots.filter((item) => item.subjectId === variantId);
+      const itemOwner = ownership.filter((item) => item.subjectId === variantId);
+      const itemOptions = options.filter((item) => item.subjectId === variantId);
+      const itemProduct = products.filter((item) => item.subjectId === variantId);
+      if (itemHas.length !== 1 || itemSlot.length > 1 || itemOwner.length > 1 ||
+          itemOptions.length !== 1 || itemProduct.length !== 1 ||
+          !activeScenarioEntity(state, variantId, "core.product_variant") ||
+          !activeScenarioEntity(state, itemProduct[0].objectEntityId, "core.product") ||
+          !itemOptions[0].typedValue?.value ||
+          requestFingerprint(itemOptions[0].typedValue?.value) !==
+            requestFingerprint({ color: original.color, size: original.size }) ||
+          (itemSlot[0] && !["outerwear", "top", "bottom", "shoes", "accessory"]
+            .includes(itemSlot[0].typedValue?.value)) ||
+          (itemOwner[0] && !["owned", "candidate"].includes(itemOwner[0].typedValue?.value))) {
+        throw new AppError("FASHION_GRAPH_CONFLICT", "코디 항목의 내용이 서로 달라요.",
+          { httpStatus: 409 });
+      }
+      lines.set(variantId, { has: itemHas[0], slot: itemSlot[0] ?? null,
+        ownership: itemOwner[0] ?? null, options: itemOptions[0], product: itemProduct[0],
+        original });
+    }
+    const items = [...lines].map(([variantId, line]) => ({ variantId,
+      importId: line.original.importId, color: line.original.color,
+      size: line.original.size,
+      slot: line.slot?.typedValue.value ?? line.original.slot,
+      ownership: line.ownership?.typedValue.value ?? "unknown" }));
+    if (new Set(items.map((item) => item.slot)).size !== items.length) {
+      throw new AppError("FASHION_GRAPH_CONFLICT", "코디 자리가 중복됐어요.",
+        { httpStatus: 409 });
+    }
+    const graphFingerprint = requestFingerprint([...lines].map(([id, line]) =>
+      [id, line.has.id, line.slot?.id ?? null, line.ownership?.id ?? null,
+        line.options.id, line.product.id]));
+    const revision = 1 + Object.values(state.fashionCorrectionReceipts ?? {}).filter((item) =>
+      item.ownerId === ownerId && item.activityId === activityId && !item.deleted).length;
+    return { current, scenario, source, outfit, items, lines,
+      scope, graphFingerprint, revision };
   }
 
   function editableBeautyGraph(state, activityId) {
@@ -2596,7 +2710,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     const recovered = recoveryDraft(state, activityId, current,
       { allowStartedShoppingSuccessor: true });
-    if (["beauty", "travel"].includes(scenario) && current.pendingChanges.some((item) =>
+    if (["fashion", "beauty", "travel"].includes(scenario) && current.pendingChanges.some((item) =>
       item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
       if (requested) {
         const expected = reviewSuccessorDetails(state, activityId,
@@ -2712,7 +2826,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               scenario: scenarioForActivity(state, activityId), changes,
               affectedTasks: (scenarioForActivity(state, activityId) === "beauty"
                 ? ["instantiate_routine", "record_routine_outcome"]
-                : ["record_stop_outcomes"])
+                : scenarioForActivity(state, activityId) === "fashion"
+                  ? ["record_wear"] : ["record_stop_outcomes"])
                 .filter((id) => current.tasks.some((task) => task.id === id))
                 .map((id) => ({ id, status: "new_activity_required" })),
               reasonCode: "STARTED_TASK_PROTECTED",
@@ -2832,6 +2947,141 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             item.sourceId === graph.source.provenance?.importedSourceId)?.importId ?? null;
           return { activityId, assertionId: graph.confirmed.id,
             recipe: graph.recipe, originalRecipe: original ?? null, importId };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async getEditableFashionOutfit(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => {
+          const graph = editableFashionGraph(state, activityId);
+          return { activityId, outfitId: graph.outfit.id,
+            revision: graph.revision, graphFingerprint: graph.graphFingerprint,
+            items: graph.items, originalItems: graph.outfit.items };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctFashionOutfit(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedGraphFingerprint", "items", "confirmed"].includes(key)) ||
+          input.confirmed !== true ||
+          typeof input.expectedGraphFingerprint !== "string" ||
+          !/^[a-f0-9]{64}$/.test(input.expectedGraphFingerprint) ||
+          !Array.isArray(input.items) || input.items.length < 1 ||
+          input.items.length > 5 || input.items.some((item) =>
+            !item || typeof item !== "object" || Array.isArray(item) ||
+            Object.keys(item).some((key) => !["variantId", "slot", "ownership"].includes(key)) ||
+            !["outerwear", "top", "bottom", "shoes", "accessory"].includes(item.slot) ||
+            !["owned", "candidate", "unknown"].includes(item.ownership))) {
+          throw new AppError("INVALID_REQUEST", "정정할 코디 자리와 소유 상태를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const items = input.items.map((item) => ({
+          variantId: safeId(item.variantId, "variantId"),
+          slot: item.slot, ownership: item.ownership }));
+        if (new Set(items.map((item) => item.variantId)).size !== items.length ||
+            new Set(items.map((item) => item.slot)).size !== items.length) {
+          throw new AppError("INVALID_REQUEST", "코디 항목이나 자리가 중복됐어요.",
+            { httpStatus: 400 });
+        }
+        const hash = requestFingerprint({ activityId,
+          expectedGraphFingerprint: input.expectedGraphFingerprint, items });
+        return await store.transact((state) => {
+          assertState(state);
+          state.fashionCorrectionReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const prior = state.fashionCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 코디 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 코디 정정은 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const graph = editableFashionGraph(state, activityId);
+          if (graph.graphFingerprint !== input.expectedGraphFingerprint) {
+            throw new AppError("FASHION_REVISION_CONFLICT", "코디 관계가 먼저 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          if (items.length !== graph.items.length ||
+              items.some((item) => !graph.lines.has(item.variantId))) {
+            throw new AppError("INVALID_REQUEST", "확정한 상품만 정정할 수 있어요.",
+              { httpStatus: 400 });
+          }
+          if (requestFingerprint(items) === requestFingerprint(graph.items.map((item) =>
+            ({ variantId: item.variantId, slot: item.slot, ownership: item.ownership })))) {
+            throw new AppError("UNCHANGED_OUTFIT", "변경된 코디 내용이 없어요.",
+              { httpStatus: 409 });
+          }
+          const stem = `fashion-correction:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const now = new Date().toISOString();
+          const beforeSequence = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.add") validateAssertionRelation(state, payload);
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 정정한 코디", provenance: { scenario: "fashion_correction",
+              activityId, confirmationSourceId: graph.source.id,
+              importedSourceIds: graph.scenario.importIds.map((id) =>
+                state.importReceipts[id].sourceId) } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(items), content: { items }, capturedAt: now });
+          for (const [index, item] of items.entries()) {
+            const line = graph.lines.get(item.variantId);
+            const role = fingerprint(item.variantId).slice(0, 16);
+            const evidenceId = `${stem}:evidence:${role}`;
+            apply(`evidence:${role}`, "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId,
+              quote: `${item.slot} · ${item.ownership}`,
+              locator: { kind: "user_confirmation", jsonPointer: `/items/${index}` } });
+            const assertion = (field, predicate, value, type) => ({
+              id: `${stem}:${field}:${role}`, subjectId: item.variantId,
+              predicate, scope: graph.scope, origin: "user_reported",
+              assertedBy: { type: "user", id: ownerId },
+              evidenceIds: [evidenceId], observedAt: now,
+              typedValue: { type, value } });
+            if (line.slot?.typedValue?.value !== item.slot) {
+              const next = assertion("slot", "fashion.item_slot", item.slot, "fashion.item_slot");
+              if (line.slot) apply(`slot:${role}`, "assertion.correct", {
+                assertionId: line.slot.id, expectedRevision: line.slot.revision, assertion: next });
+              else apply(`slot:${role}`, "assertion.add", next);
+            }
+            if (line.ownership?.typedValue?.value !== item.ownership) {
+              if (item.ownership === "unknown") {
+                if (line.ownership) apply(`ownership:${role}`, "assertion.retract", {
+                  assertionId: line.ownership.id,
+                  expectedRevision: line.ownership.revision });
+              } else {
+                const next = assertion("ownership", "fashion.ownership",
+                  item.ownership, "fashion.ownership");
+                if (line.ownership) apply(`ownership:${role}`, "assertion.correct", {
+                  assertionId: line.ownership.id,
+                  expectedRevision: line.ownership.revision, assertion: next });
+                else apply(`ownership:${role}`, "assertion.add", next);
+              }
+            }
+          }
+          recordAffectedConsumers(state, beforeSequence);
+          state.reviewEvents.push({ key: `${activityId}:fashion-correction:${commandId}`,
+            activityId, reasonCode: "SCENARIO_GRAPH_CORRECTED",
+            eventIds: state.knowledge.events.filter((event) =>
+              event.sequence > beforeSequence).map((event) => event.id), timeDue: false });
+          const next = editableFashionGraph(state, activityId);
+          const result = { activityId, revision: next.revision + 1,
+            graphFingerprint: next.graphFingerprint, sourceId,
+            knowledgeSequence: state.knowledge.sequence };
+          state.fashionCorrectionReceipts[key] = { ownerId, activityId,
+            sourceId, hash, result };
+          return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
     },
@@ -4892,6 +5142,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               { type: "fashion.variant_options", value: {
                 color: selection.color, size: selection.size } });
             assertion("has-item", outfitId, "fashion.has_item", variantId);
+            assertion("item-slot", variantId, "fashion.item_slot", null,
+              { type: "fashion.item_slot", value: selection.slot });
             if (selection.ownership !== "unknown") {
               assertion("ownership", variantId, "fashion.ownership", null,
                 { type: "fashion.ownership", value: selection.ownership });

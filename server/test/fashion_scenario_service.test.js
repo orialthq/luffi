@@ -46,6 +46,87 @@ const selections = [
 ];
 
 for (const backend of ["json", "postgres"]) {
+test(`fashion correction upgrades an older outfit without slot assertions (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createFashionScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-legacy" });
+  const board = await service.getBoard("outfit-1");
+  await service.confirmFashionOutfit({ commandId: "confirm-legacy",
+    activityId: "outfit-1", expectedRevision: board.revision, selections });
+  const slotAssertions = (await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "fashion.item_slot" &&
+    item.scope?.id === "outfit-1");
+  for (const assertion of slotAssertions) {
+    await service.knowledgeCommand({ commandId: `legacy-remove:${assertion.id}`,
+      type: "assertion.retract", payload: { assertionId: assertion.id,
+        expectedRevision: assertion.revision } });
+  }
+  const editable = await service.getEditableFashionOutfit("outfit-1");
+  assert.deepEqual(editable.items.map((item) => item.slot), ["outerwear", "bottom"]);
+  await service.correctFashionOutfit({ commandId: "correct-legacy", activityId: "outfit-1",
+    expectedGraphFingerprint: editable.graphFingerprint, confirmed: true,
+    items: editable.items.map((item, index) => ({ variantId: item.variantId,
+      slot: item.slot, ownership: index === 0 ? "owned" : item.ownership })) });
+  const upgraded = (await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "fashion.item_slot" &&
+    item.scope?.id === "outfit-1");
+  assert.equal(upgraded.length, 2);
+});
+
+test(`fashion correction changes slots and ownership without rewriting wear history (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
+  const created = await service.createFashionScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-outfit" });
+  let board = await service.getBoard("outfit-1");
+  await service.confirmFashionOutfit({ commandId: "confirm-outfit",
+    activityId: "outfit-1", expectedRevision: board.revision, selections });
+  board = await service.getBoard("outfit-1");
+  const recorded = await service.recordFashionWearOutcome({ commandId: "wear-outfit",
+    activityId: "outfit-1", expectedRevision: board.revision, status: "worn" });
+  assert.ok(recorded.experienceId);
+  const history = structuredClone((await service.getBoard("outfit-1")).results);
+  const editable = await service.getEditableFashionOutfit("outfit-1");
+  assert.deepEqual(editable.items.map((item) => item.slot), ["outerwear", "bottom"]);
+  const request = { commandId: "correct-outfit", activityId: "outfit-1",
+    expectedGraphFingerprint: editable.graphFingerprint, confirmed: true,
+    items: [
+      { variantId: editable.items[0].variantId, slot: "top", ownership: "owned" },
+      { variantId: editable.items[1].variantId, slot: "bottom", ownership: "unknown" },
+    ] };
+  const corrected = await service.correctFashionOutfit(request);
+  assert.ok(corrected.sourceId);
+  assert.equal((await service.correctFashionOutfit(request)).replayed, true);
+  assert.equal((await service.getEditableFashionOutfit("outfit-1")).items[0].slot, "top");
+  const graph = (await store.snapshot()).knowledge;
+  assert.deepEqual(graph.assertions.filter((item) => item.status === "active" &&
+    item.predicate === "fashion.item_slot" && item.scope?.id === "outfit-1")
+    .map((item) => item.typedValue.value), ["bottom", "top"]);
+  assert.deepEqual(graph.assertions.filter((item) => item.status === "active" &&
+    item.predicate === "fashion.ownership" && item.scope?.id === "outfit-1")
+    .map((item) => item.typedValue.value), ["owned"]);
+  const after = await service.getBoard("outfit-1");
+  assert.deepEqual(after.results, history);
+  assert.equal(after.results.find((item) => item.id === board.tasks.find((task) =>
+    task.id === "confirm_outfit").latestOutputRef).value.outfit.items[0].slot, "outerwear");
+  const review = await service.getBoardReview("outfit-1");
+  assert.equal(review.reasonCode, "STARTED_TASK_PROTECTED");
+  assert.deepEqual(review.affectedTasks.map((item) => item.id), ["record_wear"]);
+  await assert.rejects(service.proposeBoardReview({ activityId: "outfit-1",
+    commandId: "patch-old", expectedRevision: after.revision, confirmed: true }),
+  (error) => error.code === "STARTED_TASK_PROTECTED");
+  const next = await service.createReviewSuccessor({ activityId: "outfit-1",
+    commandId: "continue-outfit", expectedRevision: after.revision, confirmed: true });
+  assert.equal(next.continuedFrom, "outfit-1");
+  await assert.rejects(service.correctFashionOutfit({ ...request, commandId: "stale-outfit" }),
+    (error) => error.code === "FASHION_REVISION_CONFLICT");
+  await service.knowledgeCommand({ commandId: "delete-outfit-capture",
+    type: "source.delete", payload: { sourceId: imports.a_blazer.sourceId } });
+  await assert.rejects(service.correctFashionOutfit(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  await assert.rejects(service.getBoard("outfit-1"),
+    (error) => error.code === "NOT_FOUND");
+});
+
 test(`real fashion image responses become a user-confirmed outfit and a reported wear (${backend})`, async (t) => {
   const { service, store } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
