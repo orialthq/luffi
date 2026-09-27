@@ -194,4 +194,129 @@ test(`retracted offer link prevents a purchase outcome (${backend})`, async (t) 
     item.status === "active" && item.predicate === "shopping.purchase_for_choice").length, 0);
 });
 
+test(`shopping correction preserves a purchased choice and chains a new graph (${backend})`, async (t) => {
+  const { service, store, reopenStore, imported } = await fixture(t, backend);
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-shopping" });
+  let board = await service.getBoard("shop-1");
+  await service.confirmShoppingChoice({ commandId: "choose-shopping",
+    activityId: "shop-1", expectedRevision: board.revision,
+    selectedImportId: "a_fabric_box", quantity: 2 });
+  board = await service.getBoard("shop-1");
+  const original = output(board, "confirm_choice").choice;
+  await service.recordShoppingPurchaseOutcome({ commandId: "report-shopping",
+    activityId: "shop-1", expectedRevision: board.revision,
+    status: "purchased", actualPaidKrw: 13500 });
+  let editable = await service.getEditableShoppingChoice("shop-1");
+  assert.equal(editable.choice.id, original.id);
+  await assert.rejects(service.correctShoppingChoice({ commandId: "unchanged",
+    activityId: "shop-1", expectedGraphFingerprint: editable.graphFingerprint,
+    selectedImportId: original.importId, quantity: original.quantity,
+    confirmed: true }), (error) => error.code === "UNCHANGED_CHOICE");
+  await assert.rejects(service.correctShoppingChoice({ commandId: "outside",
+    activityId: "shop-1", expectedGraphFingerprint: editable.graphFingerprint,
+    selectedImportId: "not-in-plan", quantity: 1, confirmed: true }),
+  (error) => error.code === "INVALID_REQUEST");
+  const request = { commandId: "correct-shopping", activityId: "shop-1",
+    expectedGraphFingerprint: editable.graphFingerprint,
+    selectedImportId: "b_clear_box", quantity: 3, confirmed: true };
+  const corrected = await service.correctShoppingChoice(request);
+  assert.equal((await service.correctShoppingChoice(request)).replayed, true);
+  await assert.rejects(service.correctShoppingChoice({ ...request,
+    quantity: 4 }), (error) => error.code === "COMMAND_CONFLICT");
+  await assert.rejects(service.correctShoppingChoice({ ...request,
+    commandId: "stale", quantity: 4 }),
+  (error) => error.code === "SHOPPING_REVISION_CONFLICT");
+  editable = await service.getEditableShoppingChoice("shop-1");
+  assert.equal(editable.choice.id, corrected.choiceId);
+  assert.equal(editable.choice.quantity, 3);
+  assert.equal(editable.choice.displayedPriceText, "15,900원");
+  let state = await store.snapshot();
+  assert.equal(state.knowledge.assertions.find((item) => item.status === "active" &&
+    item.predicate === "shopping.choice_supersedes_choice")?.objectEntityId,
+  original.id);
+  assert.equal(state.knowledge.assertions.find((item) => item.status === "active" &&
+    item.predicate === "shopping.purchase_for_choice")?.objectEntityId,
+  original.id);
+  assert.equal(state.knowledge.assertions.find((item) => item.status === "active" &&
+    item.predicate === "shopping.actual_paid_krw")?.typedValue?.value, 13500);
+  assert.equal((await service.getBoardReview("shop-1")).status, "blocked");
+  const reviewedBoard = await service.getBoard("shop-1");
+  const successor = await service.createReviewSuccessor({
+    commandId: "continue-corrected-shopping", activityId: "shop-1",
+    expectedRevision: reviewedBoard.revision, confirmed: true });
+  assert.equal(successor.continuedFrom, "shop-1");
+  assert.equal((await service.getBoard(successor.activityId)).scenario, "shopping");
+  const reopenedStore = reopenStore();
+  const reopened = createCommonKernelService({ ownerId: "buyer", store: reopenedStore });
+  assert.equal((await reopened.getEditableShoppingChoice("shop-1")).choice.id,
+    corrected.choiceId);
+  const second = await reopened.correctShoppingChoice({ commandId: "correct-shopping-2",
+    activityId: "shop-1", expectedGraphFingerprint: editable.graphFingerprint,
+    selectedImportId: "b_clear_box", quantity: 1, confirmed: true });
+  assert.equal((await reopened.getEditableShoppingChoice("shop-1")).choice.quantity, 1);
+  state = await reopenedStore.snapshot();
+  assert.equal(state.knowledge.assertions.find((item) => item.status === "active" &&
+    item.subjectId === second.choiceId &&
+    item.predicate === "shopping.choice_supersedes_choice")?.objectEntityId,
+  corrected.choiceId);
+  await service.knowledgeCommand({ commandId: "delete-shopping-correction",
+    type: "source.delete", payload: { sourceId: corrected.sourceId } });
+  await assert.rejects(service.getBoard("shop-1"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctShoppingChoice(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  assert.ok(imported.length === 2);
+});
+
+test(`shopping correction blocks an old unreported choice from a new purchase report (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-shopping" });
+  let board = await service.getBoard("shop-1");
+  await service.confirmShoppingChoice({ commandId: "choose-shopping",
+    activityId: "shop-1", expectedRevision: board.revision,
+    selectedImportId: "a_fabric_box", quantity: 1 });
+  const editable = await service.getEditableShoppingChoice("shop-1");
+  await service.correctShoppingChoice({ commandId: "correct-shopping",
+    activityId: "shop-1", expectedGraphFingerprint: editable.graphFingerprint,
+    selectedImportId: "b_clear_box", quantity: 1, confirmed: true });
+  board = await service.getBoard("shop-1");
+  await assert.rejects(service.recordShoppingPurchaseOutcome({
+    commandId: "report-old-shopping", activityId: "shop-1",
+    expectedRevision: board.revision, status: "purchased",
+    actualPaidKrw: 12900 }),
+  (error) => error.code === "SHOPPING_CHOICE_CORRECTED");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "shopping.purchase_for_choice").length, 0);
+});
+
+test(`removing a corrected shopping capture also removes the dependent choice (${backend})`, async (t) => {
+  const { service, store, imported } = await fixture(t, backend);
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-shopping" });
+  const board = await service.getBoard("shop-1");
+  await service.confirmShoppingChoice({ commandId: "choose-shopping",
+    activityId: "shop-1", expectedRevision: board.revision,
+    selectedImportId: "a_fabric_box", quantity: 1 });
+  const editable = await service.getEditableShoppingChoice("shop-1");
+  const request = { commandId: "correct-shopping", activityId: "shop-1",
+    expectedGraphFingerprint: editable.graphFingerprint,
+    selectedImportId: "b_clear_box", quantity: 2, confirmed: true };
+  await service.correctShoppingChoice(request);
+  await service.knowledgeCommand({ commandId: "delete-capture",
+    type: "source.delete", payload: { sourceId: imported[1].sourceId } });
+  await assert.rejects(service.getBoard("shop-1"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctShoppingChoice(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  const state = await store.snapshot();
+  assert.deepEqual(state.knowledge.assertions.filter((item) => item.status === "active" &&
+    item.scope?.id === "shop-1" && item.predicate?.startsWith("shopping."))
+    .map((item) => ({ id: item.id, predicate: item.predicate })), []);
+});
+
 }

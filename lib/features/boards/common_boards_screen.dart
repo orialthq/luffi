@@ -16,6 +16,7 @@ import 'ordered_graph_correction_screen.dart';
 import 'fashion_correction_screen.dart';
 import 'dining_correction_screen.dart';
 import 'life_tip_correction_screen.dart';
+import 'shopping_correction_screen.dart';
 
 bool _connectionKindsVisible(KernelJson board) => const {
   'recipe',
@@ -2346,6 +2347,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openShoppingEditor() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ShoppingCorrectionScreen(
+          client: widget.client,
+          activityId: widget.activityId,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3895,6 +3908,25 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             onPressed: _busy || _needsRefresh ? null : _openLifeTipEditor,
             icon: const Icon(Icons.edit_note_rounded),
             label: const Text('꿀팁 단계·순서 정정'),
+          ),
+        if (board['scenario'] == 'shopping' &&
+            _objects(board['tasks']).any((task) {
+              if (task['id'] != 'confirm_choice' ||
+                  task['executionStatus'] != 'completed') {
+                return false;
+              }
+              final result = _objects(board['results'])
+                  .where((item) => item['id'] == task['latestOutputRef'])
+                  .firstOrNull;
+              final choice = _object(_object(result?['value'])['choice']);
+              return choice['kind'] != 'basket' &&
+                  choice['ingredientMatch'] == null;
+            }))
+          OutlinedButton.icon(
+            key: const Key('kernel-open-shopping-correction'),
+            onPressed: _busy || _needsRefresh ? null : _openShoppingEditor,
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('쇼핑 상품·수량 정정'),
           ),
         if (board['scenario'] == 'beauty' &&
             _objects(board['tasks']).any(

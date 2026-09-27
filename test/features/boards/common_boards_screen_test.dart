@@ -186,6 +186,25 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   @override
+  Future<KernelJson> getEditableShoppingChoice(String activityId) async => {
+    'activityId': activityId,
+    'graphFingerprint': 'c' * 64,
+    'choice': {
+      'importId': 'item-a',
+      'title': '수납함',
+      'quantity': 1,
+      'displayedPriceText': '12,900원',
+    },
+    'candidates': [
+      {'importId': 'item-a', 'title': '수납함', 'displayedPriceText': '12,900원'},
+      {'importId': 'item-b', 'title': '보관함', 'displayedPriceText': '15,900원'},
+    ],
+  };
+
+  @override
+  Future<KernelJson> correctShoppingChoice(KernelJson request) async => request;
+
+  @override
   Future<KernelJson> getEditableLifeTipPlan(String activityId) async => {
     'activityId': activityId,
     'graphFingerprint': 'e' * 64,
@@ -1265,6 +1284,28 @@ Future<void> _pump(WidgetTester tester, FakeKernelClient client) async {
 }
 
 void main() {
+  testWidgets('confirmed single shopping board opens choice correction', (
+    tester,
+  ) async {
+    final client = FakeKernelClient()..board['scenario'] = 'shopping';
+    (client.board['tasks'] as List).add({
+      'id': 'confirm_choice',
+      'executionStatus': 'completed',
+      'latestOutputRef': 'choice-result',
+    });
+    (client.board['results'] as List).add({
+      'id': 'choice-result',
+      'value': {
+        'choice': {'id': 'choice-a', 'importId': 'item-a'},
+      },
+    });
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('kernel-open-shopping-correction')));
+    await tester.pumpAndSettle();
+    expect(find.text('쇼핑 상품·수량 정정'), findsWidgets);
+    expect(find.text('보관함'), findsOneWidget);
+  });
+
   testWidgets('confirmed life-tip board opens the action correction editor', (
     tester,
   ) async {

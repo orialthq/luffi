@@ -166,6 +166,8 @@ export const shoppingPack = {
       ["core.product"], "one"),
     relation("shopping.choice_offer", ["shopping.purchase_choice"],
       ["shopping.offer_snapshot"], "one"),
+    relation("shopping.choice_supersedes_choice", ["shopping.purchase_choice"],
+      ["shopping.purchase_choice"], "one"),
     relation("shopping.basket_contains_choice", ["shopping.purchase_choice"],
       ["shopping.purchase_choice"]),
     relation("shopping.choice_matches_ingredient", ["shopping.purchase_choice"],

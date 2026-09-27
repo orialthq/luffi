@@ -6,6 +6,59 @@ import 'package:ori_beauty/data/common_kernel_client.dart';
 
 void main() {
   test(
+    'shopping correction reads encoded activity and posts stable choice',
+    () async {
+      final paths = <String>[];
+      final bodies = <Map<String, dynamic>>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        paths.add('${request.method} ${request.uri}');
+        if (request.method == 'POST') {
+          bodies.add(
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>,
+          );
+        } else {
+          await request.drain<void>();
+        }
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          request.method == 'GET'
+              ? '{"activityId":"shop/a","choice":{}}'
+              : '{"choiceId":"choice-b"}',
+        );
+        await request.response.close();
+      });
+      final client = HttpCommonKernelClient(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        token: 'development-token',
+      );
+      expect(
+        (await client.getEditableShoppingChoice('shop/a'))['activityId'],
+        'shop/a',
+      );
+      final request = <String, Object?>{
+        'commandId': 'correct-1',
+        'activityId': 'shop/a',
+        'expectedGraphFingerprint': 'c' * 64,
+        'selectedImportId': 'item-b',
+        'quantity': 3,
+        'confirmed': true,
+      };
+      expect(
+        (await client.correctShoppingChoice(request))['choiceId'],
+        'choice-b',
+      );
+      expect(paths, [
+        'GET /v1/kernel/shopping/editable/shop%2Fa',
+        'POST /v1/kernel/shopping/corrections',
+      ]);
+      expect(bodies.single, request);
+    },
+  );
+
+  test(
     'recipe shopping transfer reviews encoded link and sends stable request',
     () async {
       final paths = <String>[];

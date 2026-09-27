@@ -533,6 +533,8 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> confirmLifeTipActions(KernelJson request);
   Future<KernelJson> recordLifeTipOutcomes(KernelJson request);
   Future<KernelJson> createShoppingScenario(KernelJson request);
+  Future<KernelJson> getEditableShoppingChoice(String activityId);
+  Future<KernelJson> correctShoppingChoice(KernelJson request);
   Future<KernelJson> getImportedFieldReview(String importId);
   Future<KernelJson> reviewImportedField(KernelJson request);
   Future<KernelJson> getEditableCaptureFields(String importId);
@@ -847,6 +849,16 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> recordLifeTipOutcomes(KernelJson request) =>
       _request('POST', '/v1/kernel/life-tip/outcomes', request);
+
+  @override
+  Future<KernelJson> getEditableShoppingChoice(String activityId) => _request(
+    'GET',
+    '/v1/kernel/shopping/editable/${Uri.encodeComponent(activityId)}',
+  );
+
+  @override
+  Future<KernelJson> correctShoppingChoice(KernelJson request) =>
+      _request('POST', '/v1/kernel/shopping/corrections', request);
 
   @override
   Future<KernelJson> createShoppingScenario(KernelJson request) =>

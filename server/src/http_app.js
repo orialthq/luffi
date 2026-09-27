@@ -50,6 +50,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/shopping/scenarios": "createShoppingScenario",
   "/shopping/recipe-needs/proposals": "proposeRecipeShoppingPlan",
   "/shopping/confirm-choice": "confirmShoppingChoice",
+  "/shopping/corrections": "correctShoppingChoice",
   "/shopping/confirm-basket": "confirmShoppingBasket",
   "/shopping/purchase-outcome": "recordShoppingPurchaseOutcome",
   "/shopping/basket-outcomes": "recordShoppingBasketOutcomes",
@@ -77,7 +78,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
   "getEditableCaptureFields", "getEditableRecipe", "getEditableDiningSelection", "getEditableFashionOutfit", "getEditableBeautyRoutine",
-  "getEditableTravelItinerary", "getEditableLifeTipPlan", "getRecipeShoppingPlanReview",
+  "getEditableTravelItinerary", "getEditableLifeTipPlan", "getEditableShoppingChoice", "getRecipeShoppingPlanReview",
   "getRecipeShoppingTransferReview", "listShoppingInventory",
   "getShoppingBasketReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
@@ -304,6 +305,15 @@ export function createHttpServer({
           catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
             { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.getEditableLifeTipPlan(activityId));
+        }
+        const editableShoppingMatch = /^\/shopping\/editable\/([^/]+)$/.exec(route);
+        if (editableShoppingMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableShoppingMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableShoppingChoice(activityId));
         }
         const editableFieldsMatch = /^\/ingestion\/editable-fields\/([^/]+)$/.exec(route);
         if (editableFieldsMatch) {
