@@ -38,6 +38,9 @@ npm start
 지정합니다. 공통 보드 API를 켠 실행에는 상태 파일과 별도로 보존되는
 `LUFFI_KERNEL_DELETION_LEDGER_PATH`도 필수입니다. 지정하지 않으면 서버가
 시작하지 않습니다.
+실물 기기나 에뮬레이터의 합성 검증을 기존 개발 분석 작업과 분리하려면
+`LUFFI_BATCH_DATA_DIR`도 별도 빈 디렉터리로 지정합니다. 생략하면 기존
+`server/.local/batch-jobs`를 사용합니다.
 처음 켤 때는 신뢰할 수 있는 현재 상태에서
 `npm run bootstrap:deletion-ledger -- LEDGER.ndjson`을 한 번 실행하고,
 `npm run check:deletion-ledger -- LEDGER.ndjson`으로 확인합니다. 두 명령에는 상태 파일이면

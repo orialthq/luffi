@@ -44,6 +44,7 @@ if (!apiKey) {
   const batchAnalysisService = await createBatchAnalysisService({
     transport: createOpenAIBatchTransport({ apiKey }),
     analysisService,
+    dataDir: process.env.LUFFI_BATCH_DATA_DIR,
   });
 
   // The place lookup runs in two halves. Retrieval has to stay on this model
