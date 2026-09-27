@@ -8,12 +8,31 @@ import { createCommonKernelService, createCommonKernelState } from "../src/commo
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createPostgresRelationalStore } from "../src/storage/postgres_relational_store.js";
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-recipe-correction-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const store = createJsonStateStore({ filePath: join(folder, "state.json"),
-    initialState: createCommonKernelState });
+async function fixture(t, backend = "json") {
+  let store;
+  if (backend === "postgres") {
+    const { PGlite } = await import("@electric-sql/pglite");
+    const db = await PGlite.create();
+    t.after(() => db.close());
+    for (const name of ["001_common_kernel", "002_kernel_state",
+      "003_relational_knowledge"]) {
+      await db.exec(await fs.readFile(new URL(
+        `../migrations/${name}.sql`, import.meta.url), "utf8"));
+    }
+    const pool = { query: (sql, params) => db.query(sql, params),
+      connect: async () => ({ query: (sql, params) => db.query(sql, params),
+        release() {} }) };
+    store = createPostgresRelationalStore({ pool,
+      initialState: createCommonKernelState });
+    await store.ready();
+  } else {
+    const folder = await fs.mkdtemp(join(tmpdir(), "luffi-recipe-correction-"));
+    t.after(() => fs.rm(folder, { recursive: true, force: true }));
+    store = createJsonStateStore({ filePath: join(folder, "state.json"),
+      initialState: createCommonKernelState });
+  }
   const service = createCommonKernelService({ ownerId: "cook", store });
   const image = await fs.readFile(new URL("./fixtures/recipe_tomato_egg_generated.png", import.meta.url));
   assert.equal(createHash("sha256").update(image).digest("hex"),
@@ -44,8 +63,9 @@ async function fixture(t) {
   return { service, store, imported, created, original };
 }
 
-test("one correction atomically replaces ingredients, quantities and ordered step relations", async (t) => {
-  const { service, store, created, original } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`one correction atomically replaces ingredients, quantities and ordered step relations (${backend})`, async (t) => {
+  const { service, store, created, original } = await fixture(t, backend);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "accept-original" });
   const before = await service.getBoard("cook-recipe");
   const editable = await service.getEditableRecipe("cook-recipe");
@@ -100,8 +120,8 @@ test("one correction atomically replaces ingredients, quantities and ordered ste
     (error) => error.code === "COMMAND_CONFLICT");
 });
 
-test("invalid replacements leave the complete graph unchanged and source deletion redacts edits", async (t) => {
-  const { service, store, imported, created } = await fixture(t);
+test(`invalid replacements leave the complete graph unchanged and source deletion redacts edits (${backend})`, async (t) => {
+  const { service, store, imported, created } = await fixture(t, backend);
   const editable = await service.getEditableRecipe("cook-recipe");
   const before = await store.snapshot();
   await assert.rejects(service.correctRecipe({ commandId: "same-recipe",
@@ -132,8 +152,8 @@ test("invalid replacements leave the complete graph unchanged and source deletio
   assert.equal(deleted.importReceipts[imported.importId].deleted, true);
 });
 
-test("a started recipe keeps completed quantities while corrected steps continue in a new activity", async (t) => {
-  const { service, created } = await fixture(t);
+test(`a started recipe keeps completed quantities while corrected steps continue in a new activity (${backend})`, async (t) => {
+  const { service, created } = await fixture(t, backend);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "accept-started" });
   let board = await service.getBoard("cook-recipe");
   await service.runTask({ commandId: "scale-started", activityId: "cook-recipe",
@@ -160,8 +180,8 @@ test("a started recipe keeps completed quantities while corrected steps continue
   assert.deepEqual((await service.getBoard("cook-recipe")).results, oldResults);
 });
 
-test("deleting the original confirmation also deletes the edited recipe copy", async (t) => {
-  const { service, store, created } = await fixture(t);
+test(`deleting the original confirmation also deletes the edited recipe copy (${backend})`, async (t) => {
+  const { service, store, created } = await fixture(t, backend);
   const editable = await service.getEditableRecipe("cook-recipe");
   const request = { commandId: "rename-before-delete", activityId: "cook-recipe",
     expectedAssertionId: editable.assertionId, confirmed: true,
@@ -178,3 +198,4 @@ test("deleting the original confirmation also deletes the edited recipe copy", a
   await assert.rejects(service.correctRecipe(request),
     (error) => error.code === "CORRECTION_DELETED");
 });
+}

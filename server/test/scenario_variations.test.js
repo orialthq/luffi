@@ -9,6 +9,7 @@ import { createCommonKernelService, createCommonKernelState } from "../src/commo
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createPostgresRelationalStore } from "../src/storage/postgres_relational_store.js";
 
 // Every response was recorded from /v1/analyze for the exact PNG below.
 const captures = {
@@ -24,7 +25,25 @@ const captures = {
   tip: ["variation_life_tip_workout_prep", "2fb64f37eb1a20749f13e70674f0f8ee1f024c38542b4ca097e928b450251432", "synthetic.life_tip"],
 };
 
-async function setup(t) {
+async function setup(t, backend = "json") {
+  if (backend === "postgres") {
+    const { PGlite } = await import("@electric-sql/pglite");
+    const db = await PGlite.create();
+    t.after(() => db.close());
+    for (const name of ["001_common_kernel", "002_kernel_state",
+      "003_relational_knowledge"]) {
+      await db.exec(await fs.readFile(fileURLToPath(new URL(
+        `../migrations/${name}.sql`, import.meta.url)), "utf8"));
+    }
+    const pool = { query: (sql, params) => db.query(sql, params),
+      connect: async () => ({ query: (sql, params) => db.query(sql, params),
+        release() {} }) };
+    const store = createPostgresRelationalStore({ pool,
+      initialState: createCommonKernelState });
+    await store.ready();
+    return { store, service: createCommonKernelService({
+      ownerId: "variation-user", store }) };
+  }
   const folder = await fs.mkdtemp(join(tmpdir(), "luffi-variations-"));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   const store = createJsonStateStore({ filePath: join(folder, "state.json"),
@@ -63,8 +82,9 @@ async function approve(service, created, commandId) {
 const active = (state, predicate) => state.knowledge.assertions.filter((item) =>
   item.status === "active" && item.predicate === predicate);
 
-test("recipe amount 'as needed' stays nonnumeric and an actual tofu offer links without a purchase", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`recipe amount 'as needed' stays nonnumeric and an actual tofu offer links without a purchase (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   const recipeImport = await importCapture(service, "recipe");
   const tofuImport = await importCapture(service, "tofu");
   assert.deepEqual(recipeImport.analysis.ingredientGroups[0].ingredients.map((item) =>
@@ -153,9 +173,11 @@ test("recipe amount 'as needed' stays nonnumeric and an actual tofu offer links 
   await assert.rejects(service.getBoard("recipe-board"), (error) => error.code === "NOT_FOUND");
   assert.equal((await service.getBoard("shopping-board")).id, "shopping-board");
 });
+}
 
-test("image-backed recipe basket keeps unselected ingredients and reports purchases per product", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`image-backed recipe basket keeps unselected ingredients and reports purchases per product (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   await importCapture(service, "recipe");
   await importCapture(service, "tofu");
   await importCapture(service, "egg");
@@ -320,9 +342,11 @@ test("image-backed recipe basket keeps unselected ingredients and reports purcha
       amount: 700, unit: "g" }, supportingChoiceIds: [choiceId] }] }),
   (error) => error.code === "SCENARIO_DELETED");
 });
+}
 
-test("a corrected image-backed recipe hides old shopping amounts until a successor recalculates", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`a corrected image-backed recipe hides old shopping amounts until a successor recalculates (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   await importCapture(service, "recipe");
   await importCapture(service, "tofu");
   const createdRecipe = await service.createRecipeScenario({ commandId: "create-correctable-recipe",
@@ -670,6 +694,7 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     expectedSourceResultId: secondReview.reference.sourceResultId,
     confirmed: true }), (error) => error.code === "SCENARIO_DELETED");
 });
+}
 
 test("old and current displayed prices require review instead of silently choosing one", async (t) => {
   const { service, store } = await setup(t);

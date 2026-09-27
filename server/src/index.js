@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCommonKernelService, createCommonKernelState } from "./common/kernel_service.js";
 import { createJsonStateStore } from "./storage/json_state_store.js";
-import { createPostgresStateStore } from "./storage/postgres_state_store.js";
+import { createPostgresRelationalStore } from "./storage/postgres_relational_store.js";
 import pg from "pg";
 
 const apiKey = process.env.OPENAI_API_KEY;
@@ -95,7 +95,7 @@ if (!apiKey) {
     : null;
   const kernelStore = kernelToken
     ? kernelPool
-      ? createPostgresStateStore({ pool: kernelPool,
+      ? createPostgresRelationalStore({ pool: kernelPool,
           initialState: createCommonKernelState })
       : createJsonStateStore({
           filePath: process.env.LUFFI_KERNEL_STATE_PATH ??
