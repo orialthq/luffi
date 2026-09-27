@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import pg from "pg";
 import { createCommonKernelState } from "../src/common/kernel_service.js";
 import { assertSerializableState } from "../src/storage/json_state_store.js";
+import { createDeletionLedger } from "../src/storage/deletion_ledger.js";
 
 const connectionString = process.env.LUFFI_KERNEL_DATABASE_URL;
 const filePath = process.argv[2];
@@ -15,6 +16,10 @@ if (parsed.schemaVersion !== createCommonKernelState().schemaVersion ||
     !parsed.knowledge || !parsed.activities || !parsed.resources ||
     graphKeys.some((key) => !Array.isArray(parsed.knowledge[key]))) {
   throw new Error("Input is not a compatible kernel snapshot");
+}
+if (process.env.LUFFI_KERNEL_DELETION_LEDGER_PATH) {
+  await createDeletionLedger({ filePath: process.env.LUFFI_KERNEL_DELETION_LEDGER_PATH })
+    .assertSafe(parsed);
 }
 // A hydrated export from the relational store contains graph arrays again.
 // Re-import it as legacy state so the next startup inserts those graph rows.

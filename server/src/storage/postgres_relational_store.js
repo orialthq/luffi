@@ -200,7 +200,7 @@ async function writeGraph(client, before, after) {
 // keeps only non-graph state and knowledge metadata (sequence, events, receipts,
 // subscriptions), so existing domain logic can retain its snapshot contract.
 export function createPostgresRelationalStore({ pool, initialState,
-  stateId = "common-kernel" }) {
+  stateId = "common-kernel", deletionLedger = null }) {
   if (!pool || typeof pool.connect !== "function" ||
       typeof pool.query !== "function") throw new TypeError("pool is required");
   if (typeof initialState !== "function") {
@@ -248,6 +248,7 @@ export function createPostgresRelationalStore({ pool, initialState,
       }
       const original = { ...payload, knowledge: { ...payload.knowledge, ...graph } };
       assertSerializableState(original);
+      if (deletionLedger) await deletionLedger.assertSafe(original);
       const outcome = await change(structuredClone(original));
       if (!outcome || typeof outcome !== "object" || !("state" in outcome)) {
         throw new TypeError("transaction must return {state, result}");
@@ -256,6 +257,8 @@ export function createPostgresRelationalStore({ pool, initialState,
       const changed = legacy || JSON.stringify(original) !==
         JSON.stringify(outcome.state);
       if (changed) {
+        if (deletionLedger) await deletionLedger.recordTransitions(original, outcome.state);
+        if (deletionLedger) await deletionLedger.assertSafe(outcome.state);
         await writeGraph(client, legacy ? emptyGraph() : graph,
           outcome.state.knowledge);
         await client.query(

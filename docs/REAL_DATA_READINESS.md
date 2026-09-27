@@ -11,11 +11,26 @@
 | 앱 전체 회귀 | `flutter analyze --fatal-infos` 및 `flutter test` | 서버의 현재 출처가 삭제되거나 바뀌면 정정 진입을 막고, 열린 정정 화면의 삭제된 필드를 숨기는 동작을 포함한다. |
 | 삭제 후 JSON 복구 | `cd server && node --test test/kernel_backup_recovery.test.js` | 삭제 **후** 만든 백업을 빈 저장소에 복원하면 삭제 영수증, 소유자 격리, 독립 자료가 유지되고 같은 가져오기 ID의 재생성이 거부된다. |
 | 복원 전 삭제 검사 | `npm run check:kernel-restore --prefix server -- TRUSTED.json CANDIDATE.json` | 최신 신뢰 상태와 후보 백업을 비교해 삭제된 가져오기 영수증의 누락과 삭제된 Source의 재활성화를 거부한다. 두 파일을 모두 읽기만 하며 복원은 수행하지 않는다. |
-| 실제 PostgreSQL 격리 테스트 | 테스트 전용 DB의 `LUFFI_TEST_POSTGRES_URL` 지정 후 `npm run test:postgres-real --prefix server` | 마이그레이션·관계형 행·동시 쓰기·롤백·재시작과 분야 연결을 실제 드라이버로 확인한다. |
+| 실제 PostgreSQL 격리 테스트 | 테스트 전용 DB의 `LUFFI_TEST_POSTGRES_URL` 지정 후 `npm run test:postgres-real --prefix server` | 마이그레이션·관계형 행·동시 쓰기·롤백·재시작과 분야 연결을 실제 드라이버로 확인한다. `pg_dump`·`pg_restore`가 설치되어 있으면 삭제 전·후 백업의 복원과 삭제 재적용도 실행한다. |
 
 합성 목록은 [`synthetic_corpus.v1.json`](../server/evaluation/synthetic_corpus.v1.json)이 단일 원본이다. 각 항목에 이미지 SHA-256, 짝 응답, 분야, 기대 분류·제목이 고정되어 있다. 검사기가 누락·변경·목록 밖의 이미지나 응답을 실패로 처리한다. 회귀 결과를 이미지 분석의 정밀도, 실제 사용자 만족도, 보드 활용률로 해석하지 않는다. 변형 시나리오의 재료·분량·가격·장소 구별과 결과 분리는 [테스트 안내](TEST_VALIDATION_GUIDE.md)의 개별 통합 테스트에서 검증한다.
 
-필드 단위 라벨 평가기는 [`labeled_analysis.js`](../server/src/evaluation/labeled_analysis.js)에 준비했다. `schemaVersion: 1`, `dataset`, `dataClass`, `entries`를 가진 라벨 목록과, 캡처 ID별 `{ inputSha256, analysis }` 예측 결과를 받는다. 각 라벨 항목은 `id`, `domain`, `inputSha256`, `expected.fields`를 가지며 필드 하나는 `{ path, value, evidenceRequired }`다. 예를 들어 `/ingredientGroups/0/ingredients/0/amount`의 기대값을 `"2"`로 기록하면 값과 근거 존재를 별도 확인할 수 있다. `consented_private` 자료에는 각 항목의 `consentRef`도 필요하다. 입력 해시가 다르거나 결과가 빠지면 통과로 세지 않는다. 결과 리포트는 분야별 분모와 실패 위치·이유만 내고 라벨 값이나 분석 본문은 출력하지 않는다. 실제 데이터 평가는 아직 실행하지 않았다. 실행 명령은 `npm run test:labeled-report --prefix server -- LABELS.json PREDICTIONS.json`이다. 이 도구는 파일을 읽기만 하며 모델 호출이나 서버 적용을 하지 않는다.
+필드 단위 라벨 평가기는 [`labeled_analysis.js`](../server/src/evaluation/labeled_analysis.js)에 준비했다. `schemaVersion: 1`, `dataset`, `dataClass`, `entries`를 가진 라벨 목록과, 캡처 ID별 `{ inputSha256, analysis, graph? }` 예측 결과를 받는다. 각 라벨 항목은 `id`, `domain`, `inputSha256`, `expected.fields`를 가진다. 한 필드는 `{ path, value, evidenceRequired }`로 지정하거나, 배열 순서가 변하는 재료·상품 사실은 다음처럼 고유 조건으로 고른다.
+
+```json
+{
+  "id": "egg-amount",
+  "selector": {
+    "collection": "/ingredientGroups/*/ingredients/*",
+    "where": { "name": "달걀" },
+    "path": "/amount"
+  },
+  "value": "2",
+  "evidenceRequired": true
+}
+```
+
+조건에 맞는 항목이 없거나 둘 이상이면 실패로 기록한다. 그래프 라벨의 `expected.graph`에는 `ownerId`, `distinctMentions`(서로 합치면 안 되는 언급 ID 쌍), `forbiddenAssertions`(사용자 결과 보고 전에는 없어야 할 관계와 활동 범위)를 넣을 수 있다. 잘못된 동일 대상 병합과 방문·구매 등 근거 없는 행동 관계는 필드 오독과 별도 실패로 집계한다. `consented_private` 자료에는 항목마다 `consentRef`가 필요하다. 입력 해시가 다르거나 결과가 빠지면 통과로 세지 않는다. 결과 리포트는 분야별 분모와 실패 위치·이유만 내고 라벨 값이나 분석 본문은 출력하지 않는다. 실제 데이터 평가는 아직 실행하지 않았다. `npm run test:labeled-report --prefix server -- LABELS.json PREDICTIONS.json`은 파일을 읽기만 하며 모델 호출이나 서버 적용을 하지 않는다.
 
 ## 실제 데이터 단계에 들어가기 전에 결정할 평가 계약
 
@@ -29,4 +44,13 @@
 
 ## 복구 경계
 
-삭제 후 백업의 복원은 테스트됐다. 반대로 **삭제 전 백업을 빈 환경에 복원하면 삭제 기록까지 과거로 돌아갈 수 있다.** 새 복원 전 검사는 최신 신뢰 상태가 존재할 때 그 위험을 거부한다. 최신 상태 자체를 잃으면 비교할 기준도 없으므로, 실제 자료 보관 전에는 저장소 밖의 삭제 기록·백업 세대·복원 승인 절차를 마련하고 복원 뒤 삭제를 재적용하는 검증이 필요하다. 운영 DB 백업·복원, 실물 Android의 외부 공유 시트, 실제 캡처 정확도와 성능은 아직 이 게이트에서 검증하지 않았다.
+삭제 전 백업을 복원하면 삭제된 자료가 돌아올 수 있다. [`deletion_ledger.js`](../server/src/storage/deletion_ledger.js)는 JSON·관계형 저장소에서 삭제 트랜잭션을 확정하기 **전**에 가져오기 ID와 Source ID의 해시를 별도 파일에 동기화한다. 파일은 `0600`으로 만들고 연속 기록의 해시 체인을 검증한다. `LUFFI_KERNEL_DELETION_LEDGER_PATH`를 서버 상태·DB 백업과 **별도로 보존되는 위치**로 설정해야 동작한다. 이 경로가 설정되지 않은 서버에는 해당 보호가 적용되지 않는다.
+
+기존 신뢰 상태에 이미 삭제 기록이 있으면 처음부터 새 파일을 자동 생성하지 않는다. 서버 시작 전에 다음 중 현재 저장소에 맞는 환경 변수 하나만 설정하고 `npm run bootstrap:deletion-ledger --prefix server -- LEDGER.ndjson`을 한 번 실행한다.
+
+- JSON: `LUFFI_KERNEL_STATE_PATH`
+- 관계형 DB: `LUFFI_KERNEL_DATABASE_URL`
+
+복원된 저장소에 과거 활성 자료가 있으면 서버는 `DELETION_LEDGER_RESTORE_UNSAFE`로 시작을 거부한다. 복원본을 사용자에게 제공하지 않는 격리 상태에서 `npm run reconcile:deletion-ledger --prefix server -- LEDGER.ndjson`으로 재적용 대상을 확인하고, 같은 명령 끝에 `--apply`를 붙여 삭제한 다음 일반 서버를 시작한다. 복구 명령은 원본 이미지나 분석 내용을 출력하지 않는다. 삭제 기록은 트랜잭션보다 먼저 쓰이므로 트랜잭션 자체가 실패한 삭제 의도도 나중에 재적용될 수 있다. 이는 자료를 되살리지 않기 위한 의도적인 경계다.
+
+2026-09-27에는 임시 **실제 PostgreSQL 16**에서 합성 캡처로 `pg_dump`→삭제 전 백업 복원 거부→삭제 재적용→삭제 후 백업 복원을 실행했다. 최신 상태 전체를 잃어도 보호하려면 삭제 기록 파일을 DB 백업과 독립적으로 보존해야 한다. 파일 자체까지 잃었을 때 삭제 이력을 재구성하는 기능은 없다. 실물 Android의 외부 공유 시트, 실제 캡처 정확도와 성능도 아직 검증하지 않았다.

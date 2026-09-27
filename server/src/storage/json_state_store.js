@@ -4,7 +4,8 @@ import { dirname } from "node:path";
 
 // A single-process durable adapter for local development. The kernel depends
 // only on snapshot()/transact(), so a transactional database can replace it.
-export function createJsonStateStore({ filePath, initialState, fsApi = fs }) {
+export function createJsonStateStore({ filePath, initialState, fsApi = fs,
+  deletionLedger = null }) {
   if (typeof filePath !== "string" || filePath.length === 0) {
     throw new TypeError("filePath is required");
   }
@@ -25,6 +26,7 @@ export function createJsonStateStore({ filePath, initialState, fsApi = fs }) {
         current = initialState();
       }
       assertSerializableState(current);
+      if (deletionLedger) await deletionLedger.assertSafe(current);
       loaded = true;
     }
     return current;
@@ -77,6 +79,8 @@ export function createJsonStateStore({ filePath, initialState, fsApi = fs }) {
         }
         assertSerializableState(outcome.state);
         if (JSON.stringify(outcome.state) !== JSON.stringify(current)) {
+          if (deletionLedger) await deletionLedger.recordTransitions(current, outcome.state);
+          if (deletionLedger) await deletionLedger.assertSafe(outcome.state);
           await persist(outcome.state);
         }
         return structuredClone(outcome.result);

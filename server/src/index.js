@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { createCommonKernelService, createCommonKernelState } from "./common/kernel_service.js";
 import { createJsonStateStore } from "./storage/json_state_store.js";
 import { createPostgresRelationalStore } from "./storage/postgres_relational_store.js";
+import { createDeletionLedger } from "./storage/deletion_ledger.js";
 import pg from "pg";
 
 const apiKey = process.env.OPENAI_API_KEY;
@@ -90,20 +91,25 @@ if (!apiKey) {
     throw new Error("LUFFI_KERNEL_TOKEN(32자 이상)과 LUFFI_KERNEL_OWNER_ID를 함께 설정하세요.");
   }
   const databaseUrl = process.env.LUFFI_KERNEL_DATABASE_URL;
+  const deletionLedgerPath = process.env.LUFFI_KERNEL_DELETION_LEDGER_PATH;
+  const deletionLedger = kernelToken && deletionLedgerPath
+    ? createDeletionLedger({ filePath: deletionLedgerPath }) : null;
   const kernelPool = kernelToken && databaseUrl
     ? new pg.Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 })
     : null;
   const kernelStore = kernelToken
     ? kernelPool
       ? createPostgresRelationalStore({ pool: kernelPool,
-          initialState: createCommonKernelState })
+          initialState: createCommonKernelState, deletionLedger })
       : createJsonStateStore({
           filePath: process.env.LUFFI_KERNEL_STATE_PATH ??
             join(dirname(fileURLToPath(import.meta.url)), "../data/common-kernel.json"),
           initialState: createCommonKernelState,
+          deletionLedger,
         })
     : null;
   if (kernelPool) await kernelStore.ready();
+  else if (deletionLedger) await kernelStore.snapshot();
   const kernelService = kernelToken
     ? createCommonKernelService({
         ownerId: process.env.LUFFI_KERNEL_OWNER_ID,
