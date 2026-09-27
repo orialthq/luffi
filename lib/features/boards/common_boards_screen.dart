@@ -2579,38 +2579,54 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       if (!mounted) return;
       final selection = await showDialog<KernelJson>(
         context: context,
-        builder: (_) => ShoppingChoiceDialog(
-          candidates: _objects(_object(_taskInputs(task))['candidates']),
-          recipeItems: recipeItems,
-          onOpenImport: widget.onOpenShoppingImport,
-        ),
+        builder: (_) => recipeItems == null
+            ? ShoppingChoiceDialog(
+                candidates: _objects(_object(_taskInputs(task))['candidates']),
+                onOpenImport: widget.onOpenShoppingImport,
+              )
+            : ShoppingBasketDialog(
+                candidates: _objects(_object(_taskInputs(task))['candidates']),
+                recipeItems: recipeItems,
+                onOpenImport: widget.onOpenShoppingImport,
+              ),
       );
       if (selection == null || !mounted) return;
       await _mutate((revision, commandId) async {
-        await widget.client.confirmShoppingChoice({
+        final request = <String, Object?>{
           'commandId': commandId,
           'activityId': widget.activityId,
           'expectedRevision': revision,
           ...selection,
-        });
+        };
+        if (recipeItems == null) {
+          await widget.client.confirmShoppingChoice(request);
+        } else {
+          await widget.client.confirmShoppingBasket(request);
+        }
       });
       return;
     }
     if (capabilityId == 'shopping.record_purchase_outcome') {
+      final choice = _object(_object(_taskInputs(task))['choice']);
       final selection = await showDialog<KernelJson>(
         context: context,
-        builder: (_) => ShoppingOutcomeDialog(
-          choice: _object(_object(_taskInputs(task))['choice']),
-        ),
+        builder: (_) => choice['kind'] == 'basket'
+            ? ShoppingBasketOutcomeDialog(basket: choice)
+            : ShoppingOutcomeDialog(choice: choice),
       );
       if (selection == null || !mounted) return;
       await _mutate((revision, commandId) async {
-        await widget.client.recordShoppingPurchaseOutcome({
+        final request = <String, Object?>{
           'commandId': commandId,
           'activityId': widget.activityId,
           'expectedRevision': revision,
           ...selection,
-        });
+        };
+        if (choice['kind'] == 'basket') {
+          await widget.client.recordShoppingBasketOutcomes(request);
+        } else {
+          await widget.client.recordShoppingPurchaseOutcome(request);
+        }
       });
       return;
     }
@@ -3428,6 +3444,90 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     );
   }
 
+  Future<void> _recordShoppingInventory(KernelJson outcome) async {
+    try {
+      final confirmed = _objects(
+        _board?['results'],
+      ).firstWhere((item) => item['taskId'] == 'confirm_choice');
+      final basket = _object(_object(confirmed['value'])['choice']);
+      final previous = await widget.client.listShoppingInventory(
+        widget.activityId,
+      );
+      if (!mounted) return;
+      final selection = await showDialog<KernelJson>(
+        context: context,
+        builder: (_) => ShoppingInventoryDialog(
+          basket: basket,
+          outcomes: _objects(outcome['outcomes']),
+          previous: _objects(previous['observations']),
+        ),
+      );
+      if (selection == null || !mounted) return;
+      await _mutate((revision, commandId) async {
+        await widget.client.recordShoppingInventory({
+          'commandId': commandId,
+          'activityId': widget.activityId,
+          'expectedRevision': revision,
+          ...selection,
+        });
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
+  Future<void> _reviewShoppingBasket() async {
+    try {
+      final review = await widget.client.getShoppingBasketReview(
+        widget.activityId,
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('레시피 변경과 장보기 비교'),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (review['status'] == 'stale')
+                    const Text('레시피 계산 결과가 오래됐어요. 새 활동에서 다시 계산한 뒤 비교할 수 있어요.'),
+                  if (review['status'] == 'unlinked')
+                    const Text('현재 연결된 레시피가 없어요.'),
+                  if (review['status'] == 'current')
+                    const Text('선택 당시와 현재 재료 부족량이 같아요.'),
+                  for (final item in _objects(review['items']))
+                    Text(
+                      '• ${_text(_object(item['current'])['name'], _text(_object(item['previous'])['name']))} · '
+                      '${switch (_text(item['change'])) {
+                        'added' => '새 재료',
+                        'removed' => '제외된 재료',
+                        'changed' => '부족량 변경',
+                        _ => '변경 없음',
+                      }}',
+                    ),
+                  if (review['status'] == 'changed')
+                    const Text('기존 상품 선택과 구매 기록은 선택 당시 이력으로 남습니다.'),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('닫기'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    }
+  }
+
   Widget _shoppingResult(KernelJson task) {
     final result = _objects(
       _board?['results'],
@@ -3435,6 +3535,35 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     final value = _object(result?['value']);
     if (task['id'] == 'confirm_choice') {
       final choice = _object(value['choice']);
+      if (choice['kind'] == 'basket') {
+        final lines = _objects(choice['lines']);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('확정한 재료별 장보기 목록'),
+            for (final line in lines) ...[
+              Text(
+                '${_text(line['name'])} · ${_objects(line['choices']).length}개 상품',
+              ),
+              for (final item in _objects(line['choices']))
+                Text('• ${_text(item['title'])} ${item['quantity']}개'),
+              Text(switch (_text(_object(line['coverage'])['status'])) {
+                'sufficient' => '선택 당시 부족량 충족',
+                'insufficient' => '선택 당시 부족량 일부 미충족',
+                'unselected' => '상품을 고르지 않음',
+                'incompatible_unit' => '단위를 비교할 수 없음',
+                _ => '충족 여부 미확인',
+              }),
+            ],
+            TextButton.icon(
+              key: const Key('shopping-review-basket'),
+              onPressed: _reviewShoppingBasket,
+              icon: const Icon(Icons.compare_arrows),
+              label: const Text('현재 레시피와 비교'),
+            ),
+          ],
+        );
+      }
       final package = _object(choice['packageQuantity']);
       final coverage = _object(choice['recipeCoverage']);
       final selected = _object(coverage['selectedQuantity']);
@@ -3470,6 +3599,39 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       'not_purchased': '구매하지 않았어요',
       'unknown': '아직 몰라요',
     };
+    if (value['basketId'] != null) {
+      final titles = <String, String>{
+        for (final boardResult in _objects(_board?['results']))
+          if (boardResult['taskId'] == 'confirm_choice')
+            for (final line in _objects(
+              _object(_object(boardResult['value'])['choice'])['lines'],
+            ))
+              for (final choice in _objects(line['choices']))
+                _text(choice['id']): _text(choice['title']),
+      };
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('상품별 실제 구매 기록'),
+          for (final item in _objects(value['outcomes']))
+            Text(
+              '• ${titles[_text(item['choiceId'])] ?? _text(item['choiceId'])} · '
+              '${statuses[_text(item['status'])] ?? '상태 미확인'}',
+            ),
+          if (_objects(
+            value['outcomes'],
+          ).any((item) => item['status'] == 'purchased'))
+            TextButton.icon(
+              key: const Key('shopping-record-inventory'),
+              onPressed: _busy || _needsRefresh
+                  ? null
+                  : () => _recordShoppingInventory(value),
+              icon: const Icon(Icons.inventory_2_outlined),
+              label: const Text('실제 보유량 확인·기록'),
+            ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

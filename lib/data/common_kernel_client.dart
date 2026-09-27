@@ -528,7 +528,12 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> getEditableCaptureFields(String importId);
   Future<KernelJson> correctImportedField(KernelJson request);
   Future<KernelJson> confirmShoppingChoice(KernelJson request);
+  Future<KernelJson> confirmShoppingBasket(KernelJson request);
   Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request);
+  Future<KernelJson> recordShoppingBasketOutcomes(KernelJson request);
+  Future<KernelJson> recordShoppingInventory(KernelJson request);
+  Future<KernelJson> listShoppingInventory(String activityId);
+  Future<KernelJson> getShoppingBasketReview(String activityId);
   Future<KernelJson> createHealthScenario(KernelJson request);
   Future<KernelJson> confirmHealthExercises(KernelJson request);
   Future<KernelJson> recordHealthExerciseOutcomes(KernelJson request);
@@ -813,8 +818,32 @@ final class HttpCommonKernelClient implements CommonKernelClient {
       _request('POST', '/v1/kernel/shopping/confirm-choice', request);
 
   @override
+  Future<KernelJson> confirmShoppingBasket(KernelJson request) =>
+      _request('POST', '/v1/kernel/shopping/confirm-basket', request);
+
+  @override
   Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request) =>
       _request('POST', '/v1/kernel/shopping/purchase-outcome', request);
+
+  @override
+  Future<KernelJson> recordShoppingBasketOutcomes(KernelJson request) =>
+      _request('POST', '/v1/kernel/shopping/basket-outcomes', request);
+
+  @override
+  Future<KernelJson> recordShoppingInventory(KernelJson request) =>
+      _request('POST', '/v1/kernel/shopping/inventory-observations', request);
+
+  @override
+  Future<KernelJson> listShoppingInventory(String activityId) => _request(
+    'GET',
+    '/v1/kernel/shopping/inventory-observations/${Uri.encodeComponent(activityId)}',
+  );
+
+  @override
+  Future<KernelJson> getShoppingBasketReview(String activityId) => _request(
+    'GET',
+    '/v1/kernel/shopping/basket-review/${Uri.encodeComponent(activityId)}',
+  );
 
   @override
   Future<KernelJson> createHealthScenario(KernelJson request) =>

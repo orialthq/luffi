@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "2.1",
+  "model": "gpt-5.6-luna",
+  "domain": "food",
+  "contentKind": "commerce_product",
+  "tags": [
+    {
+      "value": "식재료",
+      "facet": "kind",
+      "source": "ai",
+      "confidence": 0.98,
+      "evidenceIds": [
+        "e1",
+        "e2"
+      ],
+      "quotes": [
+        "“식품”",
+        "“달걀 10개입”"
+      ],
+      "citations": []
+    }
+  ],
+  "completeness": "complete",
+  "title": {
+    "value": "달걀 10개입",
+    "status": "observed",
+    "confidence": 1,
+    "evidenceIds": [
+      "e2"
+    ]
+  },
+  "place": {
+    "name": null,
+    "address": null,
+    "searchArea": null,
+    "category": null,
+    "confidence": 0,
+    "evidenceIds": []
+  },
+  "summary": "달걀 10개입 상품이 4,900원에 판매되고 있다.",
+  "evidence": [
+    {
+      "id": "e1",
+      "text": "식품",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e2",
+      "text": "달걀 10개입",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e3",
+      "text": "4,900원",
+      "region": "product_panel",
+      "confidence": 1
+    },
+    {
+      "id": "e4",
+      "text": "수량 10개",
+      "region": "product_panel",
+      "confidence": 1
+    }
+  ],
+  "ingredientGroups": [],
+  "steps": [],
+  "facts": [
+    {
+      "label": "상품 분류",
+      "value": "식품",
+      "confidence": 1,
+      "evidenceIds": [
+        "e1"
+      ]
+    },
+    {
+      "label": "상품명",
+      "value": "달걀 10개입",
+      "confidence": 1,
+      "evidenceIds": [
+        "e2"
+      ]
+    },
+    {
+      "label": "가격",
+      "value": "4,900원",
+      "confidence": 1,
+      "evidenceIds": [
+        "e3"
+      ]
+    },
+    {
+      "label": "수량",
+      "value": "10개",
+      "confidence": 1,
+      "evidenceIds": [
+        "e4"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "warnings": []
+}

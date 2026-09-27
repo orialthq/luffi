@@ -19,6 +19,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCommonKernelService, createCommonKernelState } from "./common/kernel_service.js";
 import { createJsonStateStore } from "./storage/json_state_store.js";
+import { createPostgresStateStore } from "./storage/postgres_state_store.js";
+import pg from "pg";
 
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) {
@@ -87,14 +89,25 @@ if (!apiKey) {
   if (kernelToken && (kernelToken.length < 32 || !process.env.LUFFI_KERNEL_OWNER_ID)) {
     throw new Error("LUFFI_KERNEL_TOKEN(32자 이상)과 LUFFI_KERNEL_OWNER_ID를 함께 설정하세요.");
   }
-  const kernelService = kernelToken
-    ? createCommonKernelService({
-        ownerId: process.env.LUFFI_KERNEL_OWNER_ID,
-        store: createJsonStateStore({
+  const databaseUrl = process.env.LUFFI_KERNEL_DATABASE_URL;
+  const kernelPool = kernelToken && databaseUrl
+    ? new pg.Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 })
+    : null;
+  const kernelStore = kernelToken
+    ? kernelPool
+      ? createPostgresStateStore({ pool: kernelPool,
+          initialState: createCommonKernelState })
+      : createJsonStateStore({
           filePath: process.env.LUFFI_KERNEL_STATE_PATH ??
             join(dirname(fileURLToPath(import.meta.url)), "../data/common-kernel.json"),
           initialState: createCommonKernelState,
-        }),
+        })
+    : null;
+  if (kernelPool) await kernelStore.ready();
+  const kernelService = kernelToken
+    ? createCommonKernelService({
+        ownerId: process.env.LUFFI_KERNEL_OWNER_ID,
+        store: kernelStore,
       })
     : null;
 
@@ -130,11 +143,13 @@ if (!apiKey) {
   const shutdown = () => {
     server.close(async () => {
       await batchAnalysisService.close();
+      if (kernelPool) await kernelPool.end();
       process.exit(0);
     });
   };
   server.once("error", async () => {
     await batchAnalysisService.close();
+    if (kernelPool) await kernelPool.end();
     process.exitCode = 1;
   });
   process.once("SIGINT", shutdown);

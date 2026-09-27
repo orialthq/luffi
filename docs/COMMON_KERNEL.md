@@ -14,7 +14,8 @@
 | 가져오기 | `server/src/ingestion` | 사용자가 확인한 기존 분석 결과를 출처가 있는 지식 명령으로 변환 |
 | 통합 | `server/src/common/kernel_service.js` | 인증된 소유자, 발급 맥락, 변경안, 영향 알림, 도메인 실행을 하나의 저장 트랜잭션으로 조합 |
 | 저장 | `server/src/storage/json_state_store.js` | 개발 환경에서 단일 프로세스 원자적 파일 저장 |
-| SQL 초안 | `server/migrations/001_common_kernel.sql` | PostgreSQL 테이블·FK·인덱스 DDL. 현재 런타임 저장 어댑터와 데이터 이전기는 없음 |
+| SQL 초안 | `server/migrations/001_common_kernel.sql` | 향후 그래프별 관계형 테이블·FK·인덱스 DDL |
+| PostgreSQL 실행 브리지 | `server/migrations/002_kernel_state.sql`, `server/src/storage/postgres_state_store.js` | 현재 커널 전체 상태를 JSONB 한 행으로 트랜잭션 저장. 관계형 그래프 분해는 아직 아님 |
 | 앱 | `lib/data/common_kernel_client.dart`, `lib/features/boards` | 개발 빌드에서만 새 Activity 보드를 읽고 안정적인 Task ID로 명령 전송 |
 
 지식 그래프는 단순한 `entity → 관계 → entity` 테이블이 아니다. 의미 관계의 기준은 근거와 시간·범위가 있는 Assertion이고, 현재 관계/값은 정책 버전이 있는 Resolution에서 파생한다. SourceVersion→Evidence와 Activity→Task 같은 구조적 연결은 별도 기준 데이터다. 원본의 비슷한 이름은 동일 대상의 후보만 만들며, `mention.create → identity.propose → identity.accept`를 거쳐야 연결된다. 철회 시 언급과 원본 근거가 남아 이전 결정을 되돌릴 수 있다.
@@ -213,7 +214,7 @@ Flutter 개발용 보드는 서버에 동기화된 확인 캡처에서 맛집 �
 
 개발용 JSON 저장소는 **같은 store 인스턴스** 안에서 읽기와 쓰기를 직렬화한다. 전체 상태를 복제하고 임시 파일 쓰기·파일 동기화·rename·디렉터리 동기화를 거쳐 저장한다. 변경 함수가 실패하면 이전 상태를 유지하고, 손상된 파일을 빈 데이터로 자동 초기화하지 않는다. rename 후 마지막 동기화에서 오류가 나면 파일이 이미 바뀌었을 수 있으므로 재시도에는 같은 명령 ID를 사용한다. 서로 다른 프로세스나 store 인스턴스가 같은 파일을 쓰는 것은 잠그지 못하며 전체 파일 복제·저장이 데이터 양에 비례한다.
 
-PostgreSQL DDL은 런타임 저장소가 아니다. 현재 DB 연결, migration 실행기, JSON→SQL 이전기, SQL 기반 트랜잭션 어댑터가 없고 서버는 JSON 파일을 사용한다. DDL만 실행해도 서버 저장 방식이 바뀌지 않는다. 기존 JSON 상태에 새 필드를 채우는 버전별 자동 업그레이드도 없으며 현재 상태 계약에 맞지 않으면 `KERNEL_SCHEMA_MISMATCH`로 거부한다. 여러 서버 인스턴스, 운영 권한 관리, 원본 자산 업로드, 실제 알림 전달, 외부 예약·구매 실행은 아직 적용되지 않았다.
+PostgreSQL 브리지는 `LUFFI_KERNEL_DATABASE_URL`을 설정했을 때만 활성화된다. 기본은 기존 JSON 파일이다. `npm run migrate:kernel-state`로 `002_kernel_state.sql`을 적용하고, 서버를 멈춘 뒤 기존 상태를 옮길 때 `npm run import:kernel-json -- /절대경로/common-kernel.json`을 **한 번만** 실행한다. 대상 행이 있으면 덮어쓰지 않고 거절한다. PostgreSQL 어댑터는 `SELECT FOR UPDATE`로 쓰기 사이의 행을 잠그고 상태와 명령 영수증을 한 트랜잭션에서 저장한다. 이 단계는 전체 상태를 JSONB 한 행에 저장하므로 대규모 그래프 검색 인덱스나 `001_common_kernel.sql`의 개별 테이블 활용을 제공하지 않는다. 실제 PostgreSQL 서버 실행 검증은 별도 환경이 필요하다. 기존 JSON 상태에 새 필드를 채우는 버전별 자동 업그레이드도 없으며 현재 상태 계약에 맞지 않으면 `KERNEL_SCHEMA_MISMATCH`로 거부한다. 운영 권한 관리, 원본 자산 업로드, 실제 알림 전달, 외부 예약·구매 실행은 아직 적용되지 않았다.
 
 기존 Flutter 계획함은 로컬 Plan/metadata 기반으로 계속 동작한다. 새 Activity Board와 양방향 동기화하지 않는다. 이전에는 안정적인 기존 Task ID 매핑, 원본 접근 가능 여부, 알림 중복 제거를 먼저 해결해야 하므로 현재 자동 이전을 수행하지 않는다. AI 모델을 호출해 목적에서 PlanDraft를 생성하는 부분도 아직 새 커널에 연결되지 않았다. 현재는 생성된 후보를 안전하게 검증·적용할 수 있는 경로까지 구현했다.
 

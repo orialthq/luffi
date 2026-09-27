@@ -129,6 +129,8 @@ export const recipePack = {
     relation("recipe.has_requirement", ["recipe.recipe"], ["recipe.ingredient_requirement"]),
     relation("recipe.requires_ingredient", ["recipe.ingredient_requirement"], ["recipe.ingredient"], "one"),
     relation("recipe.observes_inventory", ["recipe.inventory_observation"], ["recipe.ingredient"], "one"),
+    valueRelation("recipe.observed_inventory", ["recipe.inventory_observation"],
+      "recipe.inventory_observation", "explicit_user_observation"),
   ],
   slots: [
     slot("recipe.source", "recipe.recipe", "Versioned recipe used as the calculation input"),

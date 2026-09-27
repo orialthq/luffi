@@ -2,12 +2,23 @@ import { array, enumeration, fail, integer, object, ref, text } from "./schema.j
 import { artifact, capability, relation, valueRelation } from "./shared.js";
 import { convertQuantity, QUANTITY_UNITS, roundedQuantity } from "./quantity_conversion.js";
 
-const choice = object({ id: text, productId: text, offerId: text,
+const singleChoice = object({ id: text, productId: text, offerId: text,
   importId: text, title: text, quantity: ref("shopping.quantity_count"),
   displayedPriceText: text, ingredientMatch: ref("shopping.ingredient_match_result"),
   packageQuantity: ref("shopping.package_quantity"),
+  packageEvidenceIds: ref("core.evidence_ids"),
   recipeCoverage: ref("shopping.recipe_coverage") },
   ["id", "productId", "offerId", "importId", "title", "quantity", "displayedPriceText"]);
+
+const basketLine = object({ ingredientId: text, name: text,
+  requiredQuantity: ref("core.quantity"),
+  availableQuantity: ref("core.quantity"),
+  missingQuantity: ref("core.quantity"),
+  choices: array(ref("shopping.single_choice")),
+  coverage: ref("shopping.recipe_coverage") },
+  ["ingredientId", "name", "missingQuantity", "choices", "coverage"]);
+const basketChoice = object({ id: text, kind: enumeration("basket"),
+  sourceResultId: text, lines: array(ref("shopping.basket_line"), 1) });
 
 export function calculateShoppingCoverage(missingQuantity, packageQuantity, count) {
   if (packageQuantity.status === "unknown") return { status: "unknown_package" };
@@ -24,8 +35,53 @@ export function calculateShoppingCoverage(missingQuantity, packageQuantity, coun
     neededQuantity: missingQuantity, selectedQuantity, shortfall };
 }
 
+export function calculateBasketCoverage(missingQuantity, choices) {
+  if (choices.length === 0) return { status: "unselected" };
+  if (choices.some((choice) => choice.packageQuantity.status === "unknown")) {
+    return { status: "unknown_package" };
+  }
+  if (missingQuantity.status !== "known") return { status: "unknown_need" };
+  const amounts = choices.map((choice) => convertQuantity(
+    choice.packageQuantity.amount * choice.quantity,
+    choice.packageQuantity.unit, missingQuantity.unit));
+  if (amounts.includes(null)) return { status: "incompatible_unit" };
+  const amount = roundedQuantity(amounts.reduce((sum, value) => sum + value, 0));
+  const shortfall = roundedQuantity(Math.max(0, missingQuantity.amount - amount));
+  return { status: shortfall === 0 ? "sufficient" : "insufficient",
+    neededQuantity: missingQuantity,
+    selectedQuantity: { status: "known", amount, unit: missingQuantity.unit },
+    shortfall: { status: "known", amount: shortfall, unit: missingQuantity.unit } };
+}
+
+export function compareBasketWithRecipeNeeds(basket, needs) {
+  const previous = new Map(basket.lines.map((line) => [line.ingredientId, line]));
+  const current = new Map(needs.items.map((item) => [item.ingredientId, item]));
+  return [...new Set([...previous.keys(), ...current.keys()])].map((ingredientId) => {
+    const before = previous.get(ingredientId);
+    const after = current.get(ingredientId);
+    const change = !before ? "added" : !after ? "removed" :
+      before.name !== after.name ||
+        JSON.stringify(before.requiredQuantity) !== JSON.stringify(after.requiredQuantity) ||
+        JSON.stringify(before.availableQuantity) !== JSON.stringify(after.availableQuantity) ||
+        JSON.stringify(before.missingQuantity) !== JSON.stringify(after.missingQuantity)
+        ? "changed" : "unchanged";
+    return { ingredientId, change,
+      ...(before ? { previous: { name: before.name,
+        ...(before.requiredQuantity ? { requiredQuantity: before.requiredQuantity } : {}),
+        ...(before.availableQuantity ? { availableQuantity: before.availableQuantity } : {}),
+        missingQuantity: before.missingQuantity,
+        coverage: before.coverage, choiceCount: before.choices.length } } : {}),
+      ...(after ? { current: { name: after.name,
+        requiredQuantity: after.requiredQuantity,
+        availableQuantity: after.availableQuantity,
+        missingQuantity: after.missingQuantity,
+        coverage: calculateBasketCoverage(after.missingQuantity,
+          before?.choices ?? []) } } : {}) };
+  });
+}
+
 export const shoppingPack = {
-  id: "shopping", version: 1, compatibleKernelVersions: [1],
+  id: "shopping", version: 2, compatibleKernelVersions: [1],
   entityTypes: ["core.product", "shopping.offer_snapshot", "shopping.purchase_choice",
     "shopping.purchase_report"],
   types: [
@@ -35,7 +91,9 @@ export const shoppingPack = {
       validate: (value) => { if (value > 1_000_000_000) fail("amount exceeds limit"); } },
     { id: "shopping.offer_snapshot", schema: object({ id: text,
       title: text, displayedPriceText: text }) },
-    { id: "shopping.purchase_choice", schema: choice },
+    { id: "shopping.single_choice", schema: singleChoice },
+    { id: "shopping.basket_line", schema: basketLine },
+    { id: "shopping.purchase_choice", schema: { oneOf: [singleChoice, basketChoice] } },
     { id: "shopping.package_quantity", schema: { oneOf: [
       object({ status: enumeration("unknown") }),
       object({ status: enumeration("known"), amount: { type: "number",
@@ -49,6 +107,7 @@ export const shoppingPack = {
       object({ status: enumeration("unknown_package") }),
       object({ status: enumeration("unknown_need") }),
       object({ status: enumeration("incompatible_unit") }),
+      object({ status: enumeration("unselected") }),
       object({ status: enumeration("sufficient", "insufficient"),
         neededQuantity: ref("core.quantity"), selectedQuantity: ref("core.quantity"),
         shortfall: ref("core.quantity") }),
@@ -91,6 +150,12 @@ export const shoppingPack = {
           fail("actual paid amount is required only for a reported purchase");
         }
       } },
+    { id: "shopping.basket_outcome", schema: object({ basketId: text,
+      outcomes: array(ref("shopping.purchase_outcome"), 1),
+      reportedAt: ref("core.timestamp") }) },
+    { id: "shopping.outcome_result", schema: { oneOf: [
+      ref("shopping.purchase_outcome"), ref("shopping.basket_outcome"),
+    ] } },
   ],
   relations: [
     relation("shopping.offer_of_product", ["shopping.offer_snapshot"],
@@ -101,6 +166,8 @@ export const shoppingPack = {
       ["core.product"], "one"),
     relation("shopping.choice_offer", ["shopping.purchase_choice"],
       ["shopping.offer_snapshot"], "one"),
+    relation("shopping.basket_contains_choice", ["shopping.purchase_choice"],
+      ["shopping.purchase_choice"]),
     relation("shopping.choice_matches_ingredient", ["shopping.purchase_choice"],
       ["recipe.ingredient"], "one"),
     valueRelation("shopping.quantity", ["shopping.purchase_choice"],
@@ -109,6 +176,8 @@ export const shoppingPack = {
       "shopping.package_quantity", "explicit_user_confirmation"),
     relation("shopping.purchase_for_choice", ["shopping.purchase_report"],
       ["shopping.purchase_choice"], "one"),
+    relation("shopping.inventory_after_choice", ["recipe.inventory_observation"],
+      ["shopping.purchase_choice"]),
     valueRelation("shopping.actual_paid_krw", ["shopping.purchase_report"],
       "shopping.krw_amount", "explicit_user_observation"),
   ],
@@ -116,7 +185,7 @@ export const shoppingPack = {
     capability({ id: "shopping.confirm_choice", taskKind: "decision",
       inputType: "shopping.confirm_input", outputType: "shopping.confirm_result" }),
     capability({ id: "shopping.record_purchase_outcome", taskKind: "observe",
-      inputType: "shopping.outcome_input", outputType: "shopping.purchase_outcome" }),
+      inputType: "shopping.outcome_input", outputType: "shopping.outcome_result" }),
   ],
   slots: [],
   artifacts: [artifact("shopping.purchase_choice", "shopping.purchase_choice",

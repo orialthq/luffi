@@ -426,7 +426,10 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/shopping/scenarios", "createShoppingScenario"],
     ["/shopping/recipe-needs/proposals", "proposeRecipeShoppingPlan"],
     ["/shopping/confirm-choice", "confirmShoppingChoice"],
+    ["/shopping/confirm-basket", "confirmShoppingBasket"],
     ["/shopping/purchase-outcome", "recordShoppingPurchaseOutcome"],
+    ["/shopping/basket-outcomes", "recordShoppingBasketOutcomes"],
+    ["/shopping/inventory-observations", "recordShoppingInventory"],
     ["/health/scenarios", "createHealthScenario"],
     ["/health/confirm-exercises", "confirmHealthExercises"],
     ["/health/exercise-outcomes", "recordHealthExerciseOutcomes"],
@@ -473,6 +476,10 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "getEditableRecipe", activityId });
   kernelService.getRecipeShoppingPlanReview = async (shoppingActivityId, connectionId) =>
     ({ method: "getRecipeShoppingPlanReview", shoppingActivityId, connectionId });
+  kernelService.listShoppingInventory = async (activityId) =>
+    ({ method: "listShoppingInventory", activityId });
+  kernelService.getShoppingBasketReview = async (activityId) =>
+    ({ method: "getShoppingBasketReview", activityId });
   const token = "t".repeat(32);
   const baseUrl = await startServer(t, { kernelService, kernelToken: token });
   const authorization = { Authorization: `Bearer ${token}` };
@@ -510,6 +517,10 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/shopping/recipe-needs/review/shop%20one/link%20one",
       { method: "getRecipeShoppingPlanReview", shoppingActivityId: "shop one",
         connectionId: "link one" }],
+    ["/shopping/inventory-observations/shop%20one",
+      { method: "listShoppingInventory", activityId: "shop one" }],
+    ["/shopping/basket-review/shop%20one",
+      { method: "getShoppingBasketReview", activityId: "shop one" }],
     ["/boards/meal%20plan", { method: "getBoard", activityId: "meal plan" }],
     ["/boards/meal%20plan/review", { method: "getBoardReview",
       activityId: "meal plan" }],

@@ -486,6 +486,642 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
   );
 }
 
+final class _BasketSelection {
+  _BasketSelection(this.ingredientId);
+  final String ingredientId;
+  String? importId;
+  int quantity = 1;
+  bool? packageKnown;
+  final amount = TextEditingController();
+  String unit = 'g';
+  List<String> packageEvidenceIds = [];
+  void dispose() => amount.dispose();
+}
+
+final class ShoppingBasketDialog extends StatefulWidget {
+  const ShoppingBasketDialog({
+    required this.candidates,
+    required this.recipeItems,
+    this.onOpenImport,
+    super.key,
+  });
+  final List<KernelJson> candidates;
+  final List<KernelJson> recipeItems;
+  final void Function(String importId)? onOpenImport;
+  @override
+  State<ShoppingBasketDialog> createState() => _ShoppingBasketDialogState();
+}
+
+final class _ShoppingBasketDialogState extends State<ShoppingBasketDialog> {
+  final _selections = <_BasketSelection>[];
+  String? _error;
+
+  @override
+  void dispose() {
+    for (final selection in _selections) {
+      selection.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('재료별 장보기 상품'),
+    content: SizedBox(
+      width: 560,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '재료마다 상품을 선택하세요. 한 재료에 여러 상품을 담을 수 있고, 고르지 않은 재료는 그대로 남습니다.',
+            ),
+            const SizedBox(height: 8),
+            for (final item in widget.recipeItems) ...[
+              const Divider(),
+              Text(
+                _text(item['name']),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              Text('부족량: ${_quantityLabel(item['missingQuantity'])}'),
+              for (final selection in _selections.where(
+                (entry) => entry.ingredientId == item['ingredientId'],
+              ))
+                Card(
+                  key: ObjectKey(selection),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                key: ValueKey(
+                                  'basket-product-${item['ingredientId']}-${_selections.indexOf(selection)}',
+                                ),
+                                initialValue: selection.importId,
+                                decoration: const InputDecoration(
+                                  labelText: '상품 후보',
+                                ),
+                                items: widget.candidates
+                                    .map(
+                                      (candidate) => DropdownMenuItem(
+                                        value: _text(candidate['importId']),
+                                        child: Text(
+                                          '${_text(candidate['title'])} · ${_text(candidate['displayedPriceText'])}',
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) => setState(() {
+                                  selection.importId = value;
+                                  selection.packageKnown = null;
+                                  selection.amount.clear();
+                                  selection.packageEvidenceIds = [];
+                                }),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '상품 빼기',
+                              onPressed: () => setState(() {
+                                _selections.remove(selection);
+                                selection.dispose();
+                              }),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
+                        ),
+                        if (selection.importId != null &&
+                            widget.onOpenImport != null)
+                          TextButton.icon(
+                            onPressed: () =>
+                                widget.onOpenImport!(selection.importId!),
+                            icon: const Icon(Icons.image_outlined),
+                            label: const Text('원본 캡처 보기'),
+                          ),
+                        if (selection.importId != null)
+                          for (final suggestion in _packageSuggestions(
+                            widget.candidates.firstWhere(
+                              (candidate) =>
+                                  candidate['importId'] == selection.importId,
+                            ),
+                          ))
+                            ActionChip(
+                              label: Text('화면에 표시된 ${suggestion.label} 사용'),
+                              onPressed: () => setState(() {
+                                selection.packageKnown = true;
+                                selection.amount.text = suggestion.amount;
+                                selection.unit = suggestion.unit;
+                                selection.packageEvidenceIds =
+                                    suggestion.evidenceIds;
+                              }),
+                            ),
+                        Row(
+                          children: [
+                            const Text('상품 개수'),
+                            IconButton(
+                              onPressed: selection.quantity <= 1
+                                  ? null
+                                  : () => setState(() => selection.quantity--),
+                              icon: const Icon(Icons.remove),
+                            ),
+                            Text('${selection.quantity}'),
+                            IconButton(
+                              onPressed: selection.quantity >= 20
+                                  ? null
+                                  : () => setState(() => selection.quantity++),
+                              icon: const Icon(Icons.add),
+                            ),
+                          ],
+                        ),
+                        const Text('상품 한 개의 포장 분량을 직접 확인해 주세요.'),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            ChoiceChip(
+                              label: const Text('분량 확인'),
+                              selected: selection.packageKnown == true,
+                              onSelected: (_) =>
+                                  setState(() => selection.packageKnown = true),
+                            ),
+                            ChoiceChip(
+                              label: const Text('확인 못함'),
+                              selected: selection.packageKnown == false,
+                              onSelected: (_) => setState(
+                                () => selection.packageKnown = false,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (selection.packageKnown == true)
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  key: ValueKey(
+                                    'basket-amount-${item['ingredientId']}-${_selections.indexOf(selection)}',
+                                  ),
+                                  controller: selection.amount,
+                                  onChanged: (_) =>
+                                      selection.packageEvidenceIds = [],
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: '한 개의 분량',
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              DropdownButton<String>(
+                                value: selection.unit,
+                                items:
+                                    const [
+                                          'g',
+                                          'kg',
+                                          'ml',
+                                          'l',
+                                          'count',
+                                          'tsp',
+                                          'tbsp',
+                                        ]
+                                        .map(
+                                          (unit) => DropdownMenuItem(
+                                            value: unit,
+                                            child: Text(unit),
+                                          ),
+                                        )
+                                        .toList(),
+                                onChanged: (value) => setState(() {
+                                  selection.unit = value!;
+                                  selection.packageEvidenceIds = [];
+                                }),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              TextButton.icon(
+                key: ValueKey('basket-add-${item['ingredientId']}'),
+                onPressed: _selections.length >= 8
+                    ? null
+                    : () => setState(
+                        () => _selections.add(
+                          _BasketSelection(_text(item['ingredientId'])),
+                        ),
+                      ),
+                icon: const Icon(Icons.add),
+                label: const Text('이 재료에 상품 추가'),
+              ),
+            ],
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(
+        key: const Key('basket-confirm'),
+        onPressed: () {
+          if (_selections.isEmpty) {
+            setState(() => _error = '상품을 하나 이상 선택해 주세요.');
+            return;
+          }
+          final selections = <KernelJson>[];
+          final used = <String>{};
+          for (final selection in _selections) {
+            if (selection.importId == null || !used.add(selection.importId!)) {
+              setState(() => _error = '상품 후보를 고르고 중복 선택을 없애 주세요.');
+              return;
+            }
+            if (selection.packageKnown == null) {
+              setState(() => _error = '각 상품의 포장 분량을 확인하거나 미확인을 선택해 주세요.');
+              return;
+            }
+            final amount = double.tryParse(selection.amount.text.trim());
+            if (selection.packageKnown == true &&
+                (amount == null ||
+                    !amount.isFinite ||
+                    amount <= 0 ||
+                    amount > 1000000000)) {
+              setState(() => _error = '상품 한 개의 분량을 0보다 큰 숫자로 입력해 주세요.');
+              return;
+            }
+            selections.add({
+              'ingredientId': selection.ingredientId,
+              'selectedImportId': selection.importId,
+              'quantity': selection.quantity,
+              'packageQuantity': selection.packageKnown == true
+                  ? {
+                      'status': 'known',
+                      'amount': amount,
+                      'unit': selection.unit,
+                    }
+                  : {'status': 'unknown'},
+              if (selection.packageKnown == true &&
+                  selection.packageEvidenceIds.isNotEmpty)
+                'packageEvidenceIds': selection.packageEvidenceIds,
+            });
+          }
+          Navigator.pop(context, <String, Object?>{'selections': selections});
+        },
+        child: const Text('장보기 목록 확정'),
+      ),
+    ],
+  );
+}
+
+String _quantityLabel(Object? raw) {
+  if (raw is! Map) return '미확인';
+  if (raw['status'] == 'known') return '${raw['amount']}${raw['unit']}';
+  if (raw['status'] == 'as_needed') return '필요한 만큼';
+  return '미확인';
+}
+
+List<({String label, String amount, String unit, List<String> evidenceIds})>
+_packageSuggestions(KernelJson candidate) {
+  final suggestions =
+      <
+        ({String label, String amount, String unit, List<String> evidenceIds})
+      >[];
+  final sources = <(String, List<String>)>[
+    (
+      _text(candidate['title']),
+      (candidate['titleEvidenceIds'] as List? ?? [])
+          .whereType<String>()
+          .toList(),
+    ),
+    for (final detail in (candidate['details'] as List? ?? []).whereType<Map>())
+      (
+        _text(detail['value']),
+        (detail['evidenceIds'] as List? ?? []).whereType<String>().toList(),
+      ),
+  ];
+  final pattern = RegExp(
+    r'(\d+(?:\.\d+)?)\s*(kg|ml|g|l|개)(?:입)?(?![A-Za-z가-힣])',
+    caseSensitive: false,
+  );
+  for (final (text, evidenceIds) in sources) {
+    for (final match in pattern.allMatches(text)) {
+      final unit = match.group(2)!.toLowerCase();
+      suggestions.add((
+        label: match.group(0)!,
+        amount: match.group(1)!,
+        unit: unit == '개' ? 'count' : unit,
+        evidenceIds: evidenceIds,
+      ));
+    }
+  }
+  return suggestions;
+}
+
+final class ShoppingBasketOutcomeDialog extends StatefulWidget {
+  const ShoppingBasketOutcomeDialog({required this.basket, super.key});
+  final KernelJson basket;
+  @override
+  State<ShoppingBasketOutcomeDialog> createState() =>
+      _ShoppingBasketOutcomeDialogState();
+}
+
+final class _ShoppingBasketOutcomeDialogState
+    extends State<ShoppingBasketOutcomeDialog> {
+  final _statuses = <String, String>{};
+  final _paid = <String, TextEditingController>{};
+  String? _error;
+
+  @override
+  void dispose() {
+    for (final controller in _paid.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = (widget.basket['lines'] as List? ?? [])
+        .whereType<Map>()
+        .toList();
+    final choices = lines
+        .expand((line) => (line['choices'] as List? ?? []).whereType<Map>())
+        .toList();
+    for (final choice in choices) {
+      _paid.putIfAbsent(_text(choice['id']), TextEditingController.new);
+    }
+    return AlertDialog(
+      title: const Text('상품별 실제 구매 결과'),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('상품 선택은 구매가 아닙니다. 각 상품의 결과를 직접 기록해 주세요.'),
+              for (final choice in choices) ...[
+                const Divider(),
+                Text('${_text(choice['title'])} · ${choice['quantity']}개'),
+                for (final (status, label) in [
+                  ('purchased', '구매했어요'),
+                  ('not_purchased', '구매하지 않았어요'),
+                  ('unknown', '아직 몰라요'),
+                ])
+                  ListTile(
+                    key: ValueKey('basket-outcome-${choice['id']}-$status'),
+                    title: Text(label),
+                    leading: Icon(
+                      _statuses[_text(choice['id'])] == status
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                    ),
+                    onTap: () =>
+                        setState(() => _statuses[_text(choice['id'])] = status),
+                  ),
+                if (_statuses[_text(choice['id'])] == 'purchased')
+                  TextField(
+                    controller: _paid[_text(choice['id'])],
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: '실제 지불액 (원)'),
+                  ),
+              ],
+              if (_error != null)
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('basket-outcomes-confirm'),
+          onPressed: () {
+            final outcomes = <KernelJson>[];
+            for (final choice in choices) {
+              final id = _text(choice['id']);
+              final status = _statuses[id];
+              if (status == null) {
+                setState(() => _error = '모든 상품의 구매 결과를 선택해 주세요.');
+                return;
+              }
+              final amount = int.tryParse(_paid[id]!.text.trim());
+              if (status == 'purchased' &&
+                  (amount == null || amount < 1 || amount > 1000000000)) {
+                setState(() => _error = '구매한 상품의 실제 지불액을 입력해 주세요.');
+                return;
+              }
+              outcomes.add({
+                'choiceId': id,
+                'status': status,
+                if (status == 'purchased') 'actualPaidKrw': amount,
+              });
+            }
+            Navigator.pop(context, <String, Object?>{'outcomes': outcomes});
+          },
+          child: const Text('구매 결과 기록'),
+        ),
+      ],
+    );
+  }
+}
+
+final class ShoppingInventoryDialog extends StatefulWidget {
+  const ShoppingInventoryDialog({
+    required this.basket,
+    required this.outcomes,
+    required this.previous,
+    super.key,
+  });
+  final KernelJson basket;
+  final List<KernelJson> outcomes;
+  final List<KernelJson> previous;
+  @override
+  State<ShoppingInventoryDialog> createState() =>
+      _ShoppingInventoryDialogState();
+}
+
+final class _ShoppingInventoryDialogState
+    extends State<ShoppingInventoryDialog> {
+  final _selected = <String>{};
+  final _amounts = <String, TextEditingController>{};
+  final _units = <String, String>{};
+  String? _error;
+
+  @override
+  void dispose() {
+    for (final controller in _amounts.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bought = widget.outcomes
+        .where((item) => item['status'] == 'purchased')
+        .map((item) => _text(item['choiceId']))
+        .toSet();
+    final lines = (widget.basket['lines'] as List? ?? [])
+        .whereType<Map>()
+        .where(
+          (line) => (line['choices'] as List? ?? []).whereType<Map>().any(
+            (choice) => bought.contains(_text(choice['id'])),
+          ),
+        )
+        .toList();
+    for (final line in lines) {
+      final id = _text(line['ingredientId']);
+      _amounts.putIfAbsent(id, TextEditingController.new);
+      _units.putIfAbsent(id, () {
+        final missing = line['missingQuantity'];
+        return missing is Map && missing['status'] == 'known'
+            ? _text(missing['unit'])
+            : 'g';
+      });
+    }
+    return AlertDialog(
+      title: const Text('실제 보유량 확인'),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '구매 기록만으로 재고를 늘리지 않습니다. 지금 실제로 보유한 총량을 확인한 재료만 기록하세요.',
+              ),
+              for (final old in widget.previous)
+                Text(
+                  '이전 확인: ${_text(old['ingredientId'])} · ${_quantityLabel(old['quantity'])}',
+                ),
+              for (final line in lines) ...[
+                CheckboxListTile(
+                  title: Text(_text(line['name'])),
+                  value: _selected.contains(_text(line['ingredientId'])),
+                  onChanged: (value) => setState(() {
+                    if (value == true) {
+                      _selected.add(_text(line['ingredientId']));
+                    } else {
+                      _selected.remove(_text(line['ingredientId']));
+                    }
+                  }),
+                ),
+                if (_selected.contains(_text(line['ingredientId'])))
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: ValueKey(
+                            'inventory-amount-${line['ingredientId']}',
+                          ),
+                          controller: _amounts[_text(line['ingredientId'])],
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: '현재 실제 보유 총량',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      DropdownButton<String>(
+                        value: _units[_text(line['ingredientId'])],
+                        items:
+                            const ['g', 'kg', 'ml', 'l', 'count', 'tsp', 'tbsp']
+                                .map(
+                                  (unit) => DropdownMenuItem(
+                                    value: unit,
+                                    child: Text(unit),
+                                  ),
+                                )
+                                .toList(),
+                        onChanged: (value) => setState(
+                          () => _units[_text(line['ingredientId'])] = value!,
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+              if (_error != null)
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('inventory-confirm'),
+          onPressed: () {
+            if (_selected.isEmpty) {
+              setState(() => _error = '확인한 재료를 선택해 주세요.');
+              return;
+            }
+            final observations = <KernelJson>[];
+            for (final line in lines.where(
+              (line) => _selected.contains(_text(line['ingredientId'])),
+            )) {
+              final id = _text(line['ingredientId']);
+              final amount = double.tryParse(_amounts[id]!.text.trim());
+              if (amount == null ||
+                  !amount.isFinite ||
+                  amount < 0 ||
+                  amount > 1000000000) {
+                setState(() => _error = '실제로 보유한 양을 0 이상 숫자로 입력해 주세요.');
+                return;
+              }
+              final supporting = (line['choices'] as List? ?? [])
+                  .whereType<Map>()
+                  .map((choice) => _text(choice['id']))
+                  .where(bought.contains)
+                  .toList();
+              observations.add({
+                'ingredientId': id,
+                'quantity': {
+                  'status': 'known',
+                  'amount': amount,
+                  'unit': _units[id],
+                },
+                'supportingChoiceIds': supporting,
+              });
+            }
+            Navigator.pop(context, <String, Object?>{
+              'observations': observations,
+            });
+          },
+          child: const Text('보유량 기록'),
+        ),
+      ],
+    );
+  }
+}
+
 final class ShoppingOutcomeDialog extends StatefulWidget {
   const ShoppingOutcomeDialog({required this.choice, super.key});
   final KernelJson choice;

@@ -232,4 +232,163 @@ void main() {
       expect(result, {'status': 'purchased', 'actualPaidKrw': 13500});
     },
   );
+
+  testWidgets('basket purchase reports each selected product separately', (
+    tester,
+  ) async {
+    Map<String, Object?>? result;
+    await openDialog(
+      tester,
+      const ShoppingBasketOutcomeDialog(
+        basket: {
+          'lines': [
+            {
+              'choices': [
+                {'id': 'tofu-choice', 'title': '두부', 'quantity': 2},
+              ],
+            },
+            {
+              'choices': [
+                {'id': 'egg-choice', 'title': '달걀', 'quantity': 1},
+              ],
+            },
+          ],
+        },
+      ),
+      (value) => result = value,
+    );
+    await tester.tap(
+      find.byKey(const Key('basket-outcome-tofu-choice-purchased')),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '4800');
+    await tester.ensureVisible(
+      find.byKey(const Key('basket-outcome-egg-choice-not_purchased')),
+    );
+    await tester.tap(
+      find.byKey(const Key('basket-outcome-egg-choice-not_purchased')),
+    );
+    await tester.ensureVisible(
+      find.byKey(const Key('basket-outcomes-confirm')),
+    );
+    await tester.tap(find.byKey(const Key('basket-outcomes-confirm')));
+    await tester.pumpAndSettle();
+    expect(result?['outcomes'], [
+      {'choiceId': 'tofu-choice', 'status': 'purchased', 'actualPaidKrw': 4800},
+      {'choiceId': 'egg-choice', 'status': 'not_purchased'},
+    ]);
+  });
+
+  testWidgets('egg pack text offers an evidence-backed count candidate', (
+    tester,
+  ) async {
+    Map<String, Object?>? result;
+    await openDialog(
+      tester,
+      const ShoppingBasketDialog(
+        candidates: [
+          {
+            'importId': 'egg',
+            'title': '달걀 10개입',
+            'displayedPriceText': '4,900원',
+            'titleEvidenceIds': ['egg-title'],
+            'details': <Object?>[],
+          },
+        ],
+        recipeItems: [
+          {
+            'ingredientId': 'egg',
+            'name': '달걀',
+            'missingQuantity': {
+              'status': 'known',
+              'amount': 4,
+              'unit': 'count',
+            },
+          },
+        ],
+      ),
+      (value) => result = value,
+    );
+    await tester.tap(find.byKey(const Key('basket-add-egg')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('basket-product-egg-0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('달걀 10개입 · 4,900원').last);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('화면에 표시된 10개입 사용'));
+    await tester.tap(find.text('화면에 표시된 10개입 사용'));
+    await tester.ensureVisible(find.byKey(const Key('basket-confirm')));
+    await tester.tap(find.byKey(const Key('basket-confirm')));
+    await tester.pumpAndSettle();
+    expect((result?['selections'] as List).single, {
+      'ingredientId': 'egg',
+      'selectedImportId': 'egg',
+      'quantity': 1,
+      'packageQuantity': {'status': 'known', 'amount': 10.0, 'unit': 'count'},
+      'packageEvidenceIds': ['egg-title'],
+    });
+  });
+
+  testWidgets('inventory requires an observed total after purchase', (
+    tester,
+  ) async {
+    Map<String, Object?>? result;
+    await openDialog(
+      tester,
+      const ShoppingInventoryDialog(
+        basket: {
+          'lines': [
+            {
+              'ingredientId': 'tofu',
+              'name': '두부',
+              'missingQuantity': {
+                'status': 'known',
+                'amount': 500,
+                'unit': 'g',
+              },
+              'choices': [
+                {'id': 'tofu-choice'},
+              ],
+            },
+            {
+              'ingredientId': 'egg',
+              'name': '달걀',
+              'missingQuantity': {
+                'status': 'known',
+                'amount': 4,
+                'unit': 'count',
+              },
+              'choices': [
+                {'id': 'egg-choice'},
+              ],
+            },
+          ],
+        },
+        outcomes: [
+          {'choiceId': 'tofu-choice', 'status': 'purchased'},
+          {'choiceId': 'egg-choice', 'status': 'not_purchased'},
+        ],
+        previous: [],
+      ),
+      (value) => result = value,
+    );
+    await tester.tap(find.byKey(const Key('inventory-confirm')));
+    await tester.pumpAndSettle();
+    expect(result, isNull);
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('inventory-amount-tofu')),
+      '700',
+    );
+    await tester.tap(find.byKey(const Key('inventory-confirm')));
+    await tester.pumpAndSettle();
+    expect(result?['observations'], [
+      {
+        'ingredientId': 'tofu',
+        'quantity': {'status': 'known', 'amount': 700.0, 'unit': 'g'},
+        'supportingChoiceIds': ['tofu-choice'],
+      },
+    ]);
+  });
 }

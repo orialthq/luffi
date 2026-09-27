@@ -1,2 +1,3 @@
 # Contains private screenshots, analysis results, and durable Batch request IDs.
 /.local/
+/node_modules/

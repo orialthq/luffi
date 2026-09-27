@@ -14,6 +14,7 @@ import { createJsonStateStore } from "../src/storage/json_state_store.js";
 const captures = {
   recipe: ["variation_recipe_tofu_egg_as_needed", "4ee2de07ece75c1a7b467430701efbc19e1775584738147bd427ab0129baf47e", "synthetic.recipe"],
   tofu: ["variation_shopping_tofu_ingredient", "7a87bb882a641e8a344ce59750f7b34d9c4842d659f6ed91898b856d8602c442", "synthetic.shopping"],
+  egg: ["variation_shopping_egg_pack", "db39f40c0062dacd52cbfa6c87c41302cdd668405d783368a8b6f67515c9db6f", "synthetic.shopping"],
   price: ["variation_shopping_old_current_price", "7c3da692d80c16dc3d838743ec3496608e7579738f38fda3b386843f64bf3633", "synthetic.shopping"],
   travel: ["travel_a_viewpoint", "07ddb947d3d725a1cd0737346f8a5817a7bd63e67301a88277cad4cbce483099", "synthetic.travel"],
   dining: ["variation_dining_jeju_noodles", "207ca5abbbfa507fade08f353f744d407be4f780266ca37f0b94329fe5a166d3", "synthetic.dining"],
@@ -151,6 +152,173 @@ test("recipe amount 'as needed' stays nonnumeric and an actual tofu offer links 
   assert.deepEqual((await service.listScenarioConnections("shopping-board")).connections, []);
   await assert.rejects(service.getBoard("recipe-board"), (error) => error.code === "NOT_FOUND");
   assert.equal((await service.getBoard("shopping-board")).id, "shopping-board");
+});
+
+test("image-backed recipe basket keeps unselected ingredients and reports purchases per product", async (t) => {
+  const { service, store } = await setup(t);
+  await importCapture(service, "recipe");
+  await importCapture(service, "tofu");
+  await importCapture(service, "egg");
+  const observedAt = "2026-09-27T09:00:00+09:00";
+  const inventory = [{ ingredientId: "tofu",
+    quantity: { status: "known", amount: 100, unit: "g" }, observedAt },
+  { ingredientId: "egg", quantity: { status: "known", amount: 0,
+    unit: "count" }, observedAt }];
+  const created = await service.createRecipeScenario({ commandId: "basket-recipe",
+    activityId: "basket-recipe-board", confirmed: true, importId: "recipe",
+    targetServings: 4, inventory: [],
+    recipe: { id: "basket-recipe", revision: 1, title: "두부 달걀 볶음",
+      baseServings: 2, ingredients: [
+        { id: "tofu", ingredientId: "tofu", name: "두부",
+          quantity: { status: "known", amount: 300, unit: "g" }, scaling: "linear" },
+        { id: "egg", ingredientId: "egg", name: "달걀",
+          quantity: { status: "known", amount: 2, unit: "count" }, scaling: "linear" },
+        { id: "salt", ingredientId: "salt", name: "소금",
+          quantity: { status: "as_needed" }, scaling: "fixed" },
+      ] } });
+  let recipeBoard = await approve(service, created, "approve-basket-recipe");
+  await service.runTask({ commandId: "basket-scale", activityId: recipeBoard.id,
+    taskId: "scale_servings", expectedRevision: recipeBoard.revision });
+  recipeBoard = await service.getBoard(recipeBoard.id);
+  await service.activityCommand({ commandId: "basket-stock", type: "task.recordResult",
+    activityId: recipeBoard.id, expectedRevision: recipeBoard.revision,
+    payload: { taskId: "check_inventory", value: inventory } });
+  recipeBoard = await service.getBoard(recipeBoard.id);
+  await service.activityCommand({ commandId: "basket-stock-done", type: "task.transition",
+    activityId: recipeBoard.id, expectedRevision: recipeBoard.revision,
+    payload: { taskId: "check_inventory", to: "completed" } });
+  recipeBoard = await service.getBoard(recipeBoard.id);
+  await service.runTask({ commandId: "basket-needs", activityId: recipeBoard.id,
+    taskId: "calculate_requirements", expectedRevision: recipeBoard.revision });
+  const shopping = await service.createShoppingScenario({ commandId: "basket-shopping",
+    activityId: "basket-shopping-board", confirmed: true, importIds: ["tofu", "egg"],
+    purpose: "볶음 재료 장보기" });
+  let shoppingBoard = await approve(service, shopping, "approve-basket-shopping");
+  recipeBoard = await service.getBoard(recipeBoard.id);
+  const link = await service.createScenarioConnection({ commandId: "basket-link",
+    fromActivityId: recipeBoard.id, toActivityId: shoppingBoard.id,
+    kind: "recipe_shopping", confirmed: true,
+    expectedFromRevision: recipeBoard.revision,
+    expectedToRevision: shoppingBoard.revision });
+  const review = await service.getRecipeShoppingPlanReview(shoppingBoard.id, link.id);
+  const proposal = await service.proposeRecipeShoppingPlan({ commandId: "basket-propose",
+    shoppingActivityId: shoppingBoard.id, connectionId: link.id,
+    expectedRevision: review.expectedRevision,
+    expectedSourceResultId: review.reference.sourceResultId, confirmed: true });
+  await service.acceptProposal({ proposalId: proposal.proposalId,
+    commandId: "approve-basket-needs" });
+  shoppingBoard = await service.getBoard(shoppingBoard.id);
+  await assert.rejects(service.confirmShoppingBasket({ commandId: "basket-forged",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    selections: [{ ingredientId: "not-a-recipe-ingredient", selectedImportId: "tofu",
+      quantity: 1, packageQuantity: { status: "known", amount: 300, unit: "g" } }] }),
+  (error) => error.code === "INVALID_BASKET_SELECTION");
+  await assert.rejects(service.confirmShoppingBasket({ commandId: "basket-forged-evidence",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    selections: [{ ingredientId: "tofu", selectedImportId: "tofu", quantity: 2,
+      packageQuantity: { status: "known", amount: 300, unit: "g" },
+      packageEvidenceIds: ["not-from-this-image"] }] }),
+  (error) => error.code === "INVALID_PACKAGE_EVIDENCE");
+  const titleEvidenceIds = shoppingBoard.tasks.find((item) =>
+    item.id === "confirm_choice").readiness.inputs.candidates.find((item) =>
+    item.importId === "tofu").titleEvidenceIds;
+  const eggEvidenceIds = shoppingBoard.tasks.find((item) =>
+    item.id === "confirm_choice").readiness.inputs.candidates.find((item) =>
+    item.importId === "egg").titleEvidenceIds;
+  const confirmed = await service.confirmShoppingBasket({ commandId: "confirm-basket",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    selections: [{ ingredientId: "tofu", selectedImportId: "tofu", quantity: 2,
+      packageQuantity: { status: "known", amount: 300, unit: "g" },
+      packageEvidenceIds: titleEvidenceIds },
+    { ingredientId: "egg", selectedImportId: "egg", quantity: 1,
+      packageQuantity: { status: "known", amount: 10, unit: "count" },
+      packageEvidenceIds: eggEvidenceIds }] });
+  assert.equal((await service.confirmShoppingBasket({ commandId: "confirm-basket",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    selections: [{ ingredientId: "tofu", selectedImportId: "tofu", quantity: 2,
+      packageQuantity: { status: "known", amount: 300, unit: "g" },
+      packageEvidenceIds: titleEvidenceIds },
+    { ingredientId: "egg", selectedImportId: "egg", quantity: 1,
+      packageQuantity: { status: "known", amount: 10, unit: "count" },
+      packageEvidenceIds: eggEvidenceIds }] })).replayed, true);
+  shoppingBoard = await service.getBoard(shoppingBoard.id);
+  const basket = shoppingBoard.results.find((item) =>
+    item.taskId === "confirm_choice").value.choice;
+  assert.equal(basket.id, confirmed.basketId);
+  assert.equal(basket.lines.length, 3);
+  assert.deepEqual(basket.lines.find((line) => line.ingredientId === "tofu").coverage,
+    { status: "sufficient", neededQuantity: { status: "known", amount: 500, unit: "g" },
+      selectedQuantity: { status: "known", amount: 600, unit: "g" },
+      shortfall: { status: "known", amount: 0, unit: "g" } });
+  assert.deepEqual(basket.lines.find((line) => line.ingredientId === "salt").coverage,
+    { status: "unselected" });
+  assert.equal(basket.lines.find((line) => line.ingredientId === "egg")
+    .coverage.status, "sufficient");
+  const choiceId = basket.lines.find((line) => line.ingredientId === "tofu").choices[0].id;
+  const eggChoiceId = basket.lines.find((line) => line.ingredientId === "egg").choices[0].id;
+  assert.equal(active(await store.snapshot(), "shopping.basket_contains_choice").length, 2);
+  assert.ok(active(await store.snapshot(), "shopping.package_quantity")[0]
+    .evidenceIds.some((id) => titleEvidenceIds.includes(id)));
+  assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice").length, 0);
+  await assert.rejects(service.recordShoppingBasketOutcomes({ commandId: "basket-missing-outcome",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    outcomes: [{ choiceId: "forged", status: "purchased", actualPaidKrw: 4800 }] }),
+  (error) => error.code === "INVALID_BASKET_OUTCOME");
+  await service.recordShoppingBasketOutcomes({ commandId: "basket-purchase",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    outcomes: [{ choiceId, status: "purchased", actualPaidKrw: 4800 },
+      { choiceId: eggChoiceId, status: "not_purchased" }] });
+  shoppingBoard = await service.getBoard(shoppingBoard.id);
+  await assert.rejects(service.recordShoppingInventory({ commandId: "forged-inventory",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    observations: [{ ingredientId: "egg", quantity: { status: "known",
+      amount: 4, unit: "count" }, supportingChoiceIds: [choiceId] }] }),
+  (error) => error.code === "INVALID_INVENTORY_OBSERVATION");
+  const stock = await service.recordShoppingInventory({ commandId: "observed-tofu",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    observations: [{ ingredientId: "tofu", quantity: { status: "known",
+      amount: 700, unit: "g" }, supportingChoiceIds: [choiceId] }] });
+  assert.equal((await service.recordShoppingInventory({ commandId: "observed-tofu",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    observations: [{ ingredientId: "tofu", quantity: { status: "known",
+      amount: 700, unit: "g" }, supportingChoiceIds: [choiceId] }] })).replayed, true);
+  assert.equal(stock.observations[0].quantity.amount, 700);
+  const state = await store.snapshot();
+  assert.equal(active(state, "shopping.purchase_for_choice").length, 1);
+  assert.equal(active(state, "shopping.purchase_for_choice")[0].objectEntityId, choiceId);
+  assert.equal(active(state, "recipe.observed_inventory").length, 1);
+  assert.equal(active(state, "shopping.inventory_after_choice").length, 1);
+  assert.equal((await service.listScenarioConnections(shoppingBoard.id)).connections[0]
+    .recipeNeeds.items.find((item) => item.ingredientId === "tofu")
+    .missingQuantity.amount, 500);
+  assert.equal((await service.getShoppingBasketReview(shoppingBoard.id)).status,
+    "current");
+  const editable = await service.getEditableRecipe(recipeBoard.id);
+  await service.correctRecipe({ commandId: "basket-recipe-correction",
+    activityId: recipeBoard.id, expectedAssertionId: editable.assertionId,
+    confirmed: true, recipe: { title: editable.recipe.title,
+      baseServings: editable.recipe.baseServings,
+      ingredients: editable.recipe.ingredients.map((item) => item.id === "tofu"
+        ? { ...item, quantity: { status: "known", amount: 350, unit: "g" } }
+        : item), steps: editable.recipe.steps ?? [] } });
+  assert.equal((await service.getShoppingBasketReview(shoppingBoard.id)).status,
+    "stale");
+  assert.deepEqual((await service.getBoard(shoppingBoard.id)).results.find((item) =>
+    item.taskId === "confirm_choice").value.choice, basket);
+  await service.recordShoppingInventory({ commandId: "observed-tofu-again",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    observations: [{ ingredientId: "tofu", quantity: { status: "known",
+      amount: 650, unit: "g" }, supportingChoiceIds: [choiceId] }] });
+  assert.equal((await service.listShoppingInventory(shoppingBoard.id))
+    .observations.length, 2);
+  await service.deleteReviewedCapture({ importId: "egg",
+    commandId: "delete-basket-egg-image" });
+  assert.equal(active(await store.snapshot(), "recipe.observed_inventory").length, 0);
+  await assert.rejects(service.recordShoppingInventory({ commandId: "observed-tofu",
+    activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
+    observations: [{ ingredientId: "tofu", quantity: { status: "known",
+      amount: 700, unit: "g" }, supportingChoiceIds: [choiceId] }] }),
+  (error) => error.code === "SCENARIO_DELETED");
 });
 
 test("a corrected image-backed recipe hides old shopping amounts until a successor recalculates", async (t) => {

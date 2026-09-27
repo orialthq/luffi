@@ -13,6 +13,12 @@
 2. `confirm_choice`에서 후보의 표시 가격과 옵션을 비교하고 원본 캡처를 열 수 있다. 사용자가 상품 하나와 수량 1~20개를 확정한다. 이 단계는 구매가 아니다.
 3. `record_purchase_outcome`에서 `purchased`, `not_purchased`, `unknown` 중 하나를 직접 보고한다. `purchased`에만 실제 지불액(원)을 입력한다. 실제 지불액은 화면 가격과 달라도 그대로 보존된다.
 
+레시피 필요량을 별도 검토·승인해 연결한 쇼핑 보드에서는 `confirm_choice`가 **재료별 장보기 묶음**도 받을 수 있다. 재료별로 후보 상품을 여러 개 선택하거나 비워 두고, 각 상품의 개수와 한 개의 포장 분량을 확인한다. 화면에서 `300g`처럼 읽힌 분량은 이미지 근거와 함께 입력 후보로 보여주지만 사용자가 선택해야 저장된다. 서버는 후보·재료·이미지 근거 ID를 다시 검증하고 재료별 선택 분량을 합산한다. `record_purchase_outcome`에서는 선택한 상품 **각각**의 구매 여부와 실제 지불액을 기록한다. 미구매 상품에는 구매 Assertion을 만들지 않는다.
+
+구매 후에는 별도의 `POST /v1/kernel/shopping/inventory-observations`로 사용자가 **지금 실제 보유한 총량**을 확인할 수 있다. 구매했다고 자동으로 재고를 올리거나 과거 레시피 계산 결과를 고치지 않는다. 관측은 `recipe.inventory_observation`과 사용자 보고 근거로 저장하고 구매한 선택과 연결한다. `GET /v1/kernel/shopping/inventory-observations/{activityId}`로 이력을 읽는다. 새 레시피 계산에는 사용자가 다시 확인해 입력해야 한다.
+
+`GET /v1/kernel/shopping/basket-review/{activityId}`는 확정된 묶음과 현재 연결된 레시피 필요량을 재료별로 비교한다. 최신 계산이 없으면 `stale`만 반환하고, 새 계산이 있으면 추가·제외·변경·동일을 표시한다. 과거 선택·구매 기록은 수정하지 않는다.
+
 ## 지식 그래프
 
 | 대상 | 관계 및 출처 | 의미 |
@@ -24,6 +30,8 @@
 | 사용자 선택 | `shopping.purchase_choice` → `shopping.choice_product`, `shopping.choice_offer`, `shopping.quantity` | 사용자 확인 Source/Evidence로 뒷받침하는 상품·수량 선택 |
 | 레시피 재료 대응 | `shopping.purchase_choice` → `shopping.choice_matches_ingredient` → `recipe.ingredient` | 레시피가 계획에 연결된 경우에만 사용자가 명시적으로 확인한 당시의 대응. 미확인이면 관계 없음 |
 | 상품 포장 분량 | `shopping.purchase_choice` → `shopping.package_quantity` | 대응 재료를 확인한 경우 사용자가 직접 확인한 상품 한 개의 분량. 제목에서 자동 추정하지 않음 |
+| 장보기 묶음 | `shopping.purchase_choice`(묶음) → `shopping.basket_contains_choice` → 개별 상품 선택 | 재료별 선택 상품, 비선택 재료, 선택 당시 충족 여부를 보존 |
+| 보유량 관측 | `recipe.inventory_observation` → `recipe.observes_inventory`, `recipe.observed_inventory`, `shopping.inventory_after_choice` | 구매와 분리한 사용자 확인 재고 총량. 이전 레시피 결과에 자동 반영하지 않음 |
 | 구매 보고 | `shopping.purchase_report` → `shopping.purchase_for_choice`, `shopping.actual_paid_krw` | `purchased` 보고 때만 생성. 영수증이나 결제 사업자 확인은 아님 |
 
 모든 관계는 활동 범위, 출처, 시점을 보존한다. 표시 가격은 캡처 시점의 근거이고, 실제 지불액은 별도 사용자 보고 근거다. 일반 작업 완료 명령으로 선택·구매 기록을 만들 수 없다. 서버는 소유자, revision, 승인된 후보, 준비 상태, 원본 근거, 그래프의 선택 관계를 검사한다. 동일한 명령 ID는 재전송해도 결과를 재생한다. 가격 확인과 보드 생성 명령 ID를 한 요청 묶음으로 앱에 저장해 네트워크 재시도 시 다시 사용한다. 확인 assertion이 정정되거나 철회되면 이전 가격으로 만든 계획은 stale 처리한다. 캡처나 파생 출처를 삭제하면 해당 활동과 파생 관계도 제거한다.

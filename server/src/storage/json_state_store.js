@@ -85,7 +85,7 @@ export function createJsonStateStore({ filePath, initialState, fsApi = fs }) {
   };
 }
 
-function assertSerializableState(state) {
+export function assertSerializableState(state) {
   if (!state || typeof state !== "object" || Array.isArray(state)) {
     throw new TypeError("state must be a JSON object");
   }

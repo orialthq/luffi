@@ -1023,11 +1023,50 @@ final class FakeKernelClient implements CommonKernelClient {
   }
 
   @override
+  Future<KernelJson> confirmShoppingBasket(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {
+      'activityId': request['activityId'],
+      'basketId': 'shopping-basket',
+      'revision': board['revision'],
+    };
+  }
+
+  @override
   Future<KernelJson> recordShoppingPurchaseOutcome(KernelJson request) async {
     commands.add(request);
     board['revision'] = (board['revision'] as int) + 1;
     return {'activityId': request['activityId'], 'revision': board['revision']};
   }
+
+  @override
+  Future<KernelJson> recordShoppingBasketOutcomes(KernelJson request) async {
+    commands.add(request);
+    board['revision'] = (board['revision'] as int) + 1;
+    return {'activityId': request['activityId'], 'revision': board['revision']};
+  }
+
+  @override
+  Future<KernelJson> recordShoppingInventory(KernelJson request) async {
+    commands.add(request);
+    return {
+      'activityId': request['activityId'],
+      'observations': request['observations'],
+    };
+  }
+
+  @override
+  Future<KernelJson> listShoppingInventory(String activityId) async => {
+    'activityId': activityId,
+    'observations': <Object?>[],
+  };
+
+  @override
+  Future<KernelJson> getShoppingBasketReview(String activityId) async => {
+    'status': 'current',
+    'items': <Object?>[],
+  };
 
   @override
   Future<KernelJson> createHealthScenario(KernelJson request) async {
@@ -3260,6 +3299,7 @@ void main() {
         'importId': 'tofu-product',
         'title': '두부 300g',
         'displayedPriceText': '2,400원',
+        'titleEvidenceIds': ['title-evidence'],
         'details': <Object?>[],
       };
       const linked = {
@@ -3329,26 +3369,24 @@ void main() {
       );
       await tester.tap(find.byKey(const Key('kernel-complete-confirm_choice')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('shopping-choice-tofu-product')));
-      await tester.tap(find.byKey(const Key('shopping-ingredient-tofu')));
+      await tester.tap(find.byKey(const Key('basket-add-tofu')));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.byKey(const Key('shopping-package-known')));
-      await tester.tap(find.byKey(const Key('shopping-package-known')));
+      await tester.tap(find.byKey(const Key('basket-product-tofu-0')));
       await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('shopping-package-amount')),
-        '300',
-      );
-      await tester.tap(find.byKey(const Key('shopping-choice-submit')));
+      await tester.tap(find.text('두부 300g · 2,400원').last);
       await tester.pumpAndSettle();
-      expect(client.commands.single['ingredientMatch'], {
-        'status': 'matched',
+      await tester.ensureVisible(find.text('화면에 표시된 300g 사용'));
+      await tester.tap(find.text('화면에 표시된 300g 사용'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('basket-confirm')));
+      await tester.tap(find.byKey(const Key('basket-confirm')));
+      await tester.pumpAndSettle();
+      expect((client.commands.single['selections'] as List).single, {
         'ingredientId': 'tofu',
-      });
-      expect(client.commands.single['packageQuantity'], {
-        'status': 'known',
-        'amount': 300.0,
-        'unit': 'g',
+        'selectedImportId': 'tofu-product',
+        'quantity': 1,
+        'packageQuantity': {'status': 'known', 'amount': 300.0, 'unit': 'g'},
+        'packageEvidenceIds': ['title-evidence'],
       });
       client.connections = [
         {

@@ -201,8 +201,10 @@ void main() {
       server.listen((request) async {
         paths.add(request.uri.path);
         bodies.add(
-          jsonDecode(await utf8.decoder.bind(request).join())
-              as Map<String, dynamic>,
+          request.method == 'GET'
+              ? <String, dynamic>{}
+              : jsonDecode(await utf8.decoder.bind(request).join())
+                    as Map<String, dynamic>,
         );
         request.response.headers.contentType = ContentType.json;
         request.response.write('{"activityId":"shop-1","revision":2}');
@@ -233,10 +235,35 @@ void main() {
         'status': 'purchased',
         'actualPaidKrw': 13500,
       });
+      await client.confirmShoppingBasket({
+        'commandId': 'basket',
+        'activityId': 'shop-1',
+        'expectedRevision': 4,
+        'selections': <Object?>[],
+      });
+      await client.recordShoppingBasketOutcomes({
+        'commandId': 'basket-outcomes',
+        'activityId': 'shop-1',
+        'expectedRevision': 5,
+        'outcomes': <Object?>[],
+      });
+      await client.recordShoppingInventory({
+        'commandId': 'stock',
+        'activityId': 'shop-1',
+        'expectedRevision': 6,
+        'observations': <Object?>[],
+      });
+      await client.listShoppingInventory('shop-1');
+      await client.getShoppingBasketReview('shop-1');
       expect(paths, [
         '/v1/kernel/shopping/scenarios',
         '/v1/kernel/shopping/confirm-choice',
         '/v1/kernel/shopping/purchase-outcome',
+        '/v1/kernel/shopping/confirm-basket',
+        '/v1/kernel/shopping/basket-outcomes',
+        '/v1/kernel/shopping/inventory-observations',
+        '/v1/kernel/shopping/inventory-observations/shop-1',
+        '/v1/kernel/shopping/basket-review/shop-1',
       ]);
       expect(bodies[1]['quantity'], 2);
       expect(bodies[2]['actualPaidKrw'], 13500);

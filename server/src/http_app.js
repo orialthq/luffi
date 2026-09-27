@@ -45,7 +45,10 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/shopping/scenarios": "createShoppingScenario",
   "/shopping/recipe-needs/proposals": "proposeRecipeShoppingPlan",
   "/shopping/confirm-choice": "confirmShoppingChoice",
+  "/shopping/confirm-basket": "confirmShoppingBasket",
   "/shopping/purchase-outcome": "recordShoppingPurchaseOutcome",
+  "/shopping/basket-outcomes": "recordShoppingBasketOutcomes",
+  "/shopping/inventory-observations": "recordShoppingInventory",
   "/health/scenarios": "createHealthScenario",
   "/health/confirm-exercises": "confirmHealthExercises",
   "/health/exercise-outcomes": "recordHealthExerciseOutcomes",
@@ -69,7 +72,8 @@ const KERNEL_POST_ROUTES = Object.freeze({
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
   "getEditableCaptureFields", "getEditableRecipe", "getRecipeShoppingPlanReview",
-  "getRecipeShoppingTransferReview"];
+  "getRecipeShoppingTransferReview", "listShoppingInventory",
+  "getShoppingBasketReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
 export function createHttpServer({
@@ -208,6 +212,26 @@ export function createHttpServer({
         }
         const recipeShoppingReviewMatch =
           /^\/shopping\/recipe-needs\/review\/([^/]+)\/([^/]+)$/.exec(route);
+        const shoppingInventoryMatch = /^\/shopping\/inventory-observations\/([^/]+)$/.exec(route);
+        if (shoppingInventoryMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(shoppingInventoryMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200,
+            await kernelService.listShoppingInventory(activityId));
+        }
+        const shoppingBasketReviewMatch = /^\/shopping\/basket-review\/([^/]+)$/.exec(route);
+        if (shoppingBasketReviewMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(shoppingBasketReviewMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200,
+            await kernelService.getShoppingBasketReview(activityId));
+        }
         if (recipeShoppingReviewMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");
           let shoppingActivityId;
