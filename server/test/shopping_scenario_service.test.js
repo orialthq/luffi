@@ -110,6 +110,11 @@ test("shopping rejects task bypasses, out-of-plan choices, and unsupported purch
       activityId: "shop-1", expectedRevision: board.revision, selectedImportId, quantity }),
     (error) => ["INVALID_REQUEST", "INVALID_PLAN"].includes(error.code));
   }
+  await assert.rejects(service.confirmShoppingChoice({ commandId: "forge-ingredient-match",
+    activityId: "shop-1", expectedRevision: board.revision,
+    selectedImportId: "a_fabric_box", quantity: 1,
+    ingredientMatch: { status: "matched", ingredientId: "tofu" } }),
+  (error) => error.code === "INVALID_INGREDIENT_MATCH");
   await service.confirmShoppingChoice({ commandId: "choose-shopping",
     activityId: "shop-1", expectedRevision: board.revision,
     selectedImportId: "a_fabric_box", quantity: 1 });

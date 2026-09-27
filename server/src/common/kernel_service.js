@@ -6084,7 +6084,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId",
-          "expectedRevision", "selectedImportId", "quantity"].includes(key)) ||
+          "expectedRevision", "selectedImportId", "quantity",
+          "ingredientMatch"].includes(key)) ||
           !Number.isSafeInteger(input.expectedRevision) ||
           input.expectedRevision < 0 || !Number.isSafeInteger(input.quantity) ||
           input.quantity < 1 || input.quantity > 20) {
@@ -6096,7 +6097,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         const selectedImportId = safeId(input.selectedImportId, "selectedImportId");
         const requestHash = requestFingerprint({ activityId,
           expectedRevision: input.expectedRevision, selectedImportId,
-          quantity: input.quantity });
+          quantity: input.quantity, ingredientMatch: input.ingredientMatch });
         return await store.transact((state) => {
           assertState(state);
           state.shoppingCommandReceipts ??= {};
@@ -6131,6 +6132,48 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "연결된 레시피 필요량이 바뀌었어요. 쇼핑 계획을 다시 검토해 주세요.",
               { httpStatus: 409 });
           }
+          let ingredientMatch = null;
+          let matchContext = null;
+          if (ready.linkedRecipe) {
+            const decision = input.ingredientMatch;
+            if (!decision || typeof decision !== "object" || Array.isArray(decision) ||
+                !["matched", "unverified"].includes(decision.status) ||
+                Object.keys(decision).some((key) => !["status", "ingredientId"].includes(key)) ||
+                (decision.status === "unverified" && Object.hasOwn(decision, "ingredientId")) ||
+                (decision.status === "matched" &&
+                  (typeof decision.ingredientId !== "string" || !decision.ingredientId.trim()))) {
+              throw new AppError("INGREDIENT_MATCH_REQUIRED",
+                "선택한 상품이 어느 레시피 재료인지 확인하거나 미확인을 선택해 주세요.",
+                { httpStatus: 400 });
+            }
+            const connection = state.scenarioConnections[ready.linkedRecipe.connectionId];
+            const needs = recipeShoppingNeeds(state, connection);
+            if (needs?.status !== "ready" ||
+                needs.sourceResultId !== ready.linkedRecipe.sourceResultId) {
+              throw new AppError("RECIPE_NEEDS_STALE",
+                "레시피 계산 결과가 바뀌었어요. 다시 확인해 주세요.",
+                { httpStatus: 409 });
+            }
+            if (decision.status === "matched") {
+              const item = needs.items.find((entry) =>
+                entry.ingredientId === decision.ingredientId);
+              const graph = editableRecipeGraph(state, ready.linkedRecipe.sourceActivityId);
+              const line = [...graph.ingredientLines.values()].find((entry) =>
+                entry.value.typedValue?.value?.ingredientId === decision.ingredientId);
+              if (!item || !line?.requires?.objectEntityId) {
+                throw new AppError("INVALID_INGREDIENT_MATCH",
+                  "현재 레시피에 있는 재료만 선택할 수 있어요.", { httpStatus: 422 });
+              }
+              ingredientMatch = { status: "matched", ingredientId: item.ingredientId,
+                sourceResultId: needs.sourceResultId };
+              matchContext = { item, line };
+            } else {
+              ingredientMatch = { status: "unverified" };
+            }
+          } else if (input.ingredientMatch !== undefined) {
+            throw new AppError("INVALID_INGREDIENT_MATCH",
+              "레시피가 연결되지 않은 쇼핑 활동이에요.", { httpStatus: 422 });
+          }
           const trusted = shoppingCandidates(state, scenario.importIds).candidates;
           if (ready.purpose !== scenario.purpose ||
               requestFingerprint(ready.candidates) !== requestFingerprint(trusted) ||
@@ -6155,6 +6198,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             item.id === state.importReceipts[selectedImportId].sourceVersionId)?.capturedAt ?? confirmedAt;
           const sourceId = `${stem}:confirmation-source`;
           const versionId = `${stem}:confirmation-version`;
+          const confirmationContent = { selectedImportId, quantity: input.quantity,
+            ...(ingredientMatch ? { ingredientMatch } : {}) };
           const beforeSequence = state.knowledge.sequence;
           const applyKnowledge = (role, type, payload) => {
             if (type === "assertion.add") validateAssertionRelation(state, payload);
@@ -6166,9 +6211,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             provenance: { scenario: "shopping", activityId,
               importedSourceId: state.importReceipts[selectedImportId].sourceId } });
           applyKnowledge("version", "source.version.add", { id: versionId,
-            sourceId, contentHash: fingerprint({ selectedImportId,
-              quantity: input.quantity }),
-            content: { selectedImportId, quantity: input.quantity },
+            sourceId, contentHash: fingerprint(confirmationContent),
+            content: confirmationContent,
             capturedAt: confirmedAt });
           const confirmationEvidenceId = `${stem}:confirmation-evidence`;
           applyKnowledge("confirmation-evidence", "evidence.add", {
@@ -6218,10 +6262,25 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           assertion("quantity", choiceId, "shopping.quantity",
             [confirmationEvidenceId], null,
             { type: "shopping.quantity_count", value: input.quantity });
+          if (matchContext) {
+            const matchEvidenceId = `${stem}:ingredient-match-evidence`;
+            applyKnowledge("ingredient-match-evidence", "evidence.add", {
+              id: matchEvidenceId, sourceVersionId: versionId,
+              quote: `${candidate.title}을(를) ${matchContext.item.name} 재료로 확인`,
+              locator: { kind: "user_confirmation",
+                jsonPointer: "/ingredientMatch/ingredientId" } });
+            assertion("choice-matches-ingredient", choiceId,
+              "shopping.choice_matches_ingredient", [...new Set([
+                matchEvidenceId, ...candidate.titleEvidenceIds,
+                ...matchContext.line.value.evidenceIds,
+                ...matchContext.line.requires.evidenceIds,
+              ])], matchContext.line.requires.objectEntityId);
+          }
           const choice = { id: choiceId, productId, offerId,
             importId: selectedImportId, title: candidate.title,
             quantity: input.quantity,
-            displayedPriceText: candidate.displayedPriceText };
+            displayedPriceText: candidate.displayedPriceText,
+            ...(ingredientMatch ? { ingredientMatch } : {}) };
           registry.validate("shopping.purchase_choice", choice);
           recordAffectedConsumers(state, beforeSequence);
           const applied = applyActivityCommand(state.activities, { ownerId,

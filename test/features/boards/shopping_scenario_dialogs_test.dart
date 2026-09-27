@@ -155,6 +155,42 @@ void main() {
     expect(result, {'selectedImportId': 'a', 'quantity': 2});
   });
 
+  testWidgets('linked recipe choice requires an explicit ingredient decision', (
+    tester,
+  ) async {
+    Map<String, Object?>? result;
+    await openDialog(
+      tester,
+      const ShoppingChoiceDialog(
+        candidates: [
+          {
+            'importId': 'tofu-product',
+            'title': '두부 300g',
+            'displayedPriceText': '2,400원',
+            'details': <Object?>[],
+          },
+        ],
+        recipeItems: [
+          {'ingredientId': 'tofu', 'name': '두부'},
+        ],
+      ),
+      (value) => result = value,
+    );
+    await tester.tap(find.byKey(const Key('shopping-choice-tofu-product')));
+    await tester.tap(find.byKey(const Key('shopping-choice-submit')));
+    await tester.pumpAndSettle();
+    expect(result, isNull);
+    expect(find.text('해당 재료를 확인하거나 미확인을 선택해 주세요.'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('shopping-ingredient-tofu')));
+    await tester.tap(find.byKey(const Key('shopping-choice-submit')));
+    await tester.pumpAndSettle();
+    expect(result, {
+      'selectedImportId': 'tofu-product',
+      'quantity': 1,
+      'ingredientMatch': {'status': 'matched', 'ingredientId': 'tofu'},
+    });
+  });
+
   testWidgets(
     'purchase requires actual paid amount only for purchased status',
     (tester) async {

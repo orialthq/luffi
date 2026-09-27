@@ -217,10 +217,12 @@ final class _ShoppingScenarioDialogState extends State<ShoppingScenarioDialog> {
 final class ShoppingChoiceDialog extends StatefulWidget {
   const ShoppingChoiceDialog({
     required this.candidates,
+    this.recipeItems,
     this.onOpenImport,
     super.key,
   });
   final List<KernelJson> candidates;
+  final List<KernelJson>? recipeItems;
   final void Function(String importId)? onOpenImport;
   @override
   State<ShoppingChoiceDialog> createState() => _ShoppingChoiceDialogState();
@@ -229,6 +231,8 @@ final class ShoppingChoiceDialog extends StatefulWidget {
 final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
   String? _selectedId;
   int _quantity = 1;
+  bool _ingredientDecisionMade = false;
+  String? _selectedIngredientId;
   String? _error;
 
   @override
@@ -310,6 +314,38 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
                 ),
               ],
             ),
+            if (widget.recipeItems != null) ...[
+              const SizedBox(height: 12),
+              const Text('이 상품이 레시피의 어느 재료에 해당하나요? 상품 수량은 자동 계산하지 않아요.'),
+              for (final item in widget.recipeItems!)
+                ListTile(
+                  key: ValueKey('shopping-ingredient-${item['ingredientId']}'),
+                  title: Text(_text(item['name'])),
+                  leading: Icon(
+                    _ingredientDecisionMade &&
+                            _selectedIngredientId == item['ingredientId']
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  onTap: () => setState(() {
+                    _ingredientDecisionMade = true;
+                    _selectedIngredientId = _text(item['ingredientId']);
+                  }),
+                ),
+              ListTile(
+                key: const Key('shopping-ingredient-unverified'),
+                title: const Text('어느 재료인지 확인하지 않음'),
+                leading: Icon(
+                  _ingredientDecisionMade && _selectedIngredientId == null
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                onTap: () => setState(() {
+                  _ingredientDecisionMade = true;
+                  _selectedIngredientId = null;
+                }),
+              ),
+            ],
             if (_error != null)
               Text(
                 _error!,
@@ -331,9 +367,20 @@ final class _ShoppingChoiceDialogState extends State<ShoppingChoiceDialog> {
             setState(() => _error = '상품 하나를 선택해 주세요.');
             return;
           }
+          if (widget.recipeItems != null && !_ingredientDecisionMade) {
+            setState(() => _error = '해당 재료를 확인하거나 미확인을 선택해 주세요.');
+            return;
+          }
           Navigator.pop(context, <String, Object?>{
             'selectedImportId': _selectedId,
             'quantity': _quantity,
+            if (widget.recipeItems != null)
+              'ingredientMatch': _selectedIngredientId == null
+                  ? {'status': 'unverified'}
+                  : {
+                      'status': 'matched',
+                      'ingredientId': _selectedIngredientId,
+                    },
           });
         },
         child: const Text('선택 확정'),

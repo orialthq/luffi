@@ -3250,6 +3250,107 @@ void main() {
   });
 
   testWidgets(
+    'linked shopping choice reads current recipe and sends explicit match',
+    (tester) async {
+      final client = FakeKernelClient();
+      client.contract['capabilities'] = [
+        {'id': 'shopping.confirm_choice', 'actor': 'user', 'effect': 'none'},
+      ];
+      const candidate = {
+        'importId': 'tofu-product',
+        'title': '두부 300g',
+        'displayedPriceText': '2,400원',
+        'details': <Object?>[],
+      };
+      const linked = {
+        'connectionId': 'recipe-link',
+        'sourceActivityId': 'recipe-1',
+        'sourceResultId': 'needs-1',
+        'recipeId': 'tofu-recipe',
+        'recipeRevision': 1,
+      };
+      client.board = {
+        'id': 'activity-1',
+        'title': '재료 쇼핑',
+        'goal': {'description': '두부 고르기'},
+        'revision': 7,
+        'lifecycle': 'active',
+        'scenario': 'shopping',
+        'nextActions': ['confirm_choice'],
+        'tasks': [
+          {
+            'id': 'confirm_choice',
+            'title': '상품과 수량 선택',
+            'revision': 1,
+            'capabilityId': 'shopping.confirm_choice',
+            'executionStatus': 'not_started',
+            'inputBindings': {
+              'purpose': '두부 고르기',
+              'candidates': [candidate],
+              'linkedRecipe': linked,
+            },
+            'readiness': {
+              'status': 'ready',
+              'reasons': <Object?>[],
+              'inputs': {
+                'purpose': '두부 고르기',
+                'candidates': [candidate],
+                'linkedRecipe': linked,
+              },
+            },
+          },
+        ],
+        'pendingChanges': <Object?>[],
+        'pendingProposals': <Object?>[],
+        'results': <Object?>[],
+        'artifacts': <Object?>[],
+      };
+      client.connections = [
+        {
+          'id': 'recipe-link',
+          'kind': 'recipe_shopping',
+          'direction': 'to',
+          'otherActivityId': 'recipe-1',
+          'otherTitle': '두부 레시피',
+          'otherReadyTaskCount': 0,
+          'recipeNeeds': {
+            'status': 'ready',
+            'sourceResultId': 'needs-1',
+            'targetServings': 4,
+            'items': [
+              {'ingredientId': 'tofu', 'name': '두부'},
+            ],
+          },
+        },
+      ];
+      await _pump(tester, client);
+      await tester.ensureVisible(
+        find.byKey(const Key('kernel-complete-confirm_choice')),
+      );
+      await tester.tap(find.byKey(const Key('kernel-complete-confirm_choice')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('shopping-choice-tofu-product')));
+      await tester.tap(find.byKey(const Key('shopping-ingredient-tofu')));
+      await tester.tap(find.byKey(const Key('shopping-choice-submit')));
+      await tester.pumpAndSettle();
+      expect(client.commands.single['ingredientMatch'], {
+        'status': 'matched',
+        'ingredientId': 'tofu',
+      });
+      client.connections = [
+        {...client.connections.single, 'recipeNeeds': {'status': 'stale'}},
+      ];
+      await tester.ensureVisible(
+        find.byKey(const Key('kernel-complete-confirm_choice')),
+      );
+      await tester.tap(find.byKey(const Key('kernel-complete-confirm_choice')));
+      await tester.pumpAndSettle();
+      expect(client.commands, hasLength(1));
+      expect(find.textContaining('레시피 계산 결과가 바뀌었어요'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'shopping successor explains that stale recipe needs new approval',
     (tester) async {
       final client = FakeKernelClient();

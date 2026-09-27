@@ -361,9 +361,36 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
     item.id === "confirm_choice").inputBindings.linkedRecipe.connectionId,
   secondLink.id);
   const readyShopping = await service.getBoard("linked-shopping");
+  await assert.rejects(service.confirmShoppingChoice({ commandId: "match-missing",
+    activityId: "linked-shopping", expectedRevision: readyShopping.revision,
+    selectedImportId: "tofu", quantity: 1 }),
+  (error) => error.code === "INGREDIENT_MATCH_REQUIRED");
+  await assert.rejects(service.confirmShoppingChoice({ commandId: "match-forged",
+    activityId: "linked-shopping", expectedRevision: readyShopping.revision,
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "matched", ingredientId: "not-in-recipe" } }),
+  (error) => error.code === "INVALID_INGREDIENT_MATCH");
   await service.confirmShoppingChoice({ commandId: "choose-reviewed-tofu",
     activityId: "linked-shopping", expectedRevision: readyShopping.revision,
-    selectedImportId: "tofu", quantity: 1 });
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "matched", ingredientId: "tofu" } });
+  assert.equal((await service.confirmShoppingChoice({ commandId: "choose-reviewed-tofu",
+    activityId: "linked-shopping", expectedRevision: readyShopping.revision,
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "matched", ingredientId: "tofu" } })).replayed, true);
+  await assert.rejects(service.confirmShoppingChoice({ commandId: "choose-reviewed-tofu",
+    activityId: "linked-shopping", expectedRevision: readyShopping.revision,
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "unverified" } }),
+  (error) => error.code === "COMMAND_CONFLICT");
+  const matchedState = await store.snapshot();
+  const matchRelation = active(matchedState, "shopping.choice_matches_ingredient");
+  assert.equal(matchRelation.length, 1);
+  assert.equal(matchedState.knowledge.entities.find((item) =>
+    item.id === matchRelation[0].subjectId)?.type, "shopping.purchase_choice");
+  assert.equal(matchedState.knowledge.entities.find((item) =>
+    item.id === matchRelation[0].objectEntityId)?.type, "recipe.ingredient");
+  assert.ok(matchRelation[0].evidenceIds.length >= 3);
   assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice").length, 0);
   await assert.rejects(service.getRecipeShoppingPlanReview("linked-shopping", secondLink.id),
     (error) => error.code === "STARTED_TASK_PROTECTED");
@@ -431,12 +458,17 @@ test("a corrected image-backed recipe hides old shopping amounts until a success
   await service.confirmShoppingChoice({ commandId: "choose-new-shopping-tofu",
     activityId: continuedShopping.activityId,
     expectedRevision: newShoppingReady.revision,
-    selectedImportId: "tofu", quantity: 1 });
+    selectedImportId: "tofu", quantity: 1,
+    ingredientMatch: { status: "unverified" } });
+  assert.equal((await service.getBoard(continuedShopping.activityId)).results.find((item) =>
+    item.taskId === "confirm_choice")?.value.choice.ingredientMatch.status, "unverified");
+  assert.equal(active(await store.snapshot(), "shopping.choice_matches_ingredient").length, 1);
   assert.deepEqual((await service.getBoard("linked-shopping")).results,
     oldShoppingResults);
   assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice").length, 0);
   await service.deleteReviewedCapture({ importId: "recipe",
     commandId: "delete-linked-recipe-image" });
+  assert.equal(active(await store.snapshot(), "shopping.choice_matches_ingredient").length, 0);
   assert.deepEqual((await service.listScenarioConnections("linked-shopping")).connections, []);
   const survivingShopping = await service.getBoard("linked-shopping");
   assert.ok(survivingShopping.pendingChanges.some((item) =>

@@ -2552,10 +2552,36 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       return;
     }
     if (capabilityId == 'shopping.confirm_choice') {
+      final linkedRecipe = _object(_taskInputs(task))['linkedRecipe'];
+      List<KernelJson>? recipeItems;
+      if (linkedRecipe is Map) {
+        try {
+          final connections = await widget.client.listScenarioConnections(
+            widget.activityId,
+          );
+          final connection = connections
+              .where((item) => item['id'] == linkedRecipe['connectionId'])
+              .firstOrNull;
+          final needs = _object(connection?['recipeNeeds']);
+          if (needs['status'] != 'ready' ||
+              needs['sourceResultId'] != linkedRecipe['sourceResultId']) {
+            throw const CommonKernelException(
+              'RECIPE_NEEDS_STALE',
+              '레시피 계산 결과가 바뀌었어요. 쇼핑 계획을 다시 검토해 주세요.',
+            );
+          }
+          recipeItems = _objects(needs['items']);
+        } catch (error) {
+          if (mounted) setState(() => _error = error);
+          return;
+        }
+      }
+      if (!mounted) return;
       final selection = await showDialog<KernelJson>(
         context: context,
         builder: (_) => ShoppingChoiceDialog(
           candidates: _objects(_object(_taskInputs(task))['candidates']),
+          recipeItems: recipeItems,
           onOpenImport: widget.onOpenShoppingImport,
         ),
       );

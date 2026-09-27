@@ -3,7 +3,8 @@ import { artifact, capability, relation, valueRelation } from "./shared.js";
 
 const choice = object({ id: text, productId: text, offerId: text,
   importId: text, title: text, quantity: ref("shopping.quantity_count"),
-  displayedPriceText: text });
+  displayedPriceText: text, ingredientMatch: ref("shopping.ingredient_match_result") },
+  ["id", "productId", "offerId", "importId", "title", "quantity", "displayedPriceText"]);
 
 export const shoppingPack = {
   id: "shopping", version: 1, compatibleKernelVersions: [1],
@@ -17,6 +18,11 @@ export const shoppingPack = {
     { id: "shopping.offer_snapshot", schema: object({ id: text,
       title: text, displayedPriceText: text }) },
     { id: "shopping.purchase_choice", schema: choice },
+    { id: "shopping.ingredient_match_result", schema: { oneOf: [
+      object({ status: enumeration("unverified") }),
+      object({ status: enumeration("matched"), ingredientId: text,
+        sourceResultId: text }),
+    ] } },
     { id: "shopping.purchase_report", schema: object({ id: text,
       choiceId: text, actualPaidKrw: ref("shopping.krw_amount"),
       reportedAt: ref("core.timestamp") }) },
@@ -60,6 +66,8 @@ export const shoppingPack = {
       ["core.product"], "one"),
     relation("shopping.choice_offer", ["shopping.purchase_choice"],
       ["shopping.offer_snapshot"], "one"),
+    relation("shopping.choice_matches_ingredient", ["shopping.purchase_choice"],
+      ["recipe.ingredient"], "one"),
     valueRelation("shopping.quantity", ["shopping.purchase_choice"],
       "shopping.quantity_count", "explicit_user_confirmation"),
     relation("shopping.purchase_for_choice", ["shopping.purchase_report"],
