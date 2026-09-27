@@ -9,7 +9,9 @@ import { createCommonKernelService, createCommonKernelState } from "../src/commo
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
+import { createPostgresRelationalStore } from "../src/storage/postgres_relational_store.js";
 import { makeFiling, makeTag, makeValidAnalysis } from "./fixtures.js";
+import { createRelationalTestPool } from "./relational_fixture.js";
 import { correctExtractedField } from "./scenario_recovery_helpers.js";
 
 const cases = [
@@ -17,12 +19,21 @@ const cases = [
   ["b_moisturizer", "수분 장벽 크림", "ca30083dc64a5f3dcc2dca95ad7b8b894d189e27508fc7d8e5d84f2f81b0944a"],
 ];
 
-async function fixture(t) {
-  const folder = await fs.mkdtemp(join(tmpdir(), "luffi-beauty-scenario-"));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const filePath = join(folder, "state.json");
-  const store = createJsonStateStore({ filePath,
-    initialState: createCommonKernelState });
+async function fixture(t, backend = "json") {
+  let reopenStore;
+  if (backend === "postgres") {
+    const { pool } = await createRelationalTestPool(t);
+    reopenStore = () => createPostgresRelationalStore({ pool,
+      initialState: createCommonKernelState });
+  } else {
+    const folder = await fs.mkdtemp(join(tmpdir(), "luffi-beauty-scenario-"));
+    t.after(() => fs.rm(folder, { recursive: true, force: true }));
+    const filePath = join(folder, "state.json");
+    reopenStore = () => createJsonStateStore({ filePath,
+      initialState: createCommonKernelState });
+  }
+  const store = reopenStore();
+  if (backend === "postgres") await store.ready();
   const service = createCommonKernelService({ ownerId: "beauty-user", store });
   const imports = {};
   for (const [name, title, hash] of cases) {
@@ -41,7 +52,7 @@ async function fixture(t) {
       reviewedAt: "2026-09-26T09:00:00+09:00",
       capture: { id: name, asset: { status: "unavailable" } }, analysis });
   }
-  return { service, store, filePath, imports };
+  return { service, store, reopenStore, imports };
 }
 
 const scenario = { commandId: "create-beauty", activityId: "beauty-1", confirmed: true,
@@ -60,8 +71,9 @@ const resultValue = (board, taskId) => {
   return board.results.find((result) => result.id === ref)?.value;
 };
 
-test("real beauty image analyses become an approved, ordered routine and an explicit use report", async (t) => {
-  const { service, store, filePath } = await fixture(t);
+for (const backend of ["json", "postgres"]) {
+test(`real beauty image analyses become an approved, ordered routine and an explicit use report (${backend})`, async (t) => {
+  const { service, store, reopenStore } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);
   assert.equal(created.candidateCount, 2);
   assert.equal((await service.createBeautyScenario(scenario)).replayed, true);
@@ -126,8 +138,7 @@ test("real beauty image analyses become an approved, ordered routine and an expl
     item.kind === "user_report" && item.provenance?.scenario === "beauty").length, 1);
   assert.ok(!snapshot.knowledge.assertions.some((item) =>
     /ownership|efficacy|skin_type/.test(item.predicate ?? "")));
-  const reopenedStore = createJsonStateStore({ filePath,
-    initialState: createCommonKernelState });
+  const reopenedStore = reopenStore();
   const restarted = createCommonKernelService({ ownerId: "beauty-user", store: reopenedStore });
   assert.equal((await restarted.createBeautyScenario(scenario)).replayed, true);
   assert.equal((await restarted.confirmBeautyRoutine({ commandId: "confirm-beauty",
@@ -137,8 +148,8 @@ test("real beauty image analyses become an approved, ordered routine and an expl
     activityId: "beauty-1", expectedRevision: recorded.revision - 1, steps })).replayed, true);
 });
 
-test("routine confirmation and outcome reject generic bypass, missing steps, and non-beauty captures", async (t) => {
-  const { service, store } = await fixture(t);
+test(`routine confirmation and outcome reject generic bypass, missing steps, and non-beauty captures (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-beauty" });
   let board = await service.getBoard("beauty-1");
@@ -195,8 +206,8 @@ test("routine confirmation and outcome reject generic bypass, missing steps, and
   (error) => error.code === "IMPORT_NOT_BEAUTY");
 });
 
-test("identical beauty product titles from separate captures remain separate products", async (t) => {
-  const { service, store } = await fixture(t);
+test(`identical beauty product titles from separate captures remain separate products (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const analysis = JSON.parse(await fs.readFile(fileURLToPath(
     new URL("./fixtures/beauty_a_cleanser_live_analysis.json", import.meta.url)), "utf8"));
   await service.importReviewedCapture({ importId: "a_cleanser_copy", reviewed: true,
@@ -222,8 +233,8 @@ test("identical beauty product titles from separate captures remain separate pro
     item.type === "core.product_variant" && item.status === "active").length, 2);
 });
 
-test("the user can include one of several captured products without treating the other as used", async (t) => {
-  const { service, store } = await fixture(t);
+test(`the user can include one of several captured products without treating the other as used (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-beauty" });
   let board = await service.getBoard("beauty-1");
@@ -249,8 +260,8 @@ test("the user can include one of several captured products without treating the
     item.type === "beauty.use_experience" && item.status === "active").length, 0);
 });
 
-test("a changed capture title invalidates the pending beauty plan", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`a changed capture title invalidates the pending beauty plan (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);
   const snapshot = await store.snapshot();
   const field = snapshot.knowledge.assertions.find((item) =>
@@ -268,8 +279,8 @@ test("a changed capture title invalidates the pending beauty plan", async (t) =>
   assert.equal(review.reasonCode, "CONTEXT_STALE");
 });
 
-test("a corrected beauty title replaces an unapproved draft", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`a corrected beauty title replaces an unapproved draft (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);
   await correctExtractedField({ service, store,
     materialId: imports.a_cleanser.materialId, path: "/title/value",
@@ -292,8 +303,8 @@ test("a corrected beauty title replaces an unapproved draft", async (t) => {
   assert.equal(board.tasks[1].inputBindings.scheduledAt, scenario.scheduledAt);
 });
 
-test("a started routine continues with a new occurrence and leaves the old result intact", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`a started routine continues with a new occurrence and leaves the old result intact (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId,
     commandId: "approve-before-beauty-continuation" });
@@ -323,8 +334,8 @@ test("a started routine continues with a new occurrence and leaves the old resul
   assert.deepEqual((await service.getBoard("beauty-1")).results, oldResults);
 });
 
-test("deleting an imported beauty capture removes its dependent activity and report", async (t) => {
-  const { service, store, imports } = await fixture(t);
+test(`deleting an imported beauty capture removes its dependent activity and report (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-beauty" });
   let board = await service.getBoard("beauty-1");
@@ -354,3 +365,87 @@ test("deleting an imported beauty capture removes its dependent activity and rep
   assert.ok(!snapshot.knowledge.assertions.some((item) => item.status === "active" &&
     item.predicate?.startsWith("beauty.") && item.scope?.id === "beauty-1"));
 });
+
+test(`two completed beauty steps retain distinct product and evidence links after restart (${backend})`, async (t) => {
+  const { service, store, reopenStore } = await fixture(t, backend);
+  const created = await service.createBeautyScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-two-uses" });
+  let board = await service.getBoard("beauty-1");
+  await service.confirmBeautyRoutine({ commandId: "confirm-two-uses",
+    activityId: "beauty-1", expectedRevision: board.revision, selections });
+  board = await service.getBoard("beauty-1");
+  await service.runTask({ commandId: "instantiate-two-uses",
+    activityId: "beauty-1", taskId: "instantiate_routine",
+    expectedRevision: board.revision });
+  board = await service.getBoard("beauty-1");
+  const occurrence = board.tasks.find((item) =>
+    item.id === "record_routine_outcome").readiness.inputs.occurrence;
+  const steps = occurrence.steps.map((item) => ({
+    templateStepId: item.templateStepId, status: "completed" }));
+  const request = { commandId: "report-two-uses", activityId: "beauty-1",
+    expectedRevision: board.revision, steps };
+  const reported = await service.recordBeautyRoutineOutcome(request);
+  assert.equal(reported.experienceIds.length, 2);
+  assert.equal(new Set(reported.experienceIds).size, 2);
+  const restarted = createCommonKernelService({ ownerId: "beauty-user",
+    store: reopenStore() });
+  assert.equal((await restarted.recordBeautyRoutineOutcome(request)).replayed, true);
+  const knowledge = (await store.snapshot()).knowledge;
+  const linked = (predicate) => knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === predicate &&
+    reported.experienceIds.includes(item.subjectId));
+  for (const predicate of ["beauty.experience_in", "beauty.experience_for_step",
+    "beauty.experience_uses_variant"]) {
+    assert.equal(linked(predicate).length, 2);
+  }
+  const stepLinks = linked("beauty.experience_for_step");
+  const variantLinks = linked("beauty.experience_uses_variant");
+  for (const step of occurrence.steps) {
+    const report = stepLinks.find((item) =>
+      item.objectEntityId === step.templateStepId);
+    assert.ok(report);
+    assert.equal(variantLinks.find((item) =>
+      item.subjectId === report.subjectId)?.objectEntityId, step.variantId);
+    assert.equal(report.evidenceIds.length, 1);
+  }
+  assert.equal(knowledge.sources.filter((item) => item.status === "active" &&
+    item.kind === "user_report" && item.provenance?.scenario === "beauty").length, 1);
+});
+
+test(`a retracted beauty step product link blocks a later use claim (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createBeautyScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-link-retraction" });
+  let board = await service.getBoard("beauty-1");
+  await service.confirmBeautyRoutine({ commandId: "confirm-before-link-retraction",
+    activityId: "beauty-1", expectedRevision: board.revision, selections });
+  board = await service.getBoard("beauty-1");
+  await service.runTask({ commandId: "instantiate-before-link-retraction",
+    activityId: "beauty-1", taskId: "instantiate_routine",
+    expectedRevision: board.revision });
+  board = await service.getBoard("beauty-1");
+  const occurrence = board.tasks.find((item) =>
+    item.id === "record_routine_outcome").readiness.inputs.occurrence;
+  const link = (await store.snapshot()).knowledge.assertions.find((item) =>
+    item.status === "active" && item.predicate === "beauty.uses_variant" &&
+    item.subjectId === occurrence.steps[0].templateStepId);
+  assert.ok(link);
+  await service.knowledgeCommand({ commandId: "retract-step-product",
+    type: "assertion.retract", payload: { assertionId: link.id,
+      expectedRevision: link.revision } });
+  await assert.rejects(service.recordBeautyRoutineOutcome({
+    commandId: "report-after-link-retraction", activityId: "beauty-1",
+    expectedRevision: board.revision,
+    steps: occurrence.steps.map((step) => ({
+      templateStepId: step.templateStepId, status: "completed" })),
+  }), (error) => error.code === "CONTEXT_STALE");
+  const after = await store.snapshot();
+  assert.equal(after.knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "beauty.experience_uses_variant")
+    .length, 0);
+  assert.equal(after.knowledge.sources.filter((item) => item.status === "active" &&
+    item.kind === "user_report" && item.provenance?.scenario === "beauty").length, 0);
+});
+}

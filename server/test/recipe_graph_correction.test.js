@@ -9,21 +9,12 @@ import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
 import { createPostgresRelationalStore } from "../src/storage/postgres_relational_store.js";
+import { createRelationalTestPool } from "./relational_fixture.js";
 
 async function fixture(t, backend = "json") {
   let store;
   if (backend === "postgres") {
-    const { PGlite } = await import("@electric-sql/pglite");
-    const db = await PGlite.create();
-    t.after(() => db.close());
-    for (const name of ["001_common_kernel", "002_kernel_state",
-      "003_relational_knowledge"]) {
-      await db.exec(await fs.readFile(new URL(
-        `../migrations/${name}.sql`, import.meta.url), "utf8"));
-    }
-    const pool = { query: (sql, params) => db.query(sql, params),
-      connect: async () => ({ query: (sql, params) => db.query(sql, params),
-        release() {} }) };
+    const { pool } = await createRelationalTestPool(t);
     store = createPostgresRelationalStore({ pool,
       initialState: createCommonKernelState });
     await store.ready();

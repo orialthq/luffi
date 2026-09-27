@@ -4815,6 +4815,36 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           }
           const occurrenceSteps = new Map(occurrence.steps.map((item) =>
             [item.templateStepId, item]));
+          const activeRelation = (subjectId, predicate, matches) =>
+            state.knowledge.assertions.some((item) => item.ownerId === ownerId &&
+              item.status === "active" && item.subjectId === subjectId &&
+              item.predicate === predicate && matches(item));
+          if (confirmed.template.steps.some((step, index) => {
+            const occurrenceStep = occurrenceSteps.get(step.id);
+            return !occurrenceStep || occurrenceStep.variantId !== step.variantId ||
+              occurrenceStep.title !== step.title ||
+              !state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+                item.id === step.id && item.type === "beauty.routine_step" &&
+                item.status === "active") ||
+              !state.knowledge.entities.some((item) => item.ownerId === ownerId &&
+                item.id === step.variantId && item.type === "core.product_variant" &&
+                item.status === "active") ||
+              !activeRelation(confirmed.templateId, "beauty.has_step",
+                (item) => item.objectEntityId === step.id) ||
+              !activeRelation(step.id, "beauty.step_order",
+                (item) => item.typedValue?.value === index + 1) ||
+              !activeRelation(step.id, "beauty.step_title",
+                (item) => item.typedValue?.value === step.title) ||
+              !activeRelation(step.id, "beauty.uses_variant",
+                (item) => item.objectEntityId === step.variantId) ||
+              !activeRelation(step.variantId, "beauty.variant_of",
+                (item) => state.knowledge.entities.some((entity) =>
+                  entity.ownerId === ownerId && entity.id === item.objectEntityId &&
+                  entity.type === "core.product" && entity.status === "active"));
+          })) {
+            throw new AppError("CONTEXT_STALE", "루틴 단계와 제품 연결이 변경됐어요.",
+              { httpStatus: 409 });
+          }
           if (steps.length !== occurrenceSteps.size ||
               steps.some((item) => !occurrenceSteps.has(item.templateStepId))) {
             throw new AppError("INVALID_REQUEST", "모든 루틴 단계의 결과를 기록해 주세요.",

@@ -10,6 +10,7 @@ import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
 import { createPostgresRelationalStore } from "../src/storage/postgres_relational_store.js";
+import { createRelationalTestPool } from "./relational_fixture.js";
 
 // Every response was recorded from /v1/analyze for the exact PNG below.
 const captures = {
@@ -27,17 +28,7 @@ const captures = {
 
 async function setup(t, backend = "json") {
   if (backend === "postgres") {
-    const { PGlite } = await import("@electric-sql/pglite");
-    const db = await PGlite.create();
-    t.after(() => db.close());
-    for (const name of ["001_common_kernel", "002_kernel_state",
-      "003_relational_knowledge"]) {
-      await db.exec(await fs.readFile(fileURLToPath(new URL(
-        `../migrations/${name}.sql`, import.meta.url)), "utf8"));
-    }
-    const pool = { query: (sql, params) => db.query(sql, params),
-      connect: async () => ({ query: (sql, params) => db.query(sql, params),
-        release() {} }) };
+    const { pool } = await createRelationalTestPool(t);
     const store = createPostgresRelationalStore({ pool,
       initialState: createCommonKernelState });
     await store.ready();
@@ -742,8 +733,9 @@ test("Jeju travel and Jeju restaurant are linked after real image-backed selecti
   assert.equal(active(state, "travel.visit_of_stop").length, 0);
 });
 
-test("fashion and beauty plans link without implying that the outfit was worn or routine used", async (t) => {
-  const { service, store } = await setup(t);
+for (const backend of ["json", "postgres"]) {
+test(`fashion and beauty plans link without implying that the outfit was worn or routine used (${backend})`, async (t) => {
+  const { service, store } = await setup(t, backend);
   await importCapture(service, "fashion");
   await importCapture(service, "beauty");
   const fashion = await service.createFashionScenario({ commandId: "create-fashion",
@@ -773,6 +765,7 @@ test("fashion and beauty plans link without implying that the outfit was worn or
   assert.equal(active(state, "fashion.wore_outfit").length, 0);
   assert.equal(active(state, "beauty.experience_in").length, 0);
 });
+}
 
 test("workout and preparation tip link ordered steps but do not imply either was done", async (t) => {
   const { service, store } = await setup(t);
