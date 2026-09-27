@@ -185,6 +185,40 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 }
 
 final class FakeKernelClient implements CommonKernelClient {
+  KernelJson? recipeInventoryReview;
+  final recipeRecheckRequests = <KernelJson>[];
+  final inventoryAdoptionRequests = <KernelJson>[];
+
+  @override
+  Future<KernelJson> getRecipeInventoryCarryoverReview(
+    String activityId,
+  ) async =>
+      recipeInventoryReview ??
+      {
+        'activityId': activityId,
+        'status': 'no_observations',
+        'sources': <Object?>[],
+      };
+
+  @override
+  Future<KernelJson> createRecipeRecheck(KernelJson request) async {
+    recipeRecheckRequests.add(request);
+    return {
+      'activityId': 'recipe-recheck-new',
+      'recheckedFrom': request['activityId'],
+    };
+  }
+
+  @override
+  Future<KernelJson> adoptShoppingInventoryForRecipe(KernelJson request) async {
+    inventoryAdoptionRequests.add(request);
+    recipeInventoryReview = {...?recipeInventoryReview, 'status': 'adopted'};
+    return {
+      'activityId': request['activityId'],
+      'revision': request['expectedRevision'],
+    };
+  }
+
   @override
   Future<KernelJson> getEditableShoppingBasket(String activityId) async => {
     'activityId': activityId,
@@ -1460,6 +1494,75 @@ void main() {
     await tester.tap(find.byKey(const Key('kernel-open-recipe-correction')));
     await tester.pumpAndSettle();
     expect(find.text('레시피 정정'), findsOneWidget);
+  });
+
+  testWidgets('recipe board adopts only explicitly selected shopping stock', (
+    tester,
+  ) async {
+    final client = FakeKernelClient()..board['scenario'] = 'recipe';
+    client.board['pendingChanges'] = <Object?>[];
+    client.recipeInventoryReview = {
+      'activityId': 'activity-1',
+      'rootActivityId': 'original-recipe',
+      'revision': 7,
+      'status': 'available',
+      'sources': [
+        {
+          'shoppingActivityId': 'shopping-board',
+          'purchaseFingerprint': 'purchase-1',
+          'observations': [
+            {
+              'observationId': 'stock-tofu',
+              'ingredientId': 'tofu',
+              'ingredientName': '두부',
+              'quantity': {'status': 'known', 'amount': 650, 'unit': 'g'},
+              'graphFingerprint': 'graph-tofu',
+            },
+            {
+              'observationId': 'stock-egg',
+              'ingredientId': 'egg',
+              'ingredientName': '달걀',
+              'quantity': {'status': 'known', 'amount': 2, 'unit': 'count'},
+              'graphFingerprint': 'graph-egg',
+            },
+          ],
+        },
+      ],
+    };
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('recipe-adopt-from-shopping-board')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('recipe-adopt-stock-confirm')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('recipe-stock-stock-tofu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('recipe-adopt-stock-confirm')));
+    await tester.pumpAndSettle();
+    expect(client.inventoryAdoptionRequests.single['observations'], [
+      {'observationId': 'stock-tofu', 'graphFingerprint': 'graph-tofu'},
+    ]);
+    expect(
+      client.inventoryAdoptionRequests.single['purchaseFingerprint'],
+      'purchase-1',
+    );
+  });
+
+  testWidgets('completed recipe calculation starts a separate stock recheck', (
+    tester,
+  ) async {
+    final client = FakeKernelClient()..board['scenario'] = 'recipe';
+    client.board['pendingChanges'] = <Object?>[];
+    client.recipeInventoryReview = {
+      'activityId': 'activity-1',
+      'rootActivityId': 'activity-1',
+      'revision': 7,
+      'status': 'new_activity_required',
+      'sources': <Object?>[],
+    };
+    await _pump(tester, client);
+    await tester.tap(find.byKey(const Key('recipe-create-recheck')));
+    await tester.pumpAndSettle();
+    expect(client.recipeRecheckRequests.single['activityId'], 'activity-1');
+    expect(client.recipeRecheckRequests.single['expectedRevision'], 7);
   });
 
   testWidgets(

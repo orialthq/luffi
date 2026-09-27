@@ -57,6 +57,8 @@ export function createCommonKernelState() {
     travelCorrectionReceipts: {},
     fashionCorrectionReceipts: {},
     recipeScenarioReceipts: {},
+    recipeRechecks: {},
+    recipeInventoryAdoptionReceipts: {},
     diningScenarioReceipts: {},
     diningCommandReceipts: {},
     fashionScenarioReceipts: {},
@@ -363,6 +365,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const resourceClaims = state.resources.claims.filter((claim) =>
       claim.ownerId === ownerId && claim.activityId === activityId);
     const continuedFrom = state.reviewContinuations?.[activityId];
+    const recheck = state.recipeRechecks?.[activityId];
     const pendingChanges = state.reviewEvents.filter((event) => event.activityId === activityId);
     if (scenarioForActivity(state, activityId) === "shopping") {
       const reference = value.tasks.find((item) => item.id === "confirm_choice")
@@ -372,10 +375,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           eventIds: [], reasonCode: "RECIPE_NEEDS_STALE", timeDue: false });
       }
     }
+    if (recheck && !recipeInventoryAdoptionCurrent(state, activityId)) {
+      pendingChanges.push({ key: `${activityId}:inventory-adoption`, activityId,
+        eventIds: [], reasonCode: "INVENTORY_OBSERVATION_STALE", timeDue: false });
+    }
     return {
       ...value,
       scenario: scenarioForActivity(state, activityId),
       continuedFrom: continuedFrom?.ownerId === ownerId ? continuedFrom.fromActivityId : null,
+      recheckedFrom: recheck?.ownerId === ownerId ? recheck.fromActivityId : null,
+      rechecks: Object.entries(state.recipeRechecks ?? {})
+        .filter(([nextId, entry]) => entry.ownerId === ownerId &&
+          entry.fromActivityId === activityId && state.activities.activities[nextId])
+        .map(([nextId]) => nextId),
       continuations: Object.entries(state.reviewContinuations ?? {})
         .filter(([nextId, entry]) => entry.ownerId === ownerId &&
           entry.fromActivityId === activityId && state.activities.activities[nextId])
@@ -494,6 +506,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     if (!activity || activity.ownerId !== ownerId) return null;
     const current = board(state, activityId);
     if (activityContextIsStale(state, activityId, current)) return { status: "stale" };
+    if (!recipeInventoryAdoptionCurrent(state, activityId)) return { status: "stale" };
     const task = activity.tasks.find((item) => item.id === "calculate_requirements" &&
       item.capabilityId === "recipe.calculate_requirements");
     if (task?.executionStatus !== "completed" || !task.latestOutputRef) {
@@ -951,6 +964,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       for (const [nextId, entry] of Object.entries(state.reviewContinuations ?? {})) {
         if (nextId === activityId || entry.fromActivityId === activityId) {
           delete state.reviewContinuations[nextId];
+        }
+      }
+      delete state.recipeRechecks?.[activityId];
+      for (const item of Object.values(state.recipeInventoryAdoptionReceipts ?? {})) {
+        if (item.ownerId === ownerId && item.activityId === activityId) {
+          item.deleted = true;
+          item.result = { activityId };
         }
       }
       for (const [key, item] of Object.entries(state.issuedContexts)) {
@@ -1874,7 +1894,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   }
 
   function editableRecipeGraph(state, activityId) {
-    board(state, activityId);
+    getActivityBoard(state.activities, activityId, { ownerId });
     const receipt = Object.values(state.recipeScenarioReceipts ?? {}).find((item) =>
       !item.deleted && item.result?.activityId === activityId);
     if (!receipt) throw new AppError("NOT_FOUND", "레시피 활동을 찾지 못했어요.",
@@ -2318,7 +2338,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   }
 
   function shoppingPurchaseProjection(state, activityId) {
-    const current = board(state, activityId);
+    const current = getActivityBoard(state.activities, activityId, { ownerId });
     if (scenarioForActivity(state, activityId) !== "shopping") {
       throw new AppError("NOT_FOUND", "쇼핑 활동을 찾지 못했어요.",
         { httpStatus: 404 });
@@ -2341,8 +2361,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       revision: corrections.length };
   }
 
+  function inventoryPurchaseFingerprint(purchase) {
+    return requestFingerprint(purchase.outcomes.map((item) =>
+      [item.choiceId, item.status]).sort((a, b) => a[0].localeCompare(b[0])));
+  }
+
   function shoppingInventoryGraph(state, activityId, observationId) {
-    board(state, activityId);
+    getActivityBoard(state.activities, activityId, { ownerId });
     const report = Object.entries(state.shoppingInventoryReceipts ?? {})
       .find(([key, item]) => key.startsWith(`${ownerId}:`) &&
         item.activityId === activityId && !item.deleted &&
@@ -2363,7 +2388,11 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const supports = active("shopping.inventory_after_choice");
     if (quantity.length !== 1 || ingredient.length !== 1 ||
         supports.length < 1 || supports.length > 8 ||
-        new Set(supports.map((item) => item.objectEntityId)).size !== supports.length) {
+        new Set(supports.map((item) => item.objectEntityId)).size !== supports.length ||
+        [quantity[0], ingredient[0], ...supports].some((item) =>
+          !item.evidenceIds?.length || item.evidenceIds.some((id) =>
+            !state.knowledge.evidence.some((evidence) => evidence.ownerId === ownerId &&
+              evidence.id === id && evidence.status === "active")))) {
       throw new AppError("INVENTORY_GRAPH_CONFLICT",
         "재고 관측 관계가 변경됐어요.", { httpStatus: 409 });
     }
@@ -2381,6 +2410,97 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         a[0].localeCompare(b[0])) });
     return { report, original, quantity: quantity[0], ingredient: ingredient[0],
       supports, supportingChoiceIds, graphFingerprint };
+  }
+
+  function recipeInventoryAdoptionCurrent(state, activityId) {
+    const receipt = Object.values(state.recipeInventoryAdoptionReceipts ?? {}).find((item) =>
+      item.ownerId === ownerId && item.activityId === activityId && !item.deleted);
+    if (!receipt) return true;
+    const connection = Object.values(state.scenarioConnections ?? {}).find((item) =>
+      item.ownerId === ownerId && item.kind === "recipe_shopping" &&
+      item.fromActivityId === receipt.rootActivityId &&
+      item.toActivityId === receipt.shoppingActivityId && connectionLive(state, item));
+    if (!connection || !state.activities.activities[receipt.rootActivityId]) return false;
+    try {
+      const sourceRecipe = editableRecipeGraph(state, receipt.rootActivityId).recipe;
+      const targetRecipe = editableRecipeGraph(state, activityId).recipe;
+      if (requestFingerprint({ ...sourceRecipe, id: null, revision: null }) !==
+          requestFingerprint({ ...targetRecipe, id: null, revision: null })) return false;
+      const purchased = new Set(shoppingPurchaseProjection(state,
+        receipt.shoppingActivityId).outcomes.filter((item) =>
+        item.status === "purchased").map((item) => item.choiceId));
+      if (!receipt.supportingChoiceIds.every((id) => purchased.has(id))) return false;
+      return receipt.observations.every((item) =>
+        shoppingInventoryGraph(state, receipt.shoppingActivityId,
+          item.observationId).graphFingerprint === item.graphFingerprint);
+    } catch { return false; }
+  }
+
+  function recipeInventoryCarryoverReview(state, activityId) {
+    const current = board(state, activityId);
+    if (scenarioForActivity(state, activityId) !== "recipe") throw new AppError(
+      "NOT_FOUND", "레시피 활동을 찾지 못했어요.", { httpStatus: 404 });
+    const recheck = state.recipeRechecks?.[activityId];
+    const rootActivityId = recheck?.rootActivityId ?? activityId;
+    const target = editableRecipeGraph(state, activityId);
+    const adoption = Object.values(state.recipeInventoryAdoptionReceipts ?? {}).find((item) =>
+      item.ownerId === ownerId && item.activityId === activityId && !item.deleted);
+    let root;
+    try { root = editableRecipeGraph(state, rootActivityId); }
+    catch {
+      if (!recheck) throw new AppError("CONTEXT_STALE",
+        "레시피 원본을 확인할 수 없어요.", { httpStatus: 409 });
+      return { activityId, rootActivityId, revision: current.revision,
+        status: "source_unavailable",
+        adoptedObservationIds: adoption?.observations.map((item) =>
+          item.observationId) ?? [], sources: [] };
+    }
+    const sourceChanged = requestFingerprint({ ...root.recipe, id: null, revision: null }) !==
+      requestFingerprint({ ...target.recipe, id: null, revision: null });
+    const ingredientIds = new Set(target.recipe.ingredients.map((item) => item.ingredientId));
+    const sources = Object.values(state.scenarioConnections ?? {}).filter((item) =>
+      item.ownerId === ownerId && item.kind === "recipe_shopping" &&
+      item.fromActivityId === rootActivityId && connectionLive(state, item)).map((connection) => {
+      let purchase;
+      try { purchase = shoppingPurchaseProjection(state, connection.toActivityId); }
+      catch { return null; }
+      const purchased = new Set(purchase.outcomes.filter((item) =>
+        item.status === "purchased").map((item) => item.choiceId));
+      const observations = Object.entries(state.shoppingInventoryReceipts ?? {})
+        .filter(([key, item]) => key.startsWith(`${ownerId}:`) &&
+          !item.deleted && item.activityId === connection.toActivityId)
+        .flatMap(([, item]) => item.result.observations).flatMap((item) => {
+          let graph;
+          try { graph = shoppingInventoryGraph(state, connection.toActivityId,
+            item.observationId); } catch { return []; }
+          if (!ingredientIds.has(item.ingredientId) ||
+              !graph.supportingChoiceIds.every((id) => purchased.has(id))) return [];
+          return [{ observationId: item.observationId, ingredientId: item.ingredientId,
+            ingredientName: target.recipe.ingredients.find((line) =>
+              line.ingredientId === item.ingredientId)?.name ?? item.ingredientId,
+            quantity: structuredClone(graph.quantity.typedValue.value.quantity),
+            observedAt: graph.quantity.typedValue.value.observedAt,
+            supportingChoiceIds: graph.supportingChoiceIds,
+            graphFingerprint: graph.graphFingerprint }];
+        });
+      return { shoppingActivityId: connection.toActivityId, connectionId: connection.id,
+        purchaseFingerprint: inventoryPurchaseFingerprint(purchase), observations };
+    }).filter((item) => item && item.observations.length);
+    const task = current.tasks.find((item) => item.id === "check_inventory" &&
+      item.capabilityId === "recipe.check_inventory");
+    const status = adoption ? (recipeInventoryAdoptionCurrent(state, activityId)
+      ? "adopted" : "stale") : sourceChanged ? "source_changed" :
+      !sources.length ? "no_observations" :
+      task?.executionStatus === "completed" ?
+        (current.tasks.some((item) => item.id === "calculate_requirements" &&
+          item.executionStatus === "completed") ? "new_activity_required" :
+          "manual_inventory_recorded") :
+      current.currentPlanRevision === 0 ? "plan_pending" :
+      task?.executionStatus === "not_started" && task.readiness.status === "ready"
+        ? "available" : "task_blocked";
+    return { activityId, rootActivityId, revision: current.revision, status,
+      adoptedObservationIds: adoption?.observations.map((item) => item.observationId) ?? [],
+      sources };
   }
 
   function editableShoppingBasketGraph(state, activityId) {
@@ -3420,6 +3540,61 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
   }
 
   return {
+    async createRecipeRecheck(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["activityId", "commandId",
+          "expectedRevision", "confirmed"].includes(key)) || input.confirmed !== true ||
+          !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
+          throw new AppError("INVALID_REQUEST", "레시피 재고 재확인 요청을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const activityId = safeId(input.activityId, "activityId");
+        const commandId = safeId(input.commandId, "commandId");
+        const key = fingerprint([ownerId, commandId]);
+        const nextActivityId = `recipe-recheck-${key.slice(0, 24)}`;
+        const prepared = await read((state) => {
+          const existing = state.recipeRechecks?.[nextActivityId];
+          if (existing) {
+            if (existing.ownerId !== ownerId || existing.fromActivityId !== activityId ||
+                existing.fromRevision !== input.expectedRevision) throw new AppError(
+              "COMMAND_CONFLICT", "명령 ID가 다른 재확인에 사용됐어요.", { httpStatus: 409 });
+            return { replay: { ...existing.result, recheckedFrom: activityId, replayed: true } };
+          }
+          const current = board(state, activityId);
+          if (current.revision !== input.expectedRevision) throw new AppError(
+            "REVISION_CONFLICT", "레시피 활동이 변경됐어요.", { httpStatus: 409 });
+          if (current.lifecycle !== "active" || scenarioForActivity(state, activityId) !== "recipe") {
+            throw new AppError("RECHECK_UNAVAILABLE", "재확인할 레시피가 없어요.",
+              { httpStatus: 409 });
+          }
+          const graph = editableRecipeGraph(state, activityId);
+          const rootActivityId = state.recipeRechecks?.[activityId]?.rootActivityId;
+          if (rootActivityId) editableRecipeGraph(state, rootActivityId);
+          const importId = Object.values(state.importReceipts ?? {}).find((item) =>
+            item.ownerId === ownerId && !item.deleted &&
+            item.sourceId === graph.source.provenance?.importedSourceId)?.importId;
+          const scale = current.tasks.find((item) => item.id === "scale_servings")?.inputBindings;
+          const needs = current.tasks.find((item) => item.id === "calculate_requirements")?.inputBindings;
+          if (!scale || !needs) throw new AppError("RECHECK_UNAVAILABLE",
+            "레시피 계산 계획을 확인해 주세요.", { httpStatus: 409 });
+          return { details: { recipe: graph.recipe,
+            targetServings: scale.targetServings, inventory: [], collectInventory: true,
+            includeOptionalIngredientIds: needs.includeOptionalIngredientIds ?? [],
+            includeCookTask: current.tasks.some((item) => item.id === "cook"),
+            ...(importId ? { importId } : {}),
+            ...(graph.source.provenance?.synthetic ? { synthetic: true } : {}) } };
+        });
+        if (prepared.replay) return prepared.replay;
+        const result = await this.createRecipeScenario({
+          commandId: `recipe-recheck:${key.slice(0, 32)}`,
+          activityId: nextActivityId, confirmed: true,
+          recheckOf: { activityId, expectedRevision: input.expectedRevision },
+          ...prepared.details,
+        });
+        return { ...result, recheckedFrom: activityId };
+      } catch (error) { throw toHttpError(error); }
+    },
     async createReviewSuccessor(raw) {
       try {
         const input = requestObject(raw);
@@ -5217,7 +5392,7 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       try {
         const input = requestObject(raw);
         const allowed = new Set(["commandId", "activityId", "confirmed", "recipe", "targetServings",
-          "inventory", "includeOptionalIngredientIds", "collectInventory", "includeCookTask", "importId", "synthetic", "continuationOf"]);
+          "inventory", "includeOptionalIngredientIds", "collectInventory", "includeCookTask", "importId", "synthetic", "continuationOf", "recheckOf"]);
         if (Object.keys(input).some((key) => !allowed.has(key)) || input.confirmed !== true ||
             (input.synthetic !== undefined && input.synthetic !== true) ||
             (input.synthetic === true && input.importId != null)) {
@@ -5246,7 +5421,8 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           includeOptionalIngredientIds: input.includeOptionalIngredientIds ?? [],
           collectInventory: input.collectInventory ?? null, includeCookTask: input.includeCookTask ?? true,
           importId, synthetic: input.synthetic === true,
-          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}) });
+          ...(input.continuationOf ? { continuationOf: input.continuationOf } : {}),
+          ...(input.recheckOf ? { recheckOf: input.recheckOf } : {}) });
         return await store.transact((state) => {
           assertState(state);
           state.recipeScenarioReceipts ??= {};
@@ -5263,6 +5439,38 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           }
           const continuedFrom = continuationSource(state, input.continuationOf,
             "recipe", activityId, input);
+          let recheckedFrom = null;
+          let rootActivityId = null;
+          if (input.recheckOf !== undefined) {
+            const previous = input.recheckOf;
+            if (!previous || typeof previous !== "object" || Array.isArray(previous) ||
+                Object.keys(previous).some((key) => !["activityId", "expectedRevision"].includes(key)) ||
+                !Number.isSafeInteger(previous.expectedRevision) || previous.expectedRevision < 0 ||
+                input.continuationOf !== undefined) throw new AppError("INVALID_REQUEST",
+              "재고 재확인 대상이 올바르지 않아요.", { httpStatus: 400 });
+            recheckedFrom = safeId(previous.activityId, "recheckOf.activityId");
+            if (recheckedFrom === activityId) throw new AppError("INVALID_REQUEST",
+              "같은 활동으로 재확인할 수 없어요.", { httpStatus: 400 });
+            const sourceBoard = board(state, recheckedFrom);
+            if (sourceBoard.revision !== previous.expectedRevision) throw new AppError(
+              "REVISION_CONFLICT", "레시피 활동이 변경됐어요.", { httpStatus: 409 });
+            if (sourceBoard.lifecycle !== "active" ||
+                scenarioForActivity(state, recheckedFrom) !== "recipe") throw new AppError(
+              "RECHECK_UNAVAILABLE", "재확인할 레시피가 없어요.", { httpStatus: 409 });
+            const sourceRecipe = editableRecipeGraph(state, recheckedFrom).recipe;
+            const sourceScale = sourceBoard.tasks.find((item) => item.id === "scale_servings")?.inputBindings;
+            const sourceNeeds = sourceBoard.tasks.find((item) => item.id === "calculate_requirements")?.inputBindings;
+            if (requestFingerprint(rawRecipe) !== requestFingerprint(sourceRecipe) ||
+                input.targetServings !== sourceScale?.targetServings ||
+                requestFingerprint(input.includeOptionalIngredientIds ?? []) !==
+                  requestFingerprint(sourceNeeds?.includeOptionalIngredientIds ?? []) ||
+                (input.includeCookTask ?? true) !== sourceBoard.tasks.some((item) =>
+                  item.id === "cook")) throw new AppError("RECHECK_INPUT_CONFLICT",
+              "기존 레시피와 재확인 입력이 달라졌어요.", { httpStatus: 409 });
+            rootActivityId = state.recipeRechecks?.[recheckedFrom]?.rootActivityId ??
+              recheckedFrom;
+            if (rootActivityId !== recheckedFrom) editableRecipeGraph(state, rootActivityId);
+          }
           const imported = importId === null ? null : state.importReceipts[importId];
           if (importId !== null && (imported?.ownerId !== ownerId ||
               !state.knowledge.sources.some((item) => item.ownerId === ownerId &&
@@ -5386,6 +5594,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           state.recipeScenarioReceipts[receiptKey] = { hash: requestHash, result };
           recordContinuation(state, activityId, continuedFrom,
             input.continuationOf?.expectedRevision, result);
+          if (recheckedFrom) {
+            state.recipeRechecks ??= {};
+            state.recipeRechecks[activityId] = { ownerId,
+              fromActivityId: recheckedFrom, rootActivityId,
+              fromRevision: input.recheckOf.expectedRevision,
+              result: structuredClone(result) };
+          }
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
@@ -9283,6 +9498,118 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             revision: applied.result.revision };
           state.shoppingCommandReceipts[receiptKey] = { hash: requestHash,
             result, activityId };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async getRecipeInventoryCarryoverReview(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => recipeInventoryCarryoverReview(state, activityId));
+      } catch (error) { throw toHttpError(error); }
+    },
+    async adoptShoppingInventoryForRecipe(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "shoppingActivityId", "expectedRevision", "purchaseFingerprint",
+          "observations", "confirmed"].includes(key)) || input.confirmed !== true ||
+          !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 ||
+          !Array.isArray(input.observations) || input.observations.length < 1 ||
+          input.observations.length > 25 || typeof input.purchaseFingerprint !== "string") {
+          throw new AppError("INVALID_REQUEST", "가져올 재고 관측을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const shoppingActivityId = safeId(input.shoppingActivityId, "shoppingActivityId");
+        const observations = input.observations.map((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item) ||
+              Object.keys(item).some((key) => !["observationId", "graphFingerprint"].includes(key)) ||
+              typeof item.graphFingerprint !== "string") throw new AppError(
+            "INVALID_REQUEST", "관측값 선택을 확인해 주세요.", { httpStatus: 400 });
+          return { observationId: safeId(item.observationId, "observationId"),
+            graphFingerprint: item.graphFingerprint };
+        });
+        if (new Set(observations.map((item) => item.observationId)).size !==
+            observations.length) throw new AppError("INVALID_REQUEST",
+          "같은 관측값을 중복 선택했어요.", { httpStatus: 400 });
+        const hash = requestFingerprint({ activityId, shoppingActivityId,
+          expectedRevision: input.expectedRevision,
+          purchaseFingerprint: input.purchaseFingerprint, observations });
+        return await store.transact((state) => {
+          assertState(state);
+          state.recipeInventoryAdoptionReceipts ??= {};
+          const key = `${ownerId}:${commandId}`;
+          const previous = state.recipeInventoryAdoptionReceipts[key];
+          if (previous) {
+            if (previous.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 재고 가져오기에 사용됐어요.", { httpStatus: 409 });
+            if (previous.deleted) throw new AppError("SCENARIO_DELETED",
+              "삭제한 레시피 활동이에요.", { httpStatus: 410 });
+            return { state, result: { ...previous.result, replayed: true } };
+          }
+          const review = recipeInventoryCarryoverReview(state, activityId);
+          if (review.revision !== input.expectedRevision) throw new AppError(
+            "REVISION_CONFLICT", "레시피 활동이 변경됐어요.", { httpStatus: 409 });
+          if (review.status !== "available") throw new AppError("TASK_BLOCKED",
+            "새 레시피의 재고 확인 작업을 먼저 준비해 주세요.", { httpStatus: 409 });
+          const source = review.sources.find((item) =>
+            item.shoppingActivityId === shoppingActivityId);
+          if (!source || source.purchaseFingerprint !== input.purchaseFingerprint) {
+            throw new AppError("INVENTORY_REVIEW_STALE",
+              "쇼핑 구매 결과가 변경됐어요. 다시 확인해 주세요.", { httpStatus: 409 });
+          }
+          const selected = observations.map((item) => {
+            const candidate = source.observations.find((entry) =>
+              entry.observationId === item.observationId);
+            if (!candidate || candidate.graphFingerprint !== item.graphFingerprint) {
+              throw new AppError("INVENTORY_REVIEW_STALE",
+                "재고 관측이 변경됐어요. 다시 확인해 주세요.", { httpStatus: 409 });
+            }
+            return candidate;
+          });
+          if (new Set(selected.map((item) => item.ingredientId)).size !==
+              selected.length) throw new AppError("INVALID_REQUEST",
+            "재료별로 하나의 관측값만 선택해 주세요.", { httpStatus: 400 });
+          const current = board(state, activityId);
+          assertActivityContextCurrent(state, activityId, current);
+          const task = current.tasks.find((item) => item.id === "check_inventory" &&
+            item.capabilityId === "recipe.check_inventory");
+          if (!task || task.executionStatus !== "not_started" ||
+              task.readiness.status !== "ready") throw new AppError("TASK_BLOCKED",
+            "재고 확인 작업을 완료할 수 없어요.", { httpStatus: 409 });
+          const output = selected.map((item) => {
+            const graph = shoppingInventoryGraph(state, shoppingActivityId,
+              item.observationId);
+            return structuredClone(graph.quantity.typedValue.value);
+          });
+          const evidenceRefs = [...new Set(selected.flatMap((item) => {
+            const graph = shoppingInventoryGraph(state, shoppingActivityId,
+              item.observationId);
+            return [graph.quantity, graph.ingredient, ...graph.supports]
+              .flatMap((assertion) => assertion.evidenceIds);
+          }))];
+          validateEvidenceReferences(state, { evidenceRefs });
+          const applied = applyActivityCommand(state.activities, { ownerId,
+            commandId: `${commandId}:complete`, type: "task.transition", activityId,
+            expectedRevision: current.revision,
+            payload: { taskId: "check_inventory", to: "completed", output, evidenceRefs },
+          }, activityOptions(state));
+          state.activities = applied.state;
+          const completed = board(state, activityId);
+          const resultId = completed.tasks.find((item) =>
+            item.id === "check_inventory")?.latestOutputRef;
+          const result = { activityId, shoppingActivityId,
+            rootActivityId: review.rootActivityId,
+            observationIds: selected.map((item) => item.observationId),
+            resultId, revision: completed.revision };
+          state.recipeInventoryAdoptionReceipts[key] = { ownerId, hash, result,
+            activityId, shoppingActivityId, rootActivityId: review.rootActivityId,
+            purchaseFingerprint: input.purchaseFingerprint,
+            supportingChoiceIds: [...new Set(selected.flatMap((item) =>
+              item.supportingChoiceIds))],
+            observations: structuredClone(observations) };
           return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }

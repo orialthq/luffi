@@ -407,6 +407,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/planning/review-successors", "createReviewSuccessor"],
     ["/planning/accept", "acceptProposal"],
     ["/recipe/scenarios", "createRecipeScenario"],
+    ["/recipe/rechecks", "createRecipeRecheck"],
+    ["/recipe/inventory-adoptions", "adoptShoppingInventoryForRecipe"],
     ["/recipe/corrections", "correctRecipe"],
     ["/dining/scenarios", "createDiningScenario"],
     ["/dining/select-place", "selectDiningPlace"],
@@ -485,6 +487,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "getEditableCaptureFields", importId });
   kernelService.getEditableRecipe = async (activityId) =>
     ({ method: "getEditableRecipe", activityId });
+  kernelService.getRecipeInventoryCarryoverReview = async (activityId) =>
+    ({ method: "getRecipeInventoryCarryoverReview", activityId });
   kernelService.getEditableDiningSelection = async (activityId) =>
     ({ method: "getEditableDiningSelection", activityId });
   kernelService.getEditableLifeTipPlan = async (activityId) =>
@@ -541,6 +545,8 @@ test("kernel HTTP routes forward each request to its declared service method", a
       { method: "getEditableCaptureFields", importId: "item-1" }],
     ["/recipe/editable/meal%20plan",
       { method: "getEditableRecipe", activityId: "meal plan" }],
+    ["/recipe/inventory-adoptions/review/meal%20plan",
+      { method: "getRecipeInventoryCarryoverReview", activityId: "meal plan" }],
     ["/dining/editable/dinner%20plan",
       { method: "getEditableDiningSelection", activityId: "dinner plan" }],
     ["/life-tip/editable/tip%20plan",

@@ -505,6 +505,9 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> proposeRecipeShoppingPlan(KernelJson request);
   Future<KernelJson> command(KernelJson command);
   Future<KernelJson> createRecipeScenario(KernelJson request);
+  Future<KernelJson> createRecipeRecheck(KernelJson request);
+  Future<KernelJson> getRecipeInventoryCarryoverReview(String activityId);
+  Future<KernelJson> adoptShoppingInventoryForRecipe(KernelJson request);
   Future<KernelJson> getEditableRecipe(String activityId);
   Future<KernelJson> correctRecipe(KernelJson request);
   Future<KernelJson> getEditableFashionOutfit(String activityId);
@@ -670,6 +673,22 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> createReviewSuccessor(KernelJson request) =>
       _request('POST', '/v1/kernel/planning/review-successors', request);
+
+  @override
+  Future<KernelJson> createRecipeRecheck(KernelJson request) =>
+      _request('POST', '/v1/kernel/recipe/rechecks', request);
+
+  @override
+  Future<KernelJson> getRecipeInventoryCarryoverReview(
+    String activityId,
+  ) => _request(
+    'GET',
+    '/v1/kernel/recipe/inventory-adoptions/review/${Uri.encodeComponent(activityId)}',
+  );
+
+  @override
+  Future<KernelJson> adoptShoppingInventoryForRecipe(KernelJson request) =>
+      _request('POST', '/v1/kernel/recipe/inventory-adoptions', request);
 
   @override
   Future<List<KernelJson>> listScenarioConnections(String activityId) async {

@@ -26,6 +26,8 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/planning/review-successors": "createReviewSuccessor",
   "/planning/accept": "acceptProposal",
   "/recipe/scenarios": "createRecipeScenario",
+  "/recipe/rechecks": "createRecipeRecheck",
+  "/recipe/inventory-adoptions": "adoptShoppingInventoryForRecipe",
   "/recipe/corrections": "correctRecipe",
   "/dining/scenarios": "createDiningScenario",
   "/dining/select-place": "selectDiningPlace",
@@ -85,6 +87,7 @@ const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "l
   "getEditableCaptureFields", "getEditableRecipe", "getEditableDiningSelection", "getEditableFashionOutfit", "getEditableBeautyRoutine",
   "getEditableTravelItinerary", "getEditableLifeTipPlan", "getEditableShoppingChoice", "getEditableShoppingBasket", "getRecipeShoppingPlanReview",
   "getRecipeShoppingTransferReview", "listShoppingInventory", "getShoppingPurchaseOutcomes",
+  "getRecipeInventoryCarryoverReview",
   "getShoppingBasketReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
 
@@ -225,6 +228,16 @@ export function createHttpServer({
         const recipeShoppingReviewMatch =
           /^\/shopping\/recipe-needs\/review\/([^/]+)\/([^/]+)$/.exec(route);
         const shoppingInventoryMatch = /^\/shopping\/inventory-observations\/([^/]+)$/.exec(route);
+        const recipeInventoryReviewMatch = /^\/recipe\/inventory-adoptions\/review\/([^/]+)$/.exec(route);
+        if (recipeInventoryReviewMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(recipeInventoryReviewMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "활동 ID 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200,
+            await kernelService.getRecipeInventoryCarryoverReview(activityId));
+        }
         const shoppingPurchaseOutcomesMatch = /^\/shopping\/purchase-outcomes\/([^/]+)$/.exec(route);
         if (shoppingPurchaseOutcomesMatch) {
           if (request.method !== "GET") throw methodNotAllowed("GET");

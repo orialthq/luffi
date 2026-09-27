@@ -2267,6 +2267,8 @@ final class CommonBoardScreen extends StatefulWidget {
 final class _CommonBoardScreenState extends State<CommonBoardScreen> {
   KernelJson? _board;
   KernelJson? _shoppingPurchaseProjection;
+  KernelJson? _recipeInventoryReview;
+  Object? _recipeInventoryError;
   List<KernelJson> _shoppingInventoryObservations = [];
   KernelJson? _review;
   Object? _reviewError;
@@ -2398,6 +2400,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     try {
       final board = await widget.client.getBoard(widget.activityId);
       KernelJson? shoppingPurchaseProjection;
+      KernelJson? recipeInventoryReview;
+      Object? recipeInventoryError;
       List<KernelJson> shoppingInventoryObservations = [];
       if (board['scenario'] == 'shopping' &&
           _objects(
@@ -2413,6 +2417,14 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           );
         }
       }
+      if (board['scenario'] == 'recipe') {
+        try {
+          recipeInventoryReview = await widget.client
+              .getRecipeInventoryCarryoverReview(widget.activityId);
+        } catch (error) {
+          recipeInventoryError = error;
+        }
+      }
       KernelJson? review;
       Object? reviewError;
       try {
@@ -2424,6 +2436,8 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       setState(() {
         _board = board;
         _shoppingPurchaseProjection = shoppingPurchaseProjection;
+        _recipeInventoryReview = recipeInventoryReview;
+        _recipeInventoryError = recipeInventoryError;
         _shoppingInventoryObservations = shoppingInventoryObservations;
         _review = review;
         _reviewError = reviewError;
@@ -2531,6 +2545,103 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted && !_needsRefresh && nextActivityId != null) {
       await _openConnectedBoard(nextActivityId!);
     }
+  }
+
+  Future<void> _createRecipeRecheck() async {
+    String? nextActivityId;
+    await _mutate((revision, commandId) async {
+      final result = await widget.client.createRecipeRecheck({
+        'activityId': widget.activityId,
+        'commandId': commandId,
+        'expectedRevision': revision,
+        'confirmed': true,
+      });
+      nextActivityId = result['activityId'] as String?;
+    });
+    if (mounted && !_needsRefresh && nextActivityId != null) {
+      await _openConnectedBoard(nextActivityId!);
+    }
+  }
+
+  Future<void> _adoptShoppingInventory(KernelJson source) async {
+    final candidates = _objects(source['observations']);
+    final selected = <String, KernelJson>{};
+    final choice = await showDialog<List<KernelJson>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('쇼핑에서 확인한 재고 가져오기'),
+          content: SizedBox(
+            width: 420,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                const Text('현재도 보유 중인 수량만 선택하세요. 같은 재료의 관측값은 하나만 사용할 수 있어요.'),
+                for (final observation in candidates)
+                  CheckboxListTile(
+                    key: ValueKey(
+                      'recipe-stock-${observation['observationId']}',
+                    ),
+                    title: Text(
+                      '${_text(observation['ingredientName'], _text(observation['ingredientId']))} · '
+                      '${_shoppingQuantityLabel(observation['quantity'])}',
+                    ),
+                    subtitle: Text(_text(observation['observedAt'])),
+                    value: selected.containsKey(
+                      _text(observation['observationId']),
+                    ),
+                    onChanged: (checked) => setDialogState(() {
+                      final id = _text(observation['observationId']);
+                      if (checked == true) {
+                        selected.removeWhere(
+                          (_, item) =>
+                              item['ingredientId'] ==
+                              observation['ingredientId'],
+                        );
+                        selected[id] = observation;
+                      } else {
+                        selected.remove(id);
+                      }
+                    }),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              key: const Key('recipe-adopt-stock-confirm'),
+              onPressed: selected.isEmpty
+                  ? null
+                  : () =>
+                        Navigator.pop(dialogContext, selected.values.toList()),
+              child: const Text('선택한 재고 가져오기'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || choice.isEmpty || !mounted) return;
+    await _mutate((revision, commandId) async {
+      await widget.client.adoptShoppingInventoryForRecipe({
+        'activityId': widget.activityId,
+        'shoppingActivityId': source['shoppingActivityId'],
+        'commandId': commandId,
+        'expectedRevision': revision,
+        'purchaseFingerprint': source['purchaseFingerprint'],
+        'observations': [
+          for (final item in choice)
+            {
+              'observationId': item['observationId'],
+              'graphFingerprint': item['graphFingerprint'],
+            },
+        ],
+        'confirmed': true,
+      });
+    });
   }
 
   Future<void> _resolveReview(KernelJson task) async {
@@ -4312,6 +4423,106 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
           ),
   );
 
+  Widget _recipeInventoryCard(KernelJson board) {
+    final review = _recipeInventoryReview;
+    final status = _text(review?['status']);
+    final sources = _objects(review?['sources']);
+    if (review == null && _recipeInventoryError == null) {
+      return const SizedBox.shrink();
+    }
+    if (status == 'no_observations' &&
+        board['recheckedFrom'] == null &&
+        _recipeInventoryError == null) {
+      return const SizedBox.shrink();
+    }
+    return Card(
+      key: const Key('recipe-inventory-carryover'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '쇼핑 재고로 다시 계산',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            if (_recipeInventoryError != null)
+              Text('재고 연결을 불러오지 못했어요: ${_errorText(_recipeInventoryError!)}'),
+            if (status == 'new_activity_required') ...[
+              const Text('이 레시피의 이전 계산은 기록으로 남겨두고, 새 재고 확인 보드에서 부족량을 다시 계산해요.'),
+              FilledButton.tonal(
+                key: const Key('recipe-create-recheck'),
+                onPressed: _busy || _needsRefresh ? null : _createRecipeRecheck,
+                child: const Text('새 재고 확인 보드 만들기'),
+              ),
+            ],
+            if (status == 'plan_pending')
+              const Text('새 보드의 계획을 승인하면 쇼핑 재고를 선택할 수 있어요.'),
+            if (status == 'manual_inventory_recorded')
+              const Text('재고 확인을 직접 기록했어요. 필요한 재료 계산을 진행할 수 있어요.'),
+            if (status == 'available') ...[
+              const Text(
+                '실제로 확인한 관측값을 선택하면 재고 확인 작업에 근거와 함께 기록해요. 선택하지 않은 재료는 미확인으로 남아요.',
+              ),
+              for (final source in sources)
+                TextButton.icon(
+                  key: ValueKey(
+                    'recipe-adopt-from-${source['shoppingActivityId']}',
+                  ),
+                  onPressed: _busy || _needsRefresh
+                      ? null
+                      : () => _adoptShoppingInventory(source),
+                  icon: const Icon(Icons.inventory_2_outlined),
+                  label: Text(
+                    '쇼핑 보드 재고 ${_objects(source['observations']).length}건 선택',
+                  ),
+                ),
+            ],
+            if (status == 'adopted') const Text('선택한 재고가 현재 재료 계산에 연결됐어요.'),
+            if (status == 'stale') ...[
+              const Text(
+                '가져온 재고 또는 구매 근거가 변경됐어요. 이전 계산은 기록으로 남고, 새 보드에서 다시 확인해야 해요.',
+              ),
+              FilledButton.tonal(
+                key: const Key('recipe-recheck-stale-stock'),
+                onPressed: _busy || _needsRefresh ? null : _createRecipeRecheck,
+                child: const Text('새 재고 확인 보드 만들기'),
+              ),
+            ],
+            if (status == 'source_changed') ...[
+              const Text('원본 레시피가 변경됐어요. 원본을 열어 최신 재료로 새 보드를 만들어 주세요.'),
+              TextButton(
+                onPressed: () =>
+                    _openConnectedBoard(_text(review?['rootActivityId'])),
+                child: const Text('원본 레시피 보기'),
+              ),
+            ],
+            if (status == 'source_unavailable')
+              const Text('원본 레시피를 더 이상 확인할 수 없어 이 재고 연결을 다시 사용할 수 없어요.'),
+            if (status == 'task_blocked')
+              const Text('재고 확인 작업을 먼저 진행할 수 있는 상태로 만들어 주세요.'),
+            if (status == 'no_observations' && board['recheckedFrom'] != null)
+              const Text(
+                '연결된 쇼핑 보드에 사용할 수 있는 실제 재고 관측이 없어요. 직접 재고를 확인해 기록할 수 있어요.',
+              ),
+            if (board['recheckedFrom'] is String)
+              TextButton(
+                onPressed: () =>
+                    _openConnectedBoard(board['recheckedFrom'] as String),
+                child: const Text('이전 레시피 보기'),
+              ),
+            for (final nextId in _strings(board['rechecks']))
+              TextButton(
+                onPressed: () => _openConnectedBoard(nextId),
+                child: const Text('다시 계산한 보드 보기'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final board = _board;
@@ -4345,6 +4556,13 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                     sliver: SliverToBoxAdapter(child: _overview(board, tasks)),
                   ),
+                  if (board['scenario'] == 'recipe')
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      sliver: SliverToBoxAdapter(
+                        child: _recipeInventoryCard(board),
+                      ),
+                    ),
                   if (_connectionKindsVisible(board))
                     SliverPadding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),

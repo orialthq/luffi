@@ -191,6 +191,53 @@ void main() {
     },
   );
 
+  test('recipe stock recheck routes review and explicit adoption', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final paths = <String>[];
+    server.listen((request) async {
+      paths.add(request.uri.path);
+      final body = request.method == 'POST'
+          ? jsonDecode(await utf8.decoder.bind(request).join()) as Map
+          : null;
+      if (request.uri.path.endsWith('/inventory-adoptions')) {
+        expect(body?['observations'], [
+          {'observationId': 'stock-1', 'graphFingerprint': 'graph-1'},
+        ]);
+      }
+      request.response.headers.contentType = ContentType.json;
+      request.response.write('{"activityId":"recipe-1"}');
+      await request.response.close();
+    });
+    final client = HttpCommonKernelClient(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      token: 'development-token',
+    );
+    await client.createRecipeRecheck({
+      'activityId': 'recipe-1',
+      'commandId': 'recheck-1',
+      'expectedRevision': 3,
+      'confirmed': true,
+    });
+    await client.getRecipeInventoryCarryoverReview('recipe-1');
+    await client.adoptShoppingInventoryForRecipe({
+      'activityId': 'recipe-1',
+      'shoppingActivityId': 'shop-1',
+      'commandId': 'adopt-1',
+      'expectedRevision': 3,
+      'purchaseFingerprint': 'purchase-1',
+      'observations': [
+        {'observationId': 'stock-1', 'graphFingerprint': 'graph-1'},
+      ],
+      'confirmed': true,
+    });
+    expect(paths, [
+      '/v1/kernel/recipe/rechecks',
+      '/v1/kernel/recipe/inventory-adoptions/review/recipe-1',
+      '/v1/kernel/recipe/inventory-adoptions',
+    ]);
+  });
+
   test(
     'shopping client routes creation, selection, and purchase report',
     () async {
