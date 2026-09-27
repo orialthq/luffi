@@ -51,6 +51,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/shopping/recipe-needs/proposals": "proposeRecipeShoppingPlan",
   "/shopping/confirm-choice": "confirmShoppingChoice",
   "/shopping/corrections": "correctShoppingChoice",
+  "/shopping/basket-corrections": "correctShoppingBasket",
   "/shopping/confirm-basket": "confirmShoppingBasket",
   "/shopping/purchase-outcome": "recordShoppingPurchaseOutcome",
   "/shopping/basket-outcomes": "recordShoppingBasketOutcomes",
@@ -78,7 +79,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
   "getEditableCaptureFields", "getEditableRecipe", "getEditableDiningSelection", "getEditableFashionOutfit", "getEditableBeautyRoutine",
-  "getEditableTravelItinerary", "getEditableLifeTipPlan", "getEditableShoppingChoice", "getRecipeShoppingPlanReview",
+  "getEditableTravelItinerary", "getEditableLifeTipPlan", "getEditableShoppingChoice", "getEditableShoppingBasket", "getRecipeShoppingPlanReview",
   "getRecipeShoppingTransferReview", "listShoppingInventory",
   "getShoppingBasketReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
@@ -314,6 +315,15 @@ export function createHttpServer({
           catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
             { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.getEditableShoppingChoice(activityId));
+        }
+        const editableBasketMatch = /^\/shopping\/editable-basket\/([^/]+)$/.exec(route);
+        if (editableBasketMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableBasketMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableShoppingBasket(activityId));
         }
         const editableFieldsMatch = /^\/ingestion\/editable-fields\/([^/]+)$/.exec(route);
         if (editableFieldsMatch) {

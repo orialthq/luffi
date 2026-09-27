@@ -306,6 +306,86 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
     .missingQuantity.amount, 500);
   assert.equal((await service.getShoppingBasketReview(shoppingBoard.id)).status,
     "current");
+  const editableBasket = await service.getEditableShoppingBasket(shoppingBoard.id);
+  assert.equal(editableBasket.basket.id, basket.id);
+  await assert.rejects(service.correctShoppingBasket({
+    commandId: "unchanged-basket", activityId: shoppingBoard.id,
+    expectedGraphFingerprint: editableBasket.graphFingerprint,
+    selections: basket.lines.flatMap((line) => line.choices.map((choice) => ({
+      ingredientId: line.ingredientId, selectedImportId: choice.importId,
+      quantity: choice.quantity, packageQuantity: choice.packageQuantity,
+      ...(choice.packageEvidenceIds ?
+        { packageEvidenceIds: choice.packageEvidenceIds } : {}),
+    }))), confirmed: true }),
+  (error) => error.code === "UNCHANGED_BASKET");
+  await assert.rejects(service.correctShoppingBasket({
+    commandId: "forged-basket-evidence", activityId: shoppingBoard.id,
+    expectedGraphFingerprint: editableBasket.graphFingerprint,
+    selections: [{ ingredientId: "tofu", selectedImportId: "tofu",
+      quantity: 1, packageQuantity: { status: "known", amount: 250, unit: "g" },
+      packageEvidenceIds: ["not-from-capture"] }], confirmed: true }),
+  (error) => error.code === "INVALID_PACKAGE_EVIDENCE");
+  const basketCorrectionRequest = { commandId: "correct-basket",
+    activityId: shoppingBoard.id,
+    expectedGraphFingerprint: editableBasket.graphFingerprint,
+    selections: [{ ingredientId: "tofu", selectedImportId: "tofu",
+      quantity: 1, packageQuantity: { status: "known", amount: 250, unit: "g" } }],
+    confirmed: true };
+  const basketCorrection = await service.correctShoppingBasket(basketCorrectionRequest);
+  assert.equal((await service.correctShoppingBasket(basketCorrectionRequest)).replayed, true);
+  await assert.rejects(service.recordShoppingBasketOutcomes({
+    commandId: "purchase-after-basket-correction", activityId: shoppingBoard.id,
+    expectedRevision: shoppingBoard.revision,
+    outcomes: [{ choiceId, status: "purchased", actualPaidKrw: 4800 },
+      { choiceId: eggChoiceId, status: "not_purchased" }] }),
+  (error) => error.code === "SHOPPING_BASKET_CORRECTED");
+  await assert.rejects(service.correctShoppingBasket({ ...basketCorrectionRequest,
+    commandId: "stale-basket", selections: [] }),
+  (error) => error.code === "SHOPPING_REVISION_CONFLICT");
+  let correctedBasket = await service.getEditableShoppingBasket(shoppingBoard.id);
+  assert.equal(correctedBasket.basket.id, basketCorrection.basketId);
+  assert.equal(correctedBasket.basket.lines.find((line) =>
+    line.ingredientId === "egg").coverage.status, "unselected");
+  assert.equal(correctedBasket.basket.lines.find((line) =>
+    line.ingredientId === "tofu").coverage.status, "insufficient");
+  assert.equal(active(await store.snapshot(), "shopping.basket_supersedes_basket")
+    .find((item) => item.subjectId === basketCorrection.basketId)?.objectEntityId,
+  basket.id);
+  assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice")[0]
+    .objectEntityId, choiceId);
+  assert.equal(active(await store.snapshot(), "shopping.inventory_after_choice")[0]
+    .objectEntityId, choiceId);
+  const reassigned = await service.correctShoppingBasket({
+    commandId: "reassign-basket", activityId: shoppingBoard.id,
+    expectedGraphFingerprint: correctedBasket.graphFingerprint,
+    selections: [{ ingredientId: "egg", selectedImportId: "tofu",
+      quantity: 1, packageQuantity: { status: "known", amount: 250, unit: "g" } },
+    { ingredientId: "tofu", selectedImportId: "egg",
+      quantity: 2, packageQuantity: { status: "unknown" } }],
+    confirmed: true });
+  correctedBasket = await service.getEditableShoppingBasket(shoppingBoard.id);
+  assert.equal(correctedBasket.basket.id, reassigned.basketId);
+  assert.equal(correctedBasket.basket.lines.find((line) =>
+    line.ingredientId === "egg").choices[0].importId, "tofu");
+  assert.equal(correctedBasket.basket.lines.find((line) =>
+    line.ingredientId === "egg").coverage.status, "incompatible_unit");
+  assert.equal((await service.getBoardReview(shoppingBoard.id)).status, "blocked");
+  const reviewBoard = await service.getBoard(shoppingBoard.id);
+  const successor = await service.createReviewSuccessor({
+    commandId: "continue-corrected-basket", activityId: shoppingBoard.id,
+    expectedRevision: reviewBoard.revision, confirmed: true });
+  assert.equal(successor.continuedFrom, shoppingBoard.id);
+  assert.equal((await service.getBoard(successor.activityId)).scenario, "shopping");
+  const emptied = await service.correctShoppingBasket({
+    commandId: "empty-basket", activityId: shoppingBoard.id,
+    expectedGraphFingerprint: correctedBasket.graphFingerprint,
+    selections: [], confirmed: true });
+  assert.equal((await service.getEditableShoppingBasket(shoppingBoard.id))
+    .basket.id, emptied.basketId);
+  assert.equal((await service.getEditableShoppingBasket(shoppingBoard.id))
+    .basket.lines.every((line) => line.coverage.status === "unselected"), true);
+  assert.deepEqual((await service.getBoard(shoppingBoard.id)).results.find((item) =>
+    item.taskId === "confirm_choice").value.choice, basket);
   const editable = await service.getEditableRecipe(recipeBoard.id);
   await service.correctRecipe({ commandId: "basket-recipe-correction",
     activityId: recipeBoard.id, expectedAssertionId: editable.assertionId,
@@ -316,6 +396,8 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
         : item), steps: editable.recipe.steps ?? [] } });
   assert.equal((await service.getShoppingBasketReview(shoppingBoard.id)).status,
     "stale");
+  await assert.rejects(service.getEditableShoppingBasket(shoppingBoard.id),
+    (error) => error.code === "RECIPE_NEEDS_STALE");
   assert.deepEqual((await service.getBoard(shoppingBoard.id)).results.find((item) =>
     item.taskId === "confirm_choice").value.choice, basket);
   await service.recordShoppingInventory({ commandId: "observed-tofu-again",
@@ -327,11 +409,16 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
   await service.deleteReviewedCapture({ importId: "egg",
     commandId: "delete-basket-egg-image" });
   assert.equal(active(await store.snapshot(), "recipe.observed_inventory").length, 0);
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.scope?.id === shoppingBoard.id &&
+    item.predicate?.startsWith("shopping.")).length, 0);
   await assert.rejects(service.recordShoppingInventory({ commandId: "observed-tofu",
     activityId: shoppingBoard.id, expectedRevision: shoppingBoard.revision,
     observations: [{ ingredientId: "tofu", quantity: { status: "known",
       amount: 700, unit: "g" }, supportingChoiceIds: [choiceId] }] }),
   (error) => error.code === "SCENARIO_DELETED");
+  await assert.rejects(service.correctShoppingBasket(basketCorrectionRequest),
+    (error) => error.code === "CORRECTION_DELETED");
 });
 }
 

@@ -170,6 +170,8 @@ export const shoppingPack = {
       ["shopping.purchase_choice"], "one"),
     relation("shopping.basket_contains_choice", ["shopping.purchase_choice"],
       ["shopping.purchase_choice"]),
+    relation("shopping.basket_supersedes_basket", ["shopping.purchase_choice"],
+      ["shopping.purchase_choice"], "one"),
     relation("shopping.choice_matches_ingredient", ["shopping.purchase_choice"],
       ["recipe.ingredient"], "one"),
     valueRelation("shopping.quantity", ["shopping.purchase_choice"],

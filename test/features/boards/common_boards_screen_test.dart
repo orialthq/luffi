@@ -186,6 +186,53 @@ final class FakeHealthIntentStore implements HealthScenarioIntentStore {
 
 final class FakeKernelClient implements CommonKernelClient {
   @override
+  Future<KernelJson> getEditableShoppingBasket(String activityId) async => {
+    'activityId': activityId,
+    'graphFingerprint': 'b' * 64,
+    'basket': {
+      'kind': 'basket',
+      'id': 'basket-a',
+      'lines': [
+        {
+          'ingredientId': 'tofu',
+          'name': '두부',
+          'choices': [
+            {
+              'id': 'choice-a',
+              'importId': 'tofu',
+              'quantity': 1,
+              'packageQuantity': {
+                'status': 'known',
+                'amount': 300,
+                'unit': 'g',
+              },
+            },
+          ],
+        },
+      ],
+    },
+    'recipeItems': [
+      {
+        'ingredientId': 'tofu',
+        'name': '두부',
+        'missingQuantity': {'status': 'known', 'amount': 500, 'unit': 'g'},
+      },
+    ],
+    'candidates': [
+      {
+        'importId': 'tofu',
+        'title': '두부',
+        'displayedPriceText': '2,400원',
+        'titleEvidenceIds': ['tofu-title'],
+        'details': <Object?>[],
+      },
+    ],
+  };
+
+  @override
+  Future<KernelJson> correctShoppingBasket(KernelJson request) async => request;
+
+  @override
   Future<KernelJson> getEditableShoppingChoice(String activityId) async => {
     'activityId': activityId,
     'graphFingerprint': 'c' * 64,
@@ -1284,6 +1331,28 @@ Future<void> _pump(WidgetTester tester, FakeKernelClient client) async {
 }
 
 void main() {
+  testWidgets('confirmed basket board opens graph correction', (tester) async {
+    final client = FakeKernelClient()..board['scenario'] = 'shopping';
+    (client.board['tasks'] as List).add({
+      'id': 'confirm_choice',
+      'executionStatus': 'completed',
+      'latestOutputRef': 'basket-result',
+    });
+    (client.board['results'] as List).add({
+      'id': 'basket-result',
+      'value': {
+        'choice': {'id': 'basket-a', 'kind': 'basket'},
+      },
+    });
+    await _pump(tester, client);
+    await tester.tap(
+      find.byKey(const Key('kernel-open-shopping-basket-correction')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('장보기 재료·상품 정정'), findsWidgets);
+    expect(find.text('장보기 묶음 수정'), findsOneWidget);
+  });
+
   testWidgets('confirmed single shopping board opens choice correction', (
     tester,
   ) async {

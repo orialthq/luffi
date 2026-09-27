@@ -503,11 +503,15 @@ final class ShoppingBasketDialog extends StatefulWidget {
     required this.candidates,
     required this.recipeItems,
     this.onOpenImport,
+    this.initialBasket,
+    this.allowEmpty = false,
     super.key,
   });
   final List<KernelJson> candidates;
   final List<KernelJson> recipeItems;
   final void Function(String importId)? onOpenImport;
+  final KernelJson? initialBasket;
+  final bool allowEmpty;
   @override
   State<ShoppingBasketDialog> createState() => _ShoppingBasketDialogState();
 }
@@ -515,6 +519,32 @@ final class ShoppingBasketDialog extends StatefulWidget {
 final class _ShoppingBasketDialogState extends State<ShoppingBasketDialog> {
   final _selections = <_BasketSelection>[];
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final rawLine in widget.initialBasket?['lines'] as List? ?? []) {
+      final line = Map<String, Object?>.from(rawLine as Map);
+      for (final rawChoice in line['choices'] as List? ?? []) {
+        final choice = Map<String, Object?>.from(rawChoice as Map);
+        final package = Map<String, Object?>.from(
+          choice['packageQuantity'] as Map,
+        );
+        final selection = _BasketSelection(line['ingredientId'] as String)
+          ..importId = choice['importId'] as String
+          ..quantity = choice['quantity'] as int
+          ..packageKnown = package['status'] == 'known'
+          ..packageEvidenceIds = (choice['packageEvidenceIds'] as List? ?? [])
+              .whereType<String>()
+              .toList();
+        if (package['status'] == 'known') {
+          selection.amount.text = '${package['amount']}';
+          selection.unit = package['unit'] as String;
+        }
+        _selections.add(selection);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -737,7 +767,7 @@ final class _ShoppingBasketDialogState extends State<ShoppingBasketDialog> {
       FilledButton(
         key: const Key('basket-confirm'),
         onPressed: () {
-          if (_selections.isEmpty) {
+          if (_selections.isEmpty && !widget.allowEmpty) {
             setState(() => _error = '상품을 하나 이상 선택해 주세요.');
             return;
           }

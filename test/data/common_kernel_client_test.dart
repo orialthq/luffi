@@ -5,6 +5,55 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/data/common_kernel_client.dart';
 
 void main() {
+  test('basket correction uses encoded activity and stable request', () async {
+    final paths = <String>[];
+    final bodies = <Map<String, dynamic>>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      paths.add('${request.method} ${request.uri}');
+      if (request.method == 'POST') {
+        bodies.add(
+          jsonDecode(await utf8.decoder.bind(request).join())
+              as Map<String, dynamic>,
+        );
+      } else {
+        await request.drain<void>();
+      }
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        request.method == 'GET'
+            ? '{"activityId":"shop/a","basket":{}}'
+            : '{"basketId":"basket-b"}',
+      );
+      await request.response.close();
+    });
+    final client = HttpCommonKernelClient(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      token: 'development-token',
+    );
+    expect(
+      (await client.getEditableShoppingBasket('shop/a'))['activityId'],
+      'shop/a',
+    );
+    final request = <String, Object?>{
+      'commandId': 'correct-basket',
+      'activityId': 'shop/a',
+      'expectedGraphFingerprint': 'b' * 64,
+      'selections': <Object?>[],
+      'confirmed': true,
+    };
+    expect(
+      (await client.correctShoppingBasket(request))['basketId'],
+      'basket-b',
+    );
+    expect(paths, [
+      'GET /v1/kernel/shopping/editable-basket/shop%2Fa',
+      'POST /v1/kernel/shopping/basket-corrections',
+    ]);
+    expect(bodies.single, request);
+  });
+
   test(
     'shopping correction reads encoded activity and posts stable choice',
     () async {

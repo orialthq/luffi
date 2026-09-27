@@ -17,6 +17,7 @@ import 'fashion_correction_screen.dart';
 import 'dining_correction_screen.dart';
 import 'life_tip_correction_screen.dart';
 import 'shopping_correction_screen.dart';
+import 'shopping_basket_correction_screen.dart';
 
 bool _connectionKindsVisible(KernelJson board) => const {
   'recipe',
@@ -2359,6 +2360,19 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openShoppingBasketEditor() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ShoppingBasketCorrectionScreen(
+          client: widget.client,
+          activityId: widget.activityId,
+          onOpenImport: widget.onOpenShoppingImport,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3927,6 +3941,26 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             onPressed: _busy || _needsRefresh ? null : _openShoppingEditor,
             icon: const Icon(Icons.edit_note_rounded),
             label: const Text('쇼핑 상품·수량 정정'),
+          ),
+        if (board['scenario'] == 'shopping' &&
+            _objects(board['tasks']).any((task) {
+              if (task['id'] != 'confirm_choice' ||
+                  task['executionStatus'] != 'completed') {
+                return false;
+              }
+              final result = _objects(board['results'])
+                  .where((item) => item['id'] == task['latestOutputRef'])
+                  .firstOrNull;
+              return _object(_object(result?['value'])['choice'])['kind'] ==
+                  'basket';
+            }))
+          OutlinedButton.icon(
+            key: const Key('kernel-open-shopping-basket-correction'),
+            onPressed: _busy || _needsRefresh
+                ? null
+                : _openShoppingBasketEditor,
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('장보기 재료·상품 정정'),
           ),
         if (board['scenario'] == 'beauty' &&
             _objects(board['tasks']).any(
