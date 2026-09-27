@@ -6286,6 +6286,10 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             }
             const variantId = `fashion:variant:${fingerprint([ownerId, productId,
               selection.color, selection.size]).slice(0, 32)}`;
+            if (items.some((item) => item.variantId === variantId)) {
+              throw new AppError("INVALID_REQUEST",
+                "같은 상품 옵션을 코디에 중복 넣을 수 없어요.", { httpStatus: 400 });
+            }
             if (!state.knowledge.entities.some((item) => item.ownerId === ownerId &&
                 item.id === variantId && item.status === "active")) {
               applyKnowledge(`variant:${role}`, "entity.create", { id: variantId,
@@ -10258,6 +10262,19 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             throw new AppError("UNCHANGED_PURCHASE_OUTCOME",
               "현재 구매 결과와 같아요.", { httpStatus: 400 });
           }
+          const originalChoice = board(state, activityId).results.find((item) =>
+            item.taskId === "confirm_choice")?.value?.choice;
+          if (previous.status !== "purchased" && input.status === "purchased" &&
+              state.knowledge.assertions.some((entry) => entry.ownerId === ownerId &&
+                entry.status === "active" && entry.scope?.id === activityId &&
+                ((entry.predicate === "shopping.choice_supersedes_choice" &&
+                  entry.objectEntityId === choiceId) ||
+                 (originalChoice?.kind === "basket" &&
+                  entry.predicate === "shopping.basket_supersedes_basket" &&
+                  entry.objectEntityId === originalChoice.id)))) {
+            throw new AppError("SHOPPING_CHOICE_CORRECTED",
+              "교체된 상품에 새 구매 결과를 기록할 수 없어요.", { httpStatus: 409 });
+          }
           if (previous.status === "purchased" && input.status !== "purchased" &&
               state.knowledge.assertions.some((entry) => entry.ownerId === ownerId &&
                 entry.status === "active" && entry.predicate ===
@@ -10266,11 +10283,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               "이 상품을 근거로 확인한 재고가 있어요. 재고 관측을 먼저 정리해 주세요.",
               { httpStatus: 409 });
           }
-          const original = board(state, activityId).results.find((item) =>
-            item.taskId === "confirm_choice")?.value?.choice;
-          const choice = original?.kind === "basket"
-            ? original.lines.flatMap((line) => line.choices).find((item) => item.id === choiceId)
-            : original;
+          const choice = originalChoice?.kind === "basket"
+            ? originalChoice.lines.flatMap((line) => line.choices).find((item) => item.id === choiceId)
+            : originalChoice;
           if (choice?.id !== choiceId || !state.knowledge.entities.some((item) =>
             item.ownerId === ownerId && item.id === choiceId &&
             item.type === "shopping.purchase_choice" && item.status === "active")) {

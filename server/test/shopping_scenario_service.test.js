@@ -316,6 +316,39 @@ test(`shopping correction blocks an old unreported choice from a new purchase re
     item.status === "active" && item.predicate === "shopping.purchase_for_choice").length, 0);
 });
 
+test(`an old not-purchased choice cannot become purchased after its replacement (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createShoppingScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-replacing-unbought" });
+  let board = await service.getBoard("shop-1");
+  await service.confirmShoppingChoice({ commandId: "choose-unbought",
+    activityId: "shop-1", expectedRevision: board.revision,
+    selectedImportId: "a_fabric_box", quantity: 1 });
+  board = await service.getBoard("shop-1");
+  const originalChoice = output(board, "confirm_choice").choice;
+  await service.recordShoppingPurchaseOutcome({ commandId: "report-unbought",
+    activityId: "shop-1", expectedRevision: board.revision,
+    status: "not_purchased" });
+  const beforeReplacement = await service.getShoppingPurchaseOutcomes("shop-1");
+  assert.equal(beforeReplacement.outcomes[0].status, "not_purchased");
+  const editable = await service.getEditableShoppingChoice("shop-1");
+  await service.correctShoppingChoice({ commandId: "replace-unbought",
+    activityId: "shop-1", expectedGraphFingerprint: editable.graphFingerprint,
+    selectedImportId: "b_clear_box", quantity: 1, confirmed: true });
+  const review = await service.getShoppingPurchaseOutcomes("shop-1");
+  await assert.rejects(service.correctShoppingPurchaseOutcome({
+    commandId: "late-purchase-of-old-choice", activityId: "shop-1",
+    expectedOutcomeFingerprint: review.fingerprint,
+    choiceId: originalChoice.id, status: "purchased", actualPaidKrw: 15900,
+  }), (error) => error.code === "SHOPPING_CHOICE_CORRECTED");
+  assert.deepEqual((await service.getShoppingPurchaseOutcomes("shop-1")).outcomes,
+    review.outcomes);
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "shopping.purchase_for_choice")
+    .length, 0);
+});
+
 test(`removing a corrected shopping capture also removes the dependent choice (${backend})`, async (t) => {
   const { service, store, imported } = await fixture(t, backend);
   const created = await service.createShoppingScenario(scenario);

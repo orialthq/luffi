@@ -370,4 +370,40 @@ test(`travel correction atomically changes stop order and times while preserving
   await assert.rejects(service.correctTravelItinerary(request),
     (error) => error.code === "CORRECTION_DELETED");
 });
+
+test(`reordering after a visit preserves the reported stop and requires a successor (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createTravelScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-visited-trip" });
+  let board = await service.getBoard("trip-1");
+  await service.confirmTravelItinerary({ commandId: "confirm-visited-trip",
+    activityId: "trip-1", expectedRevision: board.revision, selections });
+  board = await service.getBoard("trip-1");
+  const original = resultValue(board, "confirm_itinerary").itinerary;
+  await service.recordTravelStopOutcomes({ commandId: "report-visited-trip",
+    activityId: "trip-1", expectedRevision: board.revision,
+    stops: [{ stopId: original.stops[0].id, status: "visited" },
+      { stopId: original.stops[1].id, status: "unknown" }] });
+  const history = structuredClone((await service.getBoard("trip-1")).results);
+  const editable = await service.getEditableTravelItinerary("trip-1");
+  await service.correctTravelItinerary({ commandId: "reorder-visited-trip",
+    activityId: "trip-1", expectedGraphFingerprint: editable.graphFingerprint,
+    confirmed: true, stops: [
+      { id: editable.stops[1].id, plannedAt: "2026-09-28T11:00:00+09:00" },
+      { id: editable.stops[0].id, plannedAt: "2026-09-28T14:00:00+09:00" },
+    ] });
+  assert.deepEqual((await service.getBoard("trip-1")).results, history);
+  const visits = (await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "travel.visit_of_stop");
+  assert.deepEqual(visits.map((item) => item.objectEntityId),
+    [original.stops[0].id]);
+  const review = await service.getBoardReview("trip-1");
+  assert.equal(review.reasonCode, "STARTED_TASK_PROTECTED");
+  const current = await service.getBoard("trip-1");
+  const next = await service.createReviewSuccessor({ commandId: "continue-visited-trip",
+    activityId: "trip-1", expectedRevision: current.revision, confirmed: true });
+  assert.equal(next.continuedFrom, "trip-1");
+  assert.deepEqual((await service.getBoard("trip-1")).results, history);
+});
 }

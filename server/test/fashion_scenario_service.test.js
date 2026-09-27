@@ -316,6 +316,47 @@ test(`duplicate slots and unconfirmed wear cannot invent ownership or wearing ($
     item.status === "active").length, 0);
 });
 
+test(`two captures resolved to one product cannot duplicate a variant across outfit slots (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
+  const productId = `shared-fashion-product-${backend}`;
+  await service.knowledgeCommand({ commandId: "create-shared-fashion-product",
+    type: "entity.create", payload: { id: productId,
+      type: "core.product", label: "사용자가 같은 상품으로 확인" } });
+  const state = await store.snapshot();
+  for (const [name, imported] of Object.entries(imports)) {
+    const mention = state.knowledge.entityMentions.find((item) =>
+      item.sourceVersionId === imported.sourceVersionId &&
+      item.entityType === "core.product" && item.status === "active");
+    assert.ok(mention, name);
+    const decisionId = `shared-fashion-${name}`;
+    await service.knowledgeCommand({ commandId: `propose-${decisionId}`,
+      type: "identity.propose", payload: { id: decisionId,
+        mentionId: mention.id, entityId: productId,
+        evidenceIds: mention.evidenceIds,
+        reason: "사용자가 같은 상품으로 확인" } });
+    await service.knowledgeCommand({ commandId: `accept-${decisionId}`,
+      type: "identity.accept", payload: { decisionId, expectedRevision: 1 } });
+  }
+  const created = await service.createFashionScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-shared-fashion" });
+  const board = await service.getBoard("outfit-1");
+  const before = await store.snapshot();
+  await assert.rejects(service.confirmFashionOutfit({
+    commandId: "confirm-duplicate-variant", activityId: "outfit-1",
+    expectedRevision: board.revision,
+    selections: [{ ...selections[0], color: "검정", size: "M" },
+      { ...selections[1], color: "검정", size: "M" }],
+  }), (error) => error.code === "INVALID_REQUEST");
+  assert.deepEqual(await store.snapshot(), before);
+  await service.confirmFashionOutfit({ commandId: "confirm-distinct-variants",
+    activityId: "outfit-1", expectedRevision: board.revision,
+    selections: [{ ...selections[0], color: "검정", size: "M" },
+      { ...selections[1], color: "검정", size: "L" }] });
+  const outfit = (await service.getEditableFashionOutfit("outfit-1")).items;
+  assert.equal(new Set(outfit.map((item) => item.variantId)).size, 2);
+});
+
 test(`corrected product title produces a reviewed fashion patch (${backend})`, async (t) => {
   const { service, store, imports } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);
