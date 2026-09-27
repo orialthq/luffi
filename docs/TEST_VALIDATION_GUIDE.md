@@ -63,7 +63,7 @@
 | 지식 그래프·검색 | 등록된 관계만 저장, 출처·소유자·활동 범위 분리, 동명이인·동명 상품 자동 병합 방지, 충돌·시간·철회·독립 근거 처리, 실제 근거가 있는 관계만 탐색 | [그래프](../server/test/knowledge_kernel.test.js), [검색](../server/test/retrieval_graph.test.js) |
 | 계획·TaskBoard | 작업 의존성·입출력 검사, 계획 승인 전 실행 차단, 보드 revision·명령 재전송, 완료 결과 불변, 소비한 입력 고정, 근거 변경 시 오래된 계획 승인·실행 거부 | [작업 커널](../server/test/activities_kernel.test.js), [통합](../server/test/common_kernel_integration.test.js), [회귀](../server/test/common_kernel_regressions.test.js) |
 | 정정·복구 | 원본 분석과 완료 결과는 보존하고 현재 관계를 새 근거로 갱신. 시작 전 계획은 재검토하고 이미 시작한 작업은 무단 재바인딩하지 않음 | [필드 정정](../server/test/imported_field_correction.test.js), [계획 복구](../server/test/imported_field_review.test.js), 분야별 정정 테스트 |
-| 저장·원자성 | JSON의 재시작·실패 복구, 관계형 그래프 행·외래키·트랜잭션 롤백, 실제 PostgreSQL의 마이그레이션·동시 쓰기 | [JSON](../server/test/json_state_store.test.js), [관계형](../server/test/postgres_relational_store.test.js), [실제 DB 선택 테스트](../server/test/postgres_real_integration.test.js) |
+| 저장·원자성 | JSON의 재시작·실패 복구, 관계형 그래프 행·외래키·트랜잭션 롤백, 실제 PostgreSQL의 마이그레이션·동시 쓰기와 레시피↔쇼핑 연결의 재시작·삭제 격리 | [JSON](../server/test/json_state_store.test.js), [관계형](../server/test/postgres_relational_store.test.js), [실제 DB 선택 테스트](../server/test/postgres_real_integration.test.js) |
 
 ## 분야를 연결했을 때
 
@@ -83,10 +83,11 @@
 | 서버 회귀 | 저장소 루트에서 `npm test --prefix server` | 분석 형식, 가져오기, 근거 그래프, 계획·보드, 분야별 결과·정정·삭제. JSON과 PGlite 기반 관계형 저장소를 포함. 기본 실행은 유료 모델을 호출하지 않음 |
 | 특정 흐름 | `cd server && node --test test/scenario_variations.test.js` 또는 해당 표의 테스트 파일 | 변경한 시나리오를 빠르게 재확인. 통합 이미지 HTTP 테스트는 `node --test test/recipe_image_e2e.test.js test/cross_domain_image_pipeline.test.js test/wellbeing_image_pipeline.test.js` |
 | 새 모델 응답 | 터미널 1: `cd server && npm run dev`; 터미널 2: `cd server && npm run test:scenario-variations-live` 등 `package.json`의 `test:*image-live` | 합성 PNG를 **현재 모델**에 다시 보내 분류·값·근거를 확인. 출력 변동을 발견하는 회귀 검사이며 기본 테스트의 고정 응답을 자동 갱신하지 않음. `--record`는 새 응답을 사람이 검토한 뒤에만 사용 |
-| 실제 PostgreSQL | 테스트 전용 DB의 `LUFFI_TEST_POSTGRES_URL`을 지정하고 `npm run test:postgres-real --prefix server` | 실제 드라이버·마이그레이션·동시 쓰기·FK 실패 롤백·재시작 조회. 환경 변수가 없으면 기본 서버 테스트에서 이 **1개 선택 테스트는 건너뜀**. PGlite 통과와 실제 DB 통과를 혼동하지 말 것 |
+| 실제 PostgreSQL | 테스트 전용 DB의 `LUFFI_TEST_POSTGRES_URL`을 지정하고 `npm run test:postgres-real --prefix server` | 실제 드라이버·마이그레이션·동시 쓰기·FK 실패 롤백·재시작 조회 및 레시피↔쇼핑의 삭제 격리. 환경 변수가 없으면 기본 서버 테스트에서 이 **2개 선택 테스트는 건너뜀**. PGlite 통과와 실제 DB 통과를 혼동하지 말 것 |
 | Flutter | 저장소 루트에서 `flutter analyze --fatal-infos`와 `flutter test` | 앱 상태·서버 클라이언트·보드/정정 화면의 별도 테스트. 이 명령만으로 실제 Android 공유 시트, 기기 카메라, 운영 서버와의 전체 경로가 검증되지는 않음 |
+| 자동 검사 | [서버 워크플로](../.github/workflows/server.yml)와 [Flutter 워크플로](../.github/workflows/flutter.yml) | `dev`·`main` 푸시와 PR에서 서버 전체 테스트(실제 PostgreSQL 서비스 포함) 및 Flutter 분석·테스트·Android 디버그 빌드를 실행하도록 설정. 로컬 통과와 CI 통과는 각각 확인해야 함 |
 
-마지막 서버 전체 실행 기록(2026-09-27, `e5abdee`): **571개 중 통과 570, 실패 0, 실제 PostgreSQL 선택 테스트 1개 건너뜀**. 이 숫자는 당시 코드 기준이며 이후 테스트가 추가되면 바뀐다. 같은 시점에 변형 시나리오 이미지 5장, 뷰티 2장, 건강 1장, 생활 꿀팁 1장, 맛집 4장을 실제 분석 API로 재확인했다. 이는 합성 이미지의 특정 사례 결과이지 일반 SNS 이미지 전체의 정확도 수치는 아니다.
+마지막 전체 실행 기록(2026-09-27): 테스트 전용 **실제 PostgreSQL을 연결한 서버 572/572 통과, 건너뜀 0**, Flutter 정적 분석 오류 0, Flutter 테스트 **507개 통과**. 두 실제 PostgreSQL 사례는 각각 마이그레이션·동시 쓰기·롤백·패션 정정과, 이미지 기반 레시피↔쇼핑 연결의 재시작·출처 삭제 격리를 확인한다. 이 숫자는 당시 코드 기준이며 이후 테스트가 추가되면 바뀐다. 이미지 모델은 이전 검증에서 변형 시나리오 이미지 5장, 뷰티 2장, 건강 1장, 생활 꿀팁 1장, 맛집 4장을 실제 분석 API로 재확인했다. 이는 합성 이미지의 특정 사례 결과이지 일반 SNS 이미지 전체의 정확도 수치는 아니다.
 
 아직 이 결과만으로 확인했다고 말할 수 없는 범위도 있다. 실제 SNS 캡처 전반의 추출 정확도, 휴대폰에서 공유→사용자 조작→서버까지의 전 과정, 운영 DB의 부하·백업 복원·무중단 배포, 실제 구매·예약·방문이나 건강 효과의 외부 검증이다. 새 분야나 현실 데이터를 추가할 때는 이 범위를 별도 검증 계획으로 잡아야 한다.
 
