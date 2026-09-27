@@ -589,6 +589,50 @@ void main() {
   });
 
   test(
+    'board provenance excludes imports absent from the current server',
+    () async {
+      final store = InMemoryAppSnapshotStore();
+      final importer = _RecordingReviewedImportClient();
+      final controller = _reviewedController(store, importer);
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      final firstId = controller.addManualInput('두부조림 레시피');
+      final secondId = controller.addManualInput('달걀 요리 레시피');
+      await controller.confirmStructured(firstId);
+      await controller.confirmStructured(secondId);
+      await _waitUntil(
+        () => controller.allSyncedReviewedCaptureImports.length == 2,
+      );
+      final local = controller.allSyncedReviewedCaptureImports;
+      importer.serverStatuses[local.first.importId] = 'missing';
+      expect(
+        (await controller.verifiedReviewedCaptureImports()).map(
+          (item) => item.importId,
+        ),
+        [local.last.importId],
+      );
+      importer.serverStatuses[local.first.importId] = 'deleted';
+      expect(
+        (await controller.verifiedReviewedCaptureImports()).map(
+          (item) => item.importId,
+        ),
+        [local.last.importId],
+      );
+      importer.serverStatuses[local.first.importId] = 'active';
+      importer.serverSourceIds[local.first.importId] =
+          'source-from-another-server';
+      expect(
+        (await controller.verifiedReviewedCaptureImports()).map(
+          (item) => item.importId,
+        ),
+        [local.last.importId],
+      );
+      expect(controller.allSyncedReviewedCaptureImports, hasLength(2));
+      expect(importer.requests, hasLength(2));
+    },
+  );
+
+  test(
     'historical import keeps its request through an offline restart',
     () async {
       final snapshotStore = InMemoryAppSnapshotStore();
@@ -1739,6 +1783,22 @@ final class _RecordingReviewedImportClient
   bool failRequests = false;
   bool failDeletions = false;
   int finishedCalls = 0;
+  final Map<String, String> serverStatuses = {};
+  final Map<String, String> serverSourceIds = {};
+
+  @override
+  Future<List<ReviewedCaptureServerStatus>> checkReviewedImports(
+    List<String> importIds,
+  ) async => [
+    for (final importId in importIds)
+      ReviewedCaptureServerStatus(
+        importId: importId,
+        status: serverStatuses[importId] ?? 'active',
+        sourceId: (serverStatuses[importId] ?? 'active') == 'active'
+            ? serverSourceIds[importId] ?? 'source-test'
+            : null,
+      ),
+  ];
 
   @override
   Future<void> deleteReviewedImport({

@@ -44,10 +44,15 @@ void main() {
             importId: 'a',
             title: '패브릭 수납함',
             displayedPriceText: '12,900원',
+            sourceDescription: 'Google Photos · 2026-09-27 08:00',
           ),
         ],
       ),
       (value) => result = value,
+    );
+    expect(
+      find.text('캡처 표시 12,900원 · Google Photos · 2026-09-27 08:00'),
+      findsOneWidget,
     );
     await tester.tap(find.byKey(const Key('shopping-create-submit')));
     await tester.pumpAndSettle();

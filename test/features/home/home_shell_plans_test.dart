@@ -738,6 +738,18 @@ final class _HistoricalImportClient implements ReviewedCaptureImportClient {
   final List<Map<String, Object?>> requests = [];
 
   @override
+  Future<List<ReviewedCaptureServerStatus>> checkReviewedImports(
+    List<String> importIds,
+  ) async => [
+    for (final importId in importIds)
+      ReviewedCaptureServerStatus(
+        importId: importId,
+        status: 'active',
+        sourceId: 'source-historical-test',
+      ),
+  ];
+
+  @override
   Future<ReviewedCaptureImportReceipt> importReviewedCapture(
     Map<String, Object?> request,
   ) async {

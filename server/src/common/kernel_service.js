@@ -5369,6 +5369,33 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         });
       } catch (error) { throw toHttpError(error); }
     },
+    async checkReviewedCaptureImports(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => key !== "importIds") ||
+            !Array.isArray(input.importIds) || input.importIds.length < 1 ||
+            input.importIds.length > 100) {
+          throw new AppError("INVALID_REQUEST", "가져오기 확인 범위가 올바르지 않아요.", { httpStatus: 400 });
+        }
+        const ids = input.importIds.map((id) => safeId(id, "importId"));
+        if (new Set(ids).size !== ids.length) {
+          throw new AppError("INVALID_REQUEST", "중복된 가져오기 ID가 있어요.", { httpStatus: 400 });
+        }
+        return await read((state) => ({ imports: ids.map((importId) => {
+          const receipt = state.importReceipts[importId];
+          if (receipt?.ownerId !== ownerId) return { importId, status: "missing" };
+          if (receipt.deleted) return { importId, status: "deleted" };
+          const source = state.knowledge.sources.find((item) =>
+            item.ownerId === ownerId && item.id === receipt.sourceId && item.status === "active");
+          const version = state.knowledge.sourceVersions.find((item) =>
+            item.ownerId === ownerId && item.id === receipt.sourceVersionId &&
+            item.sourceId === receipt.sourceId && item.status === "active");
+          return source && version
+            ? { importId, status: "active", sourceId: receipt.sourceId }
+            : { importId, status: "deleted" };
+        }) }));
+      } catch (error) { throw toHttpError(error); }
+    },
     async deleteReviewedCapture(raw) {
       try {
         const input = requestObject(raw);

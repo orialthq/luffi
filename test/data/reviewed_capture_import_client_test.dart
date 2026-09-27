@@ -18,7 +18,16 @@ void main() {
         body: body,
       ));
       request.response.headers.contentType = ContentType.json;
-      if (request.uri.path.endsWith('/delete')) {
+      if (request.uri.path.endsWith('/status')) {
+        request.response.write(
+          jsonEncode({
+            'imports': [
+              for (final id in body['importIds'] as List)
+                {'importId': id, 'status': 'active', 'sourceId': 'source-http'},
+            ],
+          }),
+        );
+      } else if (request.uri.path.endsWith('/delete')) {
         request.response.write(jsonEncode({'importId': body['importId']}));
       } else {
         request.response.write(
@@ -47,6 +56,8 @@ void main() {
 
     final receipt = await client.importReviewedCapture(fixture);
     expect(receipt.sourceId, 'source-http');
+    final statuses = await client.checkReviewedImports([receipt.importId]);
+    expect(statuses.single.sourceId, receipt.sourceId);
     await client.deleteReviewedImport(
       importId: receipt.importId,
       commandId: 'reviewed-source-delete:${receipt.importId}',
@@ -54,6 +65,7 @@ void main() {
 
     expect(received.map((item) => item.path), [
       '/v1/kernel/ingestion/reviewed-capture',
+      '/v1/kernel/ingestion/reviewed-capture/status',
       '/v1/kernel/ingestion/reviewed-capture/delete',
     ]);
     expect(

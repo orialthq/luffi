@@ -456,6 +456,7 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/knowledge/context", "createContext"],
     ["/knowledge/watch", "watchContext"],
     ["/ingestion/reviewed-capture", "importReviewedCapture"],
+    ["/ingestion/reviewed-capture/status", "checkReviewedCaptureImports"],
     ["/ingestion/field-reviews", "reviewImportedField"],
     ["/ingestion/field-corrections", "correctImportedField"],
     ["/ingestion/reviewed-capture/delete", "deleteReviewedCapture"],

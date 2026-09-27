@@ -75,6 +75,7 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/knowledge/context": "createContext",
   "/knowledge/watch": "watchContext",
   "/ingestion/reviewed-capture": "importReviewedCapture",
+  "/ingestion/reviewed-capture/status": "checkReviewedCaptureImports",
   "/ingestion/reviewed-capture/delete": "deleteReviewedCapture",
   "/ingestion/field-reviews": "reviewImportedField",
   "/ingestion/field-corrections": "correctImportedField",

@@ -228,6 +228,42 @@ final class AppController extends ChangeNotifier {
             imported,
       ]);
 
+  /// A local receipt is only a past acknowledgement. Check the current server
+  /// before offering it as provenance for a new board; never re-import here.
+  Future<List<ReviewedCaptureImportSummary>>
+  verifiedReviewedCaptureImports() async {
+    final client = _reviewedCaptureImportClient;
+    if (client == null) return const [];
+    final local = allSyncedReviewedCaptureImports;
+    final verified = <ReviewedCaptureImportSummary>[];
+    for (var offset = 0; offset < local.length; offset += 100) {
+      final chunk = local.skip(offset).take(100).toList();
+      final statuses = await client.checkReviewedImports([
+        for (final item in chunk) item.importId,
+      ]);
+      if (statuses.length != chunk.length) {
+        throw const ReviewedCaptureImportException(
+          'INVALID_RESPONSE',
+          'Reviewed import status response was incomplete.',
+        );
+      }
+      for (var index = 0; index < chunk.length; index++) {
+        final status = statuses[index];
+        final item = chunk[index];
+        if (status.importId != item.importId) {
+          throw const ReviewedCaptureImportException(
+            'INVALID_RESPONSE',
+            'Reviewed import status response did not match the request.',
+          );
+        }
+        if (status.status == 'active' && status.sourceId == item.sourceId) {
+          verified.add(item);
+        }
+      }
+    }
+    return List.unmodifiable(verified);
+  }
+
   static String _reviewedImportTitle(Map<String, Object?> request) {
     final analysis = request['analysis'];
     final title = analysis is Map ? analysis['title'] : null;

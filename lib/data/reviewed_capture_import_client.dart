@@ -87,7 +87,23 @@ final class ReviewedCaptureImportReceipt {
   final bool replayed;
 }
 
+final class ReviewedCaptureServerStatus {
+  const ReviewedCaptureServerStatus({
+    required this.importId,
+    required this.status,
+    this.sourceId,
+  });
+
+  final String importId;
+  final String status;
+  final String? sourceId;
+}
+
 abstract interface class ReviewedCaptureImportClient {
+  Future<List<ReviewedCaptureServerStatus>> checkReviewedImports(
+    List<String> importIds,
+  );
+
   Future<ReviewedCaptureImportReceipt> importReviewedCapture(
     Map<String, Object?> request,
   );
@@ -120,6 +136,55 @@ final class HttpReviewedCaptureImportClient
   final String? baseUrl;
   final String token;
   final Duration timeout;
+
+  @override
+  Future<List<ReviewedCaptureServerStatus>> checkReviewedImports(
+    List<String> importIds,
+  ) async {
+    if (importIds.isEmpty ||
+        importIds.length > 100 ||
+        importIds.toSet().length != importIds.length) {
+      throw const ReviewedCaptureImportException(
+        'INVALID_REQUEST',
+        'Reviewed import status requires 1–100 distinct IDs.',
+      );
+    }
+    final decoded = await _postJson(
+      '/v1/kernel/ingestion/reviewed-capture/status',
+      {'importIds': importIds},
+    );
+    final raw = decoded['imports'];
+    if (raw is! List || raw.length != importIds.length) {
+      throw const ReviewedCaptureImportException(
+        'INVALID_RESPONSE',
+        'Reviewed import status response was incomplete.',
+      );
+    }
+    final statuses = <ReviewedCaptureServerStatus>[];
+    for (var index = 0; index < raw.length; index++) {
+      final item = raw[index];
+      if (item is! Map ||
+          item['importId'] != importIds[index] ||
+          !const {'active', 'deleted', 'missing'}.contains(item['status']) ||
+          (item['status'] == 'active' &&
+              (item['sourceId'] is! String ||
+                  (item['sourceId'] as String).isEmpty)) ||
+          (item['status'] != 'active' && item['sourceId'] != null)) {
+        throw const ReviewedCaptureImportException(
+          'INVALID_RESPONSE',
+          'Reviewed import status response did not match the request.',
+        );
+      }
+      statuses.add(
+        ReviewedCaptureServerStatus(
+          importId: importIds[index],
+          status: item['status'] as String,
+          sourceId: item['sourceId'] as String?,
+        ),
+      );
+    }
+    return statuses;
+  }
 
   @override
   Future<ReviewedCaptureImportReceipt> importReviewedCapture(

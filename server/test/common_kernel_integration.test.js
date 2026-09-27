@@ -13,8 +13,8 @@ async function fixture(t) {
   const root = await fs.mkdtemp(join(tmpdir(), "luffi-kernel-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const filePath = join(root, "state.json");
-  const make = () => createCommonKernelService({
-    ownerId: "person-1",
+  const make = (ownerId = "person-1") => createCommonKernelService({
+    ownerId,
     store: createJsonStateStore({ filePath, initialState: createCommonKernelState }),
   });
   return { service: make(), make };
@@ -172,6 +172,31 @@ test("reviewed legacy capture imports atomically without claiming an uploaded or
     analysis: makeValidAnalysis({ summary: "changed after review" }) }),
     (error) => error.code === "INGESTION_IMPORT_CONFLICT");
   assert.equal((await restored.queryKnowledge({ subjectId: first.materialId })).length, facts.length);
+});
+
+test("reviewed import status checks current owner, server state, and deletion without replaying", async (t) => {
+  const { service, make } = await fixture(t);
+  const input = { importId: "status-active", reviewed: true,
+    reviewedAt: "2026-09-25T11:00:00Z",
+    capture: { id: "status-capture", asset: { status: "unavailable" } },
+    analysis: makeValidAnalysis() };
+  const imported = await service.importReviewedCapture(input);
+  const request = { importIds: ["status-active", "status-absent"] };
+  assert.deepEqual(await service.checkReviewedCaptureImports(request), { imports: [
+    { importId: "status-active", status: "active", sourceId: imported.sourceId },
+    { importId: "status-absent", status: "missing" },
+  ] });
+  assert.deepEqual(await make("other-user").checkReviewedCaptureImports(request), { imports: [
+    { importId: "status-active", status: "missing" },
+    { importId: "status-absent", status: "missing" },
+  ] });
+  await service.deleteReviewedCapture({ importId: "status-active", commandId: "status-delete" });
+  assert.deepEqual(await make().checkReviewedCaptureImports(request), { imports: [
+    { importId: "status-active", status: "deleted" },
+    { importId: "status-absent", status: "missing" },
+  ] });
+  await assert.rejects(service.checkReviewedCaptureImports({ importIds: ["x", "x"] }),
+    (error) => error.code === "INVALID_REQUEST");
 });
 
 test("task results cannot cite evidence outside the authenticated knowledge graph", async (t) => {

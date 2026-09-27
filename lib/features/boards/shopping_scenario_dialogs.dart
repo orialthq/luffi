@@ -22,17 +22,20 @@ final class ShoppingImportOption {
     required this.title,
     this.displayedPriceText,
     this.priceFacts = const [],
+    this.sourceDescription,
   });
   final String importId;
   final String title;
   final String? displayedPriceText;
   final List<ShoppingPriceFact> priceFacts;
+  final String? sourceDescription;
 }
 
 ShoppingImportOption? shoppingImportOptionForAnalysis(
   String importId,
-  StructuredContentAnalysis analysis,
-) {
+  StructuredContentAnalysis analysis, {
+  String? sourceDescription,
+}) {
   if (analysis.contentKind != ContentKind.commerceProduct ||
       analysis.completeness != StructuredCompleteness.complete ||
       analysis.title.status != ObservedStatus.observed ||
@@ -72,6 +75,7 @@ ShoppingImportOption? shoppingImportOptionForAnalysis(
     priceFacts: prices.length > 1 || prices.single.label != '가격'
         ? prices
         : const [],
+    sourceDescription: sourceDescription,
   );
 }
 
@@ -124,9 +128,12 @@ final class _ShoppingScenarioDialogState extends State<ShoppingScenarioDialog> {
                 value: _selected.contains(option.importId),
                 title: Text(option.title),
                 subtitle: Text(
-                  option.priceFacts.isEmpty
-                      ? '캡처 표시 ${option.displayedPriceText}'
-                      : '가격 문구 확인 필요',
+                  (option.priceFacts.isEmpty
+                          ? '캡처 표시 ${option.displayedPriceText}'
+                          : '가격 문구 확인 필요') +
+                      (option.sourceDescription == null
+                          ? ''
+                          : ' · ${option.sourceDescription}'),
                 ),
                 onChanged: (checked) => setState(() {
                   if (checked == true) {
