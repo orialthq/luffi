@@ -51,6 +51,30 @@ const resultValue = (board, taskId) => {
 };
 
 for (const backend of ["json", "postgres"]) {
+test(`deleting a travel correction removes the dependent itinerary activity (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createTravelScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-delete-correction" });
+  const board = await service.getBoard("trip-1");
+  await service.confirmTravelItinerary({ commandId: "confirm-delete-correction",
+    activityId: "trip-1", expectedRevision: board.revision, selections });
+  const editable = await service.getEditableTravelItinerary("trip-1");
+  const request = { commandId: "correct-before-delete", activityId: "trip-1",
+    expectedGraphFingerprint: editable.graphFingerprint, confirmed: true,
+    stops: editable.stops.map((item, index) => ({ id: item.id,
+      plannedAt: index === 0 ? "2026-09-28T11:00:00+09:00" : item.plannedAt })) };
+  const correction = await service.correctTravelItinerary(request);
+  await service.knowledgeCommand({ commandId: "delete-travel-correction",
+    type: "source.delete", payload: { sourceId: correction.sourceId } });
+  await assert.rejects(service.getBoard("trip-1"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctTravelItinerary(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate?.startsWith("travel.") &&
+    item.scope?.id === "trip-1").length, 0);
+});
+
 test(`real travel image analyses become an ordered day plan and visited-stop evidence (${backend})`, async (t) => {
   const { service, store, reopenStore } = await fixture(t, backend);
   const created = await service.createTravelScenario(scenario);

@@ -55,6 +55,28 @@ async function fixture(t, backend = "json") {
 }
 
 for (const backend of ["json", "postgres"]) {
+test(`deleting a recipe correction removes its superseded confirmation activity (${backend})`, async (t) => {
+  const { service, store, created } = await fixture(t, backend);
+  const editable = await service.getEditableRecipe("cook-recipe");
+  const request = { commandId: "correct-before-direct-delete", activityId: "cook-recipe",
+    expectedAssertionId: editable.assertionId, confirmed: true,
+    recipe: { title: "새 토마토 달걀 볶음", baseServings: editable.recipe.baseServings,
+      ingredients: editable.recipe.ingredients, steps: editable.recipe.steps } };
+  const correction = await service.correctRecipe(request);
+  await service.knowledgeCommand({ commandId: "delete-recipe-correction",
+    type: "source.delete", payload: { sourceId: correction.sourceId } });
+  await assert.rejects(service.getBoard("cook-recipe"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctRecipe(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  const snapshot = await store.snapshot();
+  assert.equal(snapshot.knowledge.sources.find((item) =>
+    item.id === created.confirmationSourceId).status, "deleted");
+  assert.equal(snapshot.knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate?.startsWith("recipe.") &&
+    item.scope?.id === "cook-recipe").length, 0);
+});
+
 test(`one correction atomically replaces ingredients, quantities and ordered step relations (${backend})`, async (t) => {
   const { service, store, created, original } = await fixture(t, backend);
   await service.acceptProposal({ proposalId: created.proposalId, commandId: "accept-original" });

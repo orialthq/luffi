@@ -46,6 +46,30 @@ const selections = [
 ];
 
 for (const backend of ["json", "postgres"]) {
+test(`deleting a fashion correction also removes its now incomplete activity (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createFashionScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-delete-correction" });
+  const board = await service.getBoard("outfit-1");
+  await service.confirmFashionOutfit({ commandId: "confirm-delete-correction",
+    activityId: "outfit-1", expectedRevision: board.revision, selections });
+  const editable = await service.getEditableFashionOutfit("outfit-1");
+  const request = { commandId: "correct-before-delete", activityId: "outfit-1",
+    expectedGraphFingerprint: editable.graphFingerprint, confirmed: true,
+    items: editable.items.map((item, index) => ({ variantId: item.variantId,
+      slot: item.slot, ownership: index === 0 ? "owned" : item.ownership })) };
+  const correction = await service.correctFashionOutfit(request);
+  await service.knowledgeCommand({ commandId: "delete-fashion-correction",
+    type: "source.delete", payload: { sourceId: correction.sourceId } });
+  await assert.rejects(service.getBoard("outfit-1"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctFashionOutfit(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate?.startsWith("fashion.") &&
+    item.scope?.id === "outfit-1").length, 0);
+});
+
 test(`fashion correction upgrades an older outfit without slot assertions (${backend})`, async (t) => {
   const { service, store } = await fixture(t, backend);
   const created = await service.createFashionScenario(scenario);

@@ -72,6 +72,31 @@ const resultValue = (board, taskId) => {
 };
 
 for (const backend of ["json", "postgres"]) {
+test(`deleting a beauty correction removes the dependent routine activity (${backend})`, async (t) => {
+  const { service, store } = await fixture(t, backend);
+  const created = await service.createBeautyScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId, commandId: "approve-delete-correction" });
+  const board = await service.getBoard("beauty-1");
+  await service.confirmBeautyRoutine({ commandId: "confirm-delete-correction",
+    activityId: "beauty-1", expectedRevision: board.revision, selections });
+  const editable = await service.getEditableBeautyRoutine("beauty-1");
+  const request = { commandId: "correct-before-delete", activityId: "beauty-1",
+    expectedGraphFingerprint: editable.graphFingerprint, confirmed: true,
+    steps: editable.steps.map((item, index) => ({ id: item.id,
+      title: index === 0 ? "크림 충분히 바르기" : item.title,
+      variantId: item.variantId })) };
+  const correction = await service.correctBeautyRoutine(request);
+  await service.knowledgeCommand({ commandId: "delete-beauty-correction",
+    type: "source.delete", payload: { sourceId: correction.sourceId } });
+  await assert.rejects(service.getBoard("beauty-1"),
+    (error) => error.code === "NOT_FOUND");
+  await assert.rejects(service.correctBeautyRoutine(request),
+    (error) => error.code === "CORRECTION_DELETED");
+  assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate?.startsWith("beauty.") &&
+    item.scope?.id === "beauty-1").length, 0);
+});
+
 test(`real beauty image analyses become an approved, ordered routine and an explicit use report (${backend})`, async (t) => {
   const { service, store, reopenStore } = await fixture(t, backend);
   const created = await service.createBeautyScenario(scenario);

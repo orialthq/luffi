@@ -1434,6 +1434,22 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       purgeIssuedContextsFromSource(state, sourceId);
       redactHealthScenario(state, sourceId);
     }
+    // A correction supersedes the old assertions. Deleting its evidence cannot
+    // reactivate those assertions, so remove the dependent confirmation instead
+    // of leaving an activity backed by a partial graph.
+    if (["recipe_correction", "fashion_correction", "beauty_correction",
+      "travel_correction"].includes(source?.provenance?.scenario) &&
+      source.provenance.confirmationSourceId) {
+      const confirmationId = source.provenance.confirmationSourceId;
+      const confirmation = sourceDeletionContext(state, confirmationId);
+      if (confirmation.source) {
+        state.knowledge = applyKnowledgeCommand(state.knowledge, {
+          ownerId, commandId: `kernel:correction-parent-cascade:${source.id}`,
+          type: "source.delete", payload: { sourceId: confirmationId },
+        }, { predicates }).state;
+        finishSourceDeletion(state, confirmation);
+      }
+    }
   }
 
   function issueContext(state, request) {
