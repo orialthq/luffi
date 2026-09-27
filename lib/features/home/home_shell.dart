@@ -124,6 +124,7 @@ final class _HomeShellState extends State<HomeShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     unawaited(widget.controller.refreshBatchAnalysis());
+    unawaited(widget.controller.retryPendingReviewedCaptureImports());
     final controller = widget.planController;
     if (controller == null) return;
     if (controller.isInitialized) {
@@ -513,6 +514,21 @@ final class _HomeShellState extends State<HomeShell>
     );
   }
 
+  Future<void> _retryPendingReviewedImports() async {
+    if (!widget.controller.canRetryReviewedCaptureImports) {
+      _showMessage('서버 동기화 설정이 없어요. 개발 빌드 연결을 확인해 주세요.');
+      return;
+    }
+    await widget.controller.retryPendingReviewedCaptureImports();
+    if (!mounted) return;
+    final remaining = widget.controller.pendingReviewedCaptureImportCount;
+    _showMessage(
+      remaining == 0
+          ? '서버 자료 동기화를 완료했어요.'
+          : '서버 자료 동기화 대기 $remaining건이 남아 있어요. 연결을 확인하고 다시 시도해 주세요.',
+    );
+  }
+
   /// The 콘텐츠 list, pushed rather than switched to.
   ///
   /// It stopped being a tab; this is the door home opens for it.
@@ -562,34 +578,40 @@ final class _HomeShellState extends State<HomeShell>
 
   void _listenForIncomingCaptures() {
     _incomingCaptureSubscription = widget.controller.incomingCaptureAdded
-        .listen((batch) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) {
-              return;
-            }
-            setState(() {
-              // 콘텐츠 is no longer a tab. Home is where a just-arrived
-              // capture is announced, and its top action opens the list.
-              _tab = _HomeTab.home;
-              _incomingCaptureBatch = batch;
-              _exitArmed = false;
-              _canReturnToSourceApp = true;
-              _returningToSourceApp = false;
-            });
-            _exitConfirmationTimer?.cancel();
-            Navigator.of(context).popUntil((route) => route.isFirst);
-            // External image shares can each own a deletable gallery source.
-            // Keep those decisions item-by-item even though navigation and the
-            // arrival banner are deliberately coalesced for this transaction.
-            for (final captureId in batch.captureIds) {
-              if (widget.controller.canDeleteSharedSource(captureId)) {
-                _sourceChoiceTail = _sourceChoiceTail.then(
-                  (_) => _showSourceChoice(captureId),
-                );
-              }
-            }
-          });
-        });
+        .listen(_announceIncomingCaptureBatch);
+    final missedBatch = widget.controller.takeUnannouncedIncomingCaptureBatch();
+    if (missedBatch != null) {
+      _announceIncomingCaptureBatch(missedBatch);
+    }
+  }
+
+  void _announceIncomingCaptureBatch(IncomingCaptureBatch batch) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        // 콘텐츠 is no longer a tab. Home is where a just-arrived
+        // capture is announced, and its top action opens the list.
+        _tab = _HomeTab.home;
+        _incomingCaptureBatch = batch;
+        _exitArmed = false;
+        _canReturnToSourceApp = true;
+        _returningToSourceApp = false;
+      });
+      _exitConfirmationTimer?.cancel();
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      // External image shares can each own a deletable gallery source.
+      // Keep those decisions item-by-item even though navigation and the
+      // arrival banner are deliberately coalesced for this transaction.
+      for (final captureId in batch.captureIds) {
+        if (widget.controller.canDeleteSharedSource(captureId)) {
+          _sourceChoiceTail = _sourceChoiceTail.then(
+            (_) => _showSourceChoice(captureId),
+          );
+        }
+      }
+    });
   }
 
   Future<void> _showSourceChoice(String captureId) async {
@@ -966,6 +988,9 @@ final class _HomeShellState extends State<HomeShell>
               pendingSourceDeletionCount:
                   widget.controller.pendingReviewedSourceDeletionCount,
               onRetrySourceDeletions: _retryPendingSourceDeletions,
+              pendingReviewedImportCount:
+                  widget.controller.pendingReviewedCaptureImportCount,
+              onRetryReviewedImports: _retryPendingReviewedImports,
             ),
           ),
           body: Stack(
@@ -1679,6 +1704,8 @@ final class _HomeDrawer extends StatelessWidget {
     required this.onClearContents,
     required this.pendingSourceDeletionCount,
     required this.onRetrySourceDeletions,
+    required this.pendingReviewedImportCount,
+    required this.onRetryReviewedImports,
     this.onOpenCommonBoards,
   });
 
@@ -1692,6 +1719,8 @@ final class _HomeDrawer extends StatelessWidget {
   final VoidCallback onClearContents;
   final int pendingSourceDeletionCount;
   final VoidCallback onRetrySourceDeletions;
+  final int pendingReviewedImportCount;
+  final VoidCallback onRetryReviewedImports;
   final VoidCallback? onOpenCommonBoards;
 
   /// Null when there are no plans at all, and then the drawer does not offer a
@@ -1810,6 +1839,15 @@ final class _HomeDrawer extends StatelessWidget {
                         onTap: () {
                           Navigator.of(context).pop();
                           onRetrySourceDeletions();
+                        },
+                      ),
+                    if (pendingReviewedImportCount > 0)
+                      _DrawerItem(
+                        icon: Icons.sync_outlined,
+                        label: '서버 자료 동기화 대기 $pendingReviewedImportCount건',
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          onRetryReviewedImports();
                         },
                       ),
                     _DrawerItem(

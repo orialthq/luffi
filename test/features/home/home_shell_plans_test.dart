@@ -22,6 +22,43 @@ import 'package:ori_beauty/state/app_controller.dart';
 import 'package:ori_beauty/state/plan_controller.dart';
 
 void main() {
+  testWidgets('cold-start share is announced after HomeShell mounts', (
+    tester,
+  ) async {
+    final shares = InMemoryIncomingShareService()
+      ..add(
+        IncomingShare(
+          id: 'cold-start-share',
+          receivedAt: DateTime(2026, 9, 27),
+          sharedText: '두부 달걀 볶음',
+          discoveredUrl: null,
+        ),
+      );
+    final controller = AppController(
+      shares,
+      const BaselineContentAnalysisService(),
+      InMemoryAppSnapshotStore(),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    expect(controller.captures.first.raw.transportEventId, 'cold-start-share');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: HomeShell(
+          controller: controller,
+          placeReminderOpenInbox: InMemoryPlaceReminderOpenInbox(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(ValueKey(controller.captures.first.raw.id)),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('development drawer exposes a pending server deletion retry', (
     tester,
   ) async {
@@ -66,6 +103,55 @@ void main() {
     await tester.tap(retry);
     await tester.pumpAndSettle();
     expect(find.textContaining('서버 자료 삭제 대기 1건이 남아 있어요'), findsOneWidget);
+  });
+
+  testWidgets('development drawer exposes a pending reviewed import retry', (
+    tester,
+  ) async {
+    final store = InMemoryAppSnapshotStore();
+    final capture = const BaselineContentAnalysisService()
+        .analyzeShare(
+          IncomingShare(
+            id: 'pending-reviewed-share',
+            receivedAt: DateTime(2026, 9, 27),
+            sharedText: '두부 달걀 볶음',
+            discoveredUrl: null,
+          ),
+        )
+        .copyWith(
+          reviewedImport: const ReviewedCaptureImport(
+            request: {'importId': 'reviewed-pending-test'},
+            status: ReviewedCaptureImportStatus.pending,
+          ),
+        );
+    await store.save([PersistedCapture.fromRecord(capture, null)]);
+    final controller = AppController(
+      InMemoryIncomingShareService(),
+      const BaselineContentAnalysisService(),
+      store,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    expect(controller.pendingReviewedCaptureImportCount, 1);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: HomeShell(
+          controller: controller,
+          placeReminderOpenInbox: InMemoryPlaceReminderOpenInbox(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('shell-menu-button')));
+    await tester.pumpAndSettle();
+    final retry = find.byKey(const Key('drawer-item-서버 자료 동기화 대기 1건'));
+    expect(retry, findsOneWidget);
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('서버 동기화 설정이 없어요'), findsOneWidget);
   });
 
   testWidgets('reaches 계획함 with no tab bar left to reach it by', (

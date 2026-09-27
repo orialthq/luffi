@@ -68,6 +68,31 @@ class IncomingImageSignatureTest {
     }
 
     @Test
+    fun acceptsSupportedImageBytesWhenShareSheetLabelsPngAsJpeg() {
+        assertTrue(
+            IncomingShareIngestor.isAcceptableImageMimeTypes(
+                declaredMimeType = "image/jpeg",
+                providerMimeType = "image/png",
+                detectedMimeType = "image/png",
+            ),
+        )
+        assertFalse(
+            IncomingShareIngestor.isAcceptableImageMimeTypes(
+                declaredMimeType = "image/jpeg",
+                providerMimeType = "text/plain",
+                detectedMimeType = "image/png",
+            ),
+        )
+        assertFalse(
+            IncomingShareIngestor.isAcceptableImageMimeTypes(
+                declaredMimeType = "image/jpeg",
+                providerMimeType = "image/png",
+                detectedMimeType = "application/pdf",
+            ),
+        )
+    }
+
+    @Test
     fun stripsRouteDataForAllSupportedImportActions() {
         assertTrue(
             IncomingShareRoutePolicy.shouldStripData("android.intent.action.SEND"),

@@ -510,6 +510,34 @@ void main() {
     );
   });
 
+  test('pending reviewed import retries after connectivity returns', () async {
+    final snapshotStore = InMemoryAppSnapshotStore();
+    final importer = _RecordingReviewedImportClient()..failRequests = true;
+    final controller = _reviewedController(snapshotStore, importer);
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    final captureId = controller.addManualInput('두부조림 레시피');
+    await controller.confirmStructured(captureId);
+    await _waitUntil(() => importer.finishedCalls == 1);
+
+    expect(controller.pendingReviewedCaptureImportCount, 1);
+    final firstRequest = importer.requests.single;
+    importer.failRequests = false;
+    await controller.retryPendingReviewedCaptureImports();
+
+    expect(controller.pendingReviewedCaptureImportCount, 0);
+    expect(importer.requests, [firstRequest, firstRequest]);
+    expect(controller.syncedReviewedCaptureImports, hasLength(1));
+    expect(
+      AppSnapshotCodec.decode(
+        snapshotStore.snapshot!,
+      ).single.reviewedImport?.status,
+      ReviewedCaptureImportStatus.synced,
+    );
+    await controller.retryPendingReviewedCaptureImports();
+    expect(importer.requests, hasLength(2));
+  });
+
   test('quick organization never creates a reviewed import intent', () async {
     final snapshotStore = InMemoryAppSnapshotStore();
     final importer = _RecordingReviewedImportClient();

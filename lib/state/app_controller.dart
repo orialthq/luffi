@@ -165,6 +165,7 @@ final class AppController extends ChangeNotifier {
   final Map<String, _PendingPortableTip> _pendingPortableTips = {};
   final StreamController<IncomingCaptureBatch> _incomingCaptureController =
       StreamController<IncomingCaptureBatch>.broadcast();
+  IncomingCaptureBatch? _unannouncedIncomingCaptureBatch;
   final StreamController<String> _portableTipController =
       StreamController<String>.broadcast();
 
@@ -184,6 +185,15 @@ final class AppController extends ChangeNotifier {
 
   List<CaptureRecord> get captures => List.unmodifiable(_captures);
   int get pendingReviewedSourceDeletionCount => _pendingSourceDeletions.length;
+  bool get canRetryReviewedCaptureImports =>
+      _reviewedCaptureImportClient != null;
+  int get pendingReviewedCaptureImportCount => _captures
+      .where(
+        (capture) =>
+            capture.reviewedImport?.status ==
+            ReviewedCaptureImportStatus.pending,
+      )
+      .length;
   List<ReviewedCaptureImportSummary> get allSyncedReviewedCaptureImports =>
       List.unmodifiable([
         for (final capture in _captures)
@@ -219,6 +229,12 @@ final class AppController extends ChangeNotifier {
   CaptureFilter get filter => _filter;
   Stream<IncomingCaptureBatch> get incomingCaptureAdded =>
       _incomingCaptureController.stream;
+  IncomingCaptureBatch? takeUnannouncedIncomingCaptureBatch() {
+    final batch = _unannouncedIncomingCaptureBatch;
+    _unannouncedIncomingCaptureBatch = null;
+    return batch;
+  }
+
   Stream<String> get portableTipReceived => _portableTipController.stream;
 
   PortableTipPackage? pendingPortableTip(String transportId) =>
@@ -1213,9 +1229,11 @@ final class AppController extends ChangeNotifier {
         }
         if (importedBatchWasSaved) {
           notifyListeners();
-          _incomingCaptureController.add(
-            IncomingCaptureBatch(importedCaptureIds),
-          );
+          final batch = IncomingCaptureBatch(importedCaptureIds);
+          if (!_incomingCaptureController.hasListener) {
+            _unannouncedIncomingCaptureBatch = batch;
+          }
+          _incomingCaptureController.add(batch);
         }
       }
       if (safeToAcknowledge.isNotEmpty) {

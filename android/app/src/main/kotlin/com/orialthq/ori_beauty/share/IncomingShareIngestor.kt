@@ -223,18 +223,7 @@ class IncomingShareIngestor(context: Context) {
         providerMimeType: String?,
         detectedMimeType: String,
     ) {
-        if (
-            declaredMimeType != "image/*" &&
-            declaredMimeType != null &&
-            declaredMimeType != detectedMimeType
-        ) {
-            throw InvalidIncomingImageException()
-        }
-        if (
-            providerMimeType != null &&
-            providerMimeType != "image/*" &&
-            providerMimeType != detectedMimeType
-        ) {
+        if (!isAcceptableImageMimeTypes(declaredMimeType, providerMimeType, detectedMimeType)) {
             throw InvalidIncomingImageException()
         }
     }
@@ -320,5 +309,21 @@ class IncomingShareIngestor(context: Context) {
                 else -> normalized
             }
         }
+
+        // Share sheets can advertise JPEG for a PNG stream. The signature and
+        // decoded dimensions determine the stored format; metadata only needs
+        // to describe a supported image type.
+        internal fun isAcceptableImageMimeTypes(
+            declaredMimeType: String?,
+            providerMimeType: String?,
+            detectedMimeType: String,
+        ): Boolean =
+            detectedMimeType in SUPPORTED_MIME_TYPES &&
+                (declaredMimeType == null ||
+                    declaredMimeType == "image/*" ||
+                    declaredMimeType in SUPPORTED_MIME_TYPES) &&
+                (providerMimeType == null ||
+                    providerMimeType == "image/*" ||
+                    providerMimeType in SUPPORTED_MIME_TYPES)
     }
 }
