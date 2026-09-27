@@ -287,4 +287,63 @@ test(`retracted visit order blocks an all-skipped travel report (${backend})`, a
   assert.equal((await store.snapshot()).knowledge.assertions.filter((item) =>
     item.status === "active" && item.predicate === "travel.visit_of_stop").length, 0);
 });
+
+test(`travel correction atomically changes stop order and times while preserving the original result (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
+  const created = await service.createTravelScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-travel-correction" });
+  let board = await service.getBoard("trip-1");
+  await service.confirmTravelItinerary({ commandId: "confirm-before-travel-correction",
+    activityId: "trip-1", expectedRevision: board.revision, selections });
+  board = await service.getBoard("trip-1");
+  const original = resultValue(board, "confirm_itinerary").itinerary;
+  const editable = await service.getEditableTravelItinerary("trip-1");
+  const replacement = [
+    { id: editable.stops[1].id, plannedAt: "2026-09-28T11:00:00+09:00" },
+    { id: editable.stops[0].id, plannedAt: "2026-09-28T14:00:00+09:00" },
+  ];
+  const request = { commandId: "correct-travel", activityId: "trip-1",
+    expectedGraphFingerprint: editable.graphFingerprint, stops: replacement,
+    confirmed: true };
+  await assert.rejects(service.correctTravelItinerary({ ...request,
+    commandId: "bad-travel", stops: replacement.map((item) =>
+      ({ ...item, plannedAt: "2026-09-28T08:00:00+09:00" })) }),
+  (error) => error.code === "INVALID_REQUEST");
+  assert.equal((await service.getEditableTravelItinerary("trip-1")).graphFingerprint,
+    editable.graphFingerprint);
+  const corrected = await service.correctTravelItinerary(request);
+  assert.equal(corrected.revision, 2);
+  assert.equal((await service.correctTravelItinerary(request)).replayed, true);
+  const after = await service.getEditableTravelItinerary("trip-1");
+  assert.deepEqual(after.stops.map(({ id, plannedAt }) => ({ id, plannedAt })), replacement);
+  assert.deepEqual(resultValue(await service.getBoard("trip-1"),
+    "confirm_itinerary").itinerary, original);
+  const state = await store.snapshot();
+  assert.equal(state.knowledge.assertions.filter((item) =>
+    item.status === "corrected" && ["travel.stop_order",
+      "travel.planned_at"].includes(item.predicate)).length, 4);
+  const review = await service.getBoardReview("trip-1");
+  assert.equal(review.status, "blocked");
+  assert.deepEqual(review.affectedTasks.map((item) => item.id),
+    ["record_stop_outcomes"]);
+  await assert.rejects(service.recordTravelStopOutcomes({ commandId: "old-travel-outcome",
+    activityId: "trip-1", expectedRevision: board.revision,
+    stops: original.stops.map((stop) => ({ stopId: stop.id, status: "skipped" })) }),
+  (error) => ["CONTEXT_STALE", "TASK_BLOCKED"].includes(error.code));
+  await assert.rejects(service.correctTravelItinerary({ ...request,
+    commandId: "stale-travel" }),
+  (error) => error.code === "TRAVEL_REVISION_CONFLICT");
+  const next = await service.createReviewSuccessor({ commandId: "travel-successor",
+    activityId: "trip-1", expectedRevision: board.revision, confirmed: true });
+  assert.equal(next.continuedFrom, "trip-1");
+  assert.notEqual(next.activityId, "trip-1");
+  await service.knowledgeCommand({ commandId: "delete-corrected-travel-capture",
+    type: "source.delete", payload: { sourceId: imports.a_viewpoint.sourceId } });
+  const deleted = await store.snapshot();
+  assert.equal(deleted.knowledge.sources.find((item) =>
+    item.id === corrected.sourceId).status, "deleted");
+  await assert.rejects(service.correctTravelItinerary(request),
+    (error) => error.code === "CORRECTION_DELETED");
+});
 }

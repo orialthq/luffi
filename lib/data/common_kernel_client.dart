@@ -507,6 +507,10 @@ abstract interface class CommonKernelClient {
   Future<KernelJson> createRecipeScenario(KernelJson request);
   Future<KernelJson> getEditableRecipe(String activityId);
   Future<KernelJson> correctRecipe(KernelJson request);
+  Future<KernelJson> getEditableBeautyRoutine(String activityId);
+  Future<KernelJson> correctBeautyRoutine(KernelJson request);
+  Future<KernelJson> getEditableTravelItinerary(String activityId);
+  Future<KernelJson> correctTravelItinerary(KernelJson request);
   Future<KernelJson> createDiningScenario(KernelJson request);
   Future<KernelJson> selectDiningPlace(KernelJson request);
   Future<KernelJson> recordDiningVisitOutcome(KernelJson request);
@@ -727,6 +731,26 @@ final class HttpCommonKernelClient implements CommonKernelClient {
   @override
   Future<KernelJson> correctRecipe(KernelJson request) =>
       _request('POST', '/v1/kernel/recipe/corrections', request);
+
+  @override
+  Future<KernelJson> getEditableBeautyRoutine(String activityId) => _request(
+    'GET',
+    '/v1/kernel/beauty/editable/${Uri.encodeComponent(activityId)}',
+  );
+
+  @override
+  Future<KernelJson> correctBeautyRoutine(KernelJson request) =>
+      _request('POST', '/v1/kernel/beauty/corrections', request);
+
+  @override
+  Future<KernelJson> getEditableTravelItinerary(String activityId) => _request(
+    'GET',
+    '/v1/kernel/travel/editable/${Uri.encodeComponent(activityId)}',
+  );
+
+  @override
+  Future<KernelJson> correctTravelItinerary(KernelJson request) =>
+      _request('POST', '/v1/kernel/travel/corrections', request);
 
   @override
   Future<KernelJson> createDiningScenario(KernelJson request) =>

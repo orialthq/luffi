@@ -12,6 +12,7 @@ import 'shopping_scenario_dialogs.dart';
 import 'health_scenario_dialogs.dart';
 import 'scenario_connections_section.dart';
 import 'recipe_correction_screen.dart';
+import 'ordered_graph_correction_screen.dart';
 
 bool _connectionKindsVisible(KernelJson board) => const {
   'recipe',
@@ -2293,6 +2294,19 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     if (mounted) await _load();
   }
 
+  Future<void> _openOrderedGraphEditor(String scenario) async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => OrderedGraphCorrectionScreen(
+          client: widget.client,
+          activityId: widget.activityId,
+          scenario: scenario,
+        ),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3818,6 +3832,34 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
             onPressed: _busy || _needsRefresh ? null : _openRecipeEditor,
             icon: const Icon(Icons.edit_note_rounded),
             label: const Text('레시피 재료·순서 정정'),
+          ),
+        if (board['scenario'] == 'beauty' &&
+            _objects(board['tasks']).any(
+              (task) =>
+                  task['id'] == 'confirm_routine' &&
+                  task['executionStatus'] == 'completed',
+            ))
+          OutlinedButton.icon(
+            key: const Key('kernel-open-beauty-correction'),
+            onPressed: _busy || _needsRefresh
+                ? null
+                : () => _openOrderedGraphEditor('beauty'),
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('뷰티 루틴 순서·제품 정정'),
+          ),
+        if (board['scenario'] == 'travel' &&
+            _objects(board['tasks']).any(
+              (task) =>
+                  task['id'] == 'confirm_itinerary' &&
+                  task['executionStatus'] == 'completed',
+            ))
+          OutlinedButton.icon(
+            key: const Key('kernel-open-travel-correction'),
+            onPressed: _busy || _needsRefresh
+                ? null
+                : () => _openOrderedGraphEditor('travel'),
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('여행 방문 순서·시각 정정'),
           ),
         if (board['continuedFrom'] is String)
           TextButton(

@@ -448,4 +448,73 @@ test(`a retracted beauty step product link blocks a later use claim (${backend})
   assert.equal(after.knowledge.sources.filter((item) => item.status === "active" &&
     item.kind === "user_report" && item.provenance?.scenario === "beauty").length, 0);
 });
+
+test(`one beauty correction changes order, title and product links without rewriting completed work (${backend})`, async (t) => {
+  const { service, store, imports } = await fixture(t, backend);
+  const created = await service.createBeautyScenario(scenario);
+  await service.acceptProposal({ proposalId: created.proposalId,
+    commandId: "approve-before-correction" });
+  let board = await service.getBoard("beauty-1");
+  await service.confirmBeautyRoutine({ commandId: "confirm-before-correction",
+    activityId: "beauty-1", expectedRevision: board.revision, selections });
+  board = await service.getBoard("beauty-1");
+  const original = resultValue(board, "confirm_routine").template;
+  await service.runTask({ commandId: "instantiate-before-correction",
+    activityId: "beauty-1", taskId: "instantiate_routine",
+    expectedRevision: board.revision });
+  board = await service.getBoard("beauty-1");
+  const editable = await service.getEditableBeautyRoutine("beauty-1");
+  const [first, second] = editable.steps;
+  const replacement = [
+    { id: second.id, title: "수정한 첫 단계", variantId: first.variantId },
+    { id: first.id, title: "수정한 둘째 단계", variantId: second.variantId },
+  ];
+  const request = { commandId: "correct-beauty", activityId: "beauty-1",
+    expectedGraphFingerprint: editable.graphFingerprint, steps: replacement,
+    confirmed: true };
+  const corrected = await service.correctBeautyRoutine(request);
+  assert.equal(corrected.revision, 2);
+  assert.equal((await service.correctBeautyRoutine(request)).replayed, true);
+  const after = await service.getEditableBeautyRoutine("beauty-1");
+  assert.deepEqual(after.steps.map(({ id, title, variantId }) =>
+    ({ id, title, variantId })), replacement);
+  assert.deepEqual(resultValue(await service.getBoard("beauty-1"),
+    "confirm_routine").template, original);
+  const state = await store.snapshot();
+  assert.equal(state.knowledge.assertions.filter((item) =>
+    item.status === "active" && item.predicate === "beauty.step_order").length, 2);
+  assert.equal(state.knowledge.assertions.filter((item) =>
+    item.status === "corrected" && ["beauty.step_order", "beauty.step_title",
+      "beauty.uses_variant"].includes(item.predicate)).length, 6);
+  const review = await service.getBoardReview("beauty-1");
+  assert.equal(review.status, "blocked");
+  assert.equal(review.reasonCode, "STARTED_TASK_PROTECTED");
+  assert.deepEqual(review.affectedTasks.map((item) => item.id),
+    ["instantiate_routine", "record_routine_outcome"]);
+  await assert.rejects(service.proposeBoardReview({ commandId: "patch-old-beauty",
+    activityId: "beauty-1", expectedRevision: board.revision, confirmed: true }),
+  (error) => error.code === "STARTED_TASK_PROTECTED");
+  const occurrence = board.tasks.find((item) => item.id === "record_routine_outcome")
+    .readiness.inputs.occurrence;
+  await assert.rejects(service.recordBeautyRoutineOutcome({ commandId: "use-old-routine",
+    activityId: "beauty-1", expectedRevision: board.revision,
+    steps: occurrence.steps.map((step) => ({ templateStepId: step.templateStepId,
+      status: "completed" })) }),
+  (error) => ["CONTEXT_STALE", "TASK_BLOCKED"].includes(error.code));
+  await assert.rejects(service.correctBeautyRoutine({ ...request,
+    commandId: "stale-beauty" }),
+  (error) => error.code === "BEAUTY_REVISION_CONFLICT");
+  const next = await service.createReviewSuccessor({ commandId: "beauty-successor",
+    activityId: "beauty-1", expectedRevision: board.revision, confirmed: true });
+  assert.equal(next.continuedFrom, "beauty-1");
+  assert.notEqual(next.activityId, "beauty-1");
+  assert.equal((await service.getBoard("beauty-1")).revision, board.revision);
+  await service.knowledgeCommand({ commandId: "delete-corrected-beauty-capture",
+    type: "source.delete", payload: { sourceId: imports.a_cleanser.sourceId } });
+  const deleted = await store.snapshot();
+  assert.equal(deleted.knowledge.sources.find((item) =>
+    item.id === corrected.sourceId).status, "deleted");
+  await assert.rejects(service.correctBeautyRoutine(request),
+    (error) => error.code === "CORRECTION_DELETED");
+});
 }

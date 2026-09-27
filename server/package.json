@@ -10,6 +10,7 @@
     "dev": "./scripts/dev-keychain.sh",
     "start": "node src/index.js",
     "test": "node --test test/*.test.js",
+    "test:postgres-real": "node --test test/postgres_real_integration.test.js",
     "test:image-live": "node scripts/verify-recipe-image.mjs",
     "test:dining-image-live": "node scripts/verify-dining-images.mjs",
     "test:fashion-image-live": "node scripts/verify-fashion-images.mjs",

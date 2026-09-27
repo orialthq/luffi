@@ -35,9 +35,11 @@ const KERNEL_POST_ROUTES = Object.freeze({
   "/fashion/wear-outcome": "recordFashionWearOutcome",
   "/beauty/scenarios": "createBeautyScenario",
   "/beauty/confirm-routine": "confirmBeautyRoutine",
+  "/beauty/corrections": "correctBeautyRoutine",
   "/beauty/routine-outcome": "recordBeautyRoutineOutcome",
   "/travel/scenarios": "createTravelScenario",
   "/travel/confirm-itinerary": "confirmTravelItinerary",
+  "/travel/corrections": "correctTravelItinerary",
   "/travel/stop-outcomes": "recordTravelStopOutcomes",
   "/life-tip/scenarios": "createLifeTipScenario",
   "/life-tip/confirm-actions": "confirmLifeTipActions",
@@ -71,7 +73,8 @@ const KERNEL_POST_ROUTES = Object.freeze({
 });
 const KERNEL_READ_METHODS = ["contracts", "listBoards", "listBoardSummaries", "listResources",
   "getBoard", "getBoardReview", "listScenarioConnections", "getImportedFieldReview",
-  "getEditableCaptureFields", "getEditableRecipe", "getRecipeShoppingPlanReview",
+  "getEditableCaptureFields", "getEditableRecipe", "getEditableBeautyRoutine",
+  "getEditableTravelItinerary", "getRecipeShoppingPlanReview",
   "getRecipeShoppingTransferReview", "listShoppingInventory",
   "getShoppingBasketReview"];
 const KERNEL_METHODS = [...KERNEL_READ_METHODS, ...Object.values(KERNEL_POST_ROUTES)];
@@ -253,6 +256,24 @@ export function createHttpServer({
           catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
             { httpStatus: 400 }); }
           return sendJson(response, 200, await kernelService.getEditableRecipe(activityId));
+        }
+        const editableBeautyMatch = /^\/beauty\/editable\/([^/]+)$/.exec(route);
+        if (editableBeautyMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableBeautyMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableBeautyRoutine(activityId));
+        }
+        const editableTravelMatch = /^\/travel\/editable\/([^/]+)$/.exec(route);
+        if (editableTravelMatch) {
+          if (request.method !== "GET") throw methodNotAllowed("GET");
+          let activityId;
+          try { activityId = decodeURIComponent(editableTravelMatch[1]); }
+          catch { throw new AppError("INVALID_REQUEST", "activityId 형식이 올바르지 않아요.",
+            { httpStatus: 400 }); }
+          return sendJson(response, 200, await kernelService.getEditableTravelItinerary(activityId));
         }
         const editableFieldsMatch = /^\/ingestion\/editable-fields\/([^/]+)$/.exec(route);
         if (editableFieldsMatch) {

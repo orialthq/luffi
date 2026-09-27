@@ -51,6 +51,8 @@ export function createCommonKernelState() {
     fieldReviewReceipts: {},
     fieldCorrectionReceipts: {},
     recipeCorrectionReceipts: {},
+    beautyCorrectionReceipts: {},
+    travelCorrectionReceipts: {},
     recipeScenarioReceipts: {},
     diningScenarioReceipts: {},
     diningCommandReceipts: {},
@@ -1094,10 +1096,24 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           (item.provenance?.scenario === "field_correction" &&
           item.provenance.importedSourceId === source.id) ||
           (item.provenance?.scenario === "recipe_correction" &&
-          item.provenance.importedSourceId === source.id))).map((item) => item.id) : [];
+          item.provenance.importedSourceId === source.id) ||
+          (item.provenance?.scenario === "beauty_correction" &&
+          item.provenance.importedSourceIds?.includes(source.id)) ||
+          (item.provenance?.scenario === "travel_correction" &&
+          item.provenance.importedSourceIds?.includes(source.id)))).map((item) => item.id) : [];
     const linkedRecipeCorrections = source?.provenance?.scenario === "recipe"
       ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
         item.status === "active" && item.provenance?.scenario === "recipe_correction" &&
+        item.provenance.confirmationSourceId === source.id).map((item) => item.id)
+      : [];
+    const linkedBeautyCorrections = source?.provenance?.scenario === "beauty"
+      ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
+        item.status === "active" && item.provenance?.scenario === "beauty_correction" &&
+        item.provenance.confirmationSourceId === source.id).map((item) => item.id)
+      : [];
+    const linkedTravelCorrections = source?.provenance?.scenario === "travel"
+      ? state.knowledge.sources.filter((item) => item.ownerId === ownerId &&
+        item.status === "active" && item.provenance?.scenario === "travel_correction" &&
         item.provenance.confirmationSourceId === source.id).map((item) => item.id)
       : [];
     const linkedFashionSources = state.knowledge.sources.filter((item) =>
@@ -1137,12 +1153,16 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       (item.kind === "user_confirmation" || item.kind === "user_report"))
       .map((item) => item.id);
     return { source, linkedConfirmations, linkedRecipeCorrections,
+      linkedBeautyCorrections,
+      linkedTravelCorrections,
       linkedFashionSources, linkedBeautySources,
       linkedTravelSources, linkedLifeTipSources, linkedShoppingSources,
       linkedHealthSources };
   }
 
   function finishSourceDeletion(state, { source, linkedConfirmations, linkedRecipeCorrections,
+    linkedBeautyCorrections,
+    linkedTravelCorrections,
     linkedFashionSources,
     linkedBeautySources, linkedTravelSources, linkedLifeTipSources,
     linkedShoppingSources, linkedHealthSources }) {
@@ -1178,6 +1198,22 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         }
       }
     }
+    if (source?.provenance?.scenario === "beauty_correction") {
+      for (const receipt of Object.values(state.beautyCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    if (source?.provenance?.scenario === "travel_correction") {
+      for (const receipt of Object.values(state.travelCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === source.id) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
     for (const connection of Object.values(state.scenarioConnections ?? {})) {
       if (connection.ownerId === ownerId && connection.sourceId === source?.id) {
         connection.deleted = true;
@@ -1194,6 +1230,32 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       }, { predicates }).state;
       purgeIssuedContextsFromSource(state, sourceId);
       for (const receipt of Object.values(state.recipeCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    for (const sourceId of linkedBeautyCorrections ?? []) {
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      for (const receipt of Object.values(state.beautyCorrectionReceipts ?? {})) {
+        if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+          receipt.deleted = true;
+          receipt.result = { activityId: receipt.activityId };
+        }
+      }
+    }
+    for (const sourceId of linkedTravelCorrections ?? []) {
+      state.knowledge = applyKnowledgeCommand(state.knowledge, {
+        ownerId, commandId: `kernel:source-cascade:${sourceId}`,
+        type: "source.delete", payload: { sourceId },
+      }, { predicates }).state;
+      purgeIssuedContextsFromSource(state, sourceId);
+      for (const receipt of Object.values(state.travelCorrectionReceipts ?? {})) {
         if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
           receipt.deleted = true;
           receipt.result = { activityId: receipt.activityId };
@@ -1254,6 +1316,18 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           type: "source.delete", payload: { sourceId },
         }, { predicates }).state;
         purgeIssuedContextsFromSource(state, sourceId);
+        for (const receipt of Object.values(state.beautyCorrectionReceipts ?? {})) {
+          if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+            receipt.deleted = true;
+            receipt.result = { activityId: receipt.activityId };
+          }
+        }
+        for (const receipt of Object.values(state.travelCorrectionReceipts ?? {})) {
+          if (receipt.ownerId === ownerId && receipt.sourceId === sourceId) {
+            receipt.deleted = true;
+            receipt.result = { activityId: receipt.activityId };
+          }
+        }
         redactRecipeScenario(state, sourceId);
         redactFashionScenario(state, sourceId);
         redactBeautyScenario(state, sourceId);
@@ -1526,6 +1600,144 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     return { receipt, recipe, confirmed: confirmed[0], source, originalEvidence,
       ingredientLines, stepLines, scope };
+  }
+
+  function editableBeautyGraph(state, activityId) {
+    const current = board(state, activityId);
+    const scenario = Object.values(state.beautyScenarioReceipts ?? {}).find((item) =>
+      !item.deleted && item.result?.activityId === activityId);
+    if (!scenario?.result?.confirmationSourceId) throw new AppError("NOT_FOUND",
+      "확정한 뷰티 루틴을 찾지 못했어요.", { httpStatus: 404 });
+    const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
+      item.id === scenario.result.confirmationSourceId && item.status === "active");
+    const task = current.tasks.find((item) => item.id === "confirm_routine" &&
+      item.capabilityId === "beauty.confirm_routine" &&
+      item.executionStatus === "completed");
+    const result = current.results.find((item) => item.id === task?.latestOutputRef)?.value;
+    const template = result?.template;
+    if (!source || !template || result.templateId !== template.id ||
+        !activeScenarioEntity(state, template.id, "beauty.routine_template")) {
+      throw new AppError("BEAUTY_GRAPH_CONFLICT", "루틴 원본과 그래프가 맞지 않아요.",
+        { httpStatus: 409 });
+    }
+    const scope = { type: "activity", id: activityId };
+    const active = (predicate) => state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.predicate === predicate && item.scope?.type === scope.type &&
+      item.scope.id === scope.id);
+    const has = active("beauty.has_step").filter((item) => item.subjectId === template.id);
+    const order = active("beauty.step_order");
+    const title = active("beauty.step_title");
+    const uses = active("beauty.uses_variant");
+    const count = template.steps.length;
+    if (!count || [has, order, title, uses].some((items) => items.length !== count)) {
+      throw new AppError("BEAUTY_GRAPH_CONFLICT", "루틴 단계 연결 수가 달라요.",
+        { httpStatus: 409 });
+    }
+    const lines = new Map();
+    for (const original of template.steps) {
+      const one = (items, matches) => items.filter(matches);
+      const links = one(has, (item) => item.objectEntityId === original.id);
+      const orders = one(order, (item) => item.subjectId === original.id);
+      const titles = one(title, (item) => item.subjectId === original.id);
+      const variants = one(uses, (item) => item.subjectId === original.id);
+      if ([links, orders, titles, variants].some((items) => items.length !== 1) ||
+          !activeScenarioEntity(state, original.id, "beauty.routine_step") ||
+          !activeScenarioEntity(state, variants[0]?.objectEntityId, "core.product_variant") ||
+          !activeScenarioRelation(state, variants[0]?.objectEntityId, "beauty.variant_of",
+            (edge) => activeScenarioEntity(state, edge.objectEntityId, "core.product")) ||
+          !Number.isSafeInteger(orders[0]?.typedValue?.value) ||
+          typeof titles[0]?.typedValue?.value !== "string" ||
+          !titles[0].typedValue.value.trim()) {
+        throw new AppError("BEAUTY_GRAPH_CONFLICT", "루틴 단계의 내용이 서로 달라요.",
+          { httpStatus: 409 });
+      }
+      lines.set(original.id, { has: links[0], order: orders[0],
+        title: titles[0], uses: variants[0] });
+    }
+    const steps = [...lines].map(([id, line]) => ({ id,
+      title: line.title.typedValue.value,
+      variantId: line.uses.objectEntityId,
+      order: line.order.typedValue.value }))
+      .sort((a, b) => a.order - b.order);
+    if (steps.some((step, index) => step.order !== index + 1)) {
+      throw new AppError("BEAUTY_GRAPH_CONFLICT", "루틴 단계 순서가 중복되거나 비었어요.",
+        { httpStatus: 409 });
+    }
+    const graphFingerprint = requestFingerprint([...lines].map(([id, line]) =>
+      [id, line.has.id, line.order.id, line.title.id, line.uses.id]));
+    const revision = 1 + Object.values(state.beautyCorrectionReceipts ?? {}).filter((item) =>
+      item.ownerId === ownerId && item.activityId === activityId && !item.deleted).length;
+    return { current, scenario, source, template, steps, lines,
+      scope, graphFingerprint, revision };
+  }
+
+  function editableTravelGraph(state, activityId) {
+    const current = board(state, activityId);
+    const scenario = Object.values(state.travelScenarioReceipts ?? {}).find((item) =>
+      !item.deleted && item.result?.activityId === activityId);
+    if (!scenario?.result?.confirmationSourceId) throw new AppError("NOT_FOUND",
+      "확정한 여행 일정을 찾지 못했어요.", { httpStatus: 404 });
+    const source = state.knowledge.sources.find((item) => item.ownerId === ownerId &&
+      item.id === scenario.result.confirmationSourceId && item.status === "active");
+    const task = current.tasks.find((item) => item.id === "confirm_itinerary" &&
+      item.capabilityId === "travel.confirm_itinerary" &&
+      item.executionStatus === "completed");
+    const result = current.results.find((item) => item.id === task?.latestOutputRef)?.value;
+    const itinerary = result?.itinerary;
+    if (!source || !itinerary || result.itineraryId !== itinerary.id ||
+        !activeScenarioEntity(state, itinerary.id, "travel.day_itinerary")) {
+      throw new AppError("TRAVEL_GRAPH_CONFLICT", "일정 원본과 그래프가 맞지 않아요.",
+        { httpStatus: 409 });
+    }
+    const scope = { type: "activity", id: activityId };
+    const active = (predicate) => state.knowledge.assertions.filter((item) =>
+      item.ownerId === ownerId && item.status === "active" &&
+      item.predicate === predicate && item.scope?.type === scope.type &&
+      item.scope.id === scope.id);
+    const has = active("travel.has_stop").filter((item) =>
+      item.subjectId === itinerary.id);
+    const order = active("travel.stop_order");
+    const time = active("travel.planned_at");
+    const at = active("travel.stop_at");
+    const count = itinerary.stops.length;
+    if (!count || [has, order, time, at].some((items) => items.length !== count)) {
+      throw new AppError("TRAVEL_GRAPH_CONFLICT", "여행 장소 연결 수가 달라요.",
+        { httpStatus: 409 });
+    }
+    const lines = new Map();
+    for (const original of itinerary.stops) {
+      const links = has.filter((item) => item.objectEntityId === original.id);
+      const orders = order.filter((item) => item.subjectId === original.id);
+      const times = time.filter((item) => item.subjectId === original.id);
+      const places = at.filter((item) => item.subjectId === original.id);
+      if ([links, orders, times, places].some((items) => items.length !== 1) ||
+          !activeScenarioEntity(state, original.id, "travel.stop") ||
+          !activeScenarioEntity(state, places[0]?.objectEntityId, "travel.place") ||
+          !Number.isSafeInteger(orders[0]?.typedValue?.value) ||
+          typeof times[0]?.typedValue?.value !== "string") {
+        throw new AppError("TRAVEL_GRAPH_CONFLICT", "여행 장소 내용이 서로 달라요.",
+          { httpStatus: 409 });
+      }
+      registry.validate("core.timestamp", times[0].typedValue.value);
+      lines.set(original.id, { has: links[0], order: orders[0],
+        time: times[0], at: places[0], title: original.title });
+    }
+    const stops = [...lines].map(([id, line]) => ({ id,
+      title: line.title, placeId: line.at.objectEntityId,
+      plannedAt: line.time.typedValue.value,
+      order: line.order.typedValue.value }))
+      .sort((a, b) => a.order - b.order);
+    if (stops.some((stop, index) => stop.order !== index + 1)) {
+      throw new AppError("TRAVEL_GRAPH_CONFLICT", "여행 방문 순서가 중복되거나 비었어요.",
+        { httpStatus: 409 });
+    }
+    const graphFingerprint = requestFingerprint([...lines].map(([id, line]) =>
+      [id, line.has.id, line.order.id, line.time.id, line.at.id]));
+    const revision = 1 + Object.values(state.travelCorrectionReceipts ?? {}).filter((item) =>
+      item.ownerId === ownerId && item.activityId === activityId && !item.deleted).length;
+    return { current, scenario, source, itinerary, stops, lines,
+      scope, graphFingerprint, revision };
   }
 
   function diningCandidates(state, importIds, area) {
@@ -2384,6 +2596,23 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     }
     const recovered = recoveryDraft(state, activityId, current,
       { allowStartedShoppingSuccessor: true });
+    if (["beauty", "travel"].includes(scenario) && current.pendingChanges.some((item) =>
+      item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
+      if (requested) {
+        const expected = reviewSuccessorDetails(state, activityId,
+          scenario, current, recovered.draft);
+        const allowed = new Set(["commandId", "activityId", "confirmed",
+          "continuationOf", ...Object.keys(expected)]);
+        if (Object.keys(requested).some((key) => !allowed.has(key)) ||
+            Object.entries(expected).some(([key, value]) =>
+              requestFingerprint({ value: requested[key] }) !==
+                requestFingerprint({ value }))) {
+          throw new AppError("CONTINUATION_INPUT_CONFLICT",
+            "새 활동의 입력이 변경된 근거와 달라요.", { httpStatus: 409 });
+        }
+      }
+      return activityId;
+    }
     try {
       recoveryPlan(current, recovered.draft);
     } catch (error) {
@@ -2477,6 +2706,18 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
               changes: [], affectedTasks: [] };
           }
           const changes = reviewDescription(state, activityId, current);
+          if (current.pendingChanges.some((item) =>
+            item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
+            return { activityId, status: "blocked", revision: current.revision,
+              scenario: scenarioForActivity(state, activityId), changes,
+              affectedTasks: (scenarioForActivity(state, activityId) === "beauty"
+                ? ["instantiate_routine", "record_routine_outcome"]
+                : ["record_stop_outcomes"])
+                .filter((id) => current.tasks.some((task) => task.id === id))
+                .map((id) => ({ id, status: "new_activity_required" })),
+              reasonCode: "STARTED_TASK_PROTECTED",
+              reason: "이미 확정한 결과는 보존하고 새 활동에서 다시 확인해야 해요." };
+          }
           try {
             const recovered = recoveryDraft(state, activityId, current,
               { allowStartedShoppingSuccessor: true });
@@ -2537,6 +2778,12 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             throw new AppError("NO_REVIEW_REQUIRED",
               "현재 계획은 변경 검토 대상이 아니에요.", { httpStatus: 409 });
           }
+          if (current.pendingChanges.some((item) =>
+            item.reasonCode === "SCENARIO_GRAPH_CORRECTED")) {
+            throw new AppError("STARTED_TASK_PROTECTED",
+              "확정한 결과는 새 활동에서 다시 확인해야 해요.",
+              { httpStatus: 409 });
+          }
           const recovered = recoveryDraft(state, activityId, current);
           const planned = recoveryPlan(current, recovered.draft);
           const issued = issueContext(state, { activityId,
@@ -2585,6 +2832,267 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             item.sourceId === graph.source.provenance?.importedSourceId)?.importId ?? null;
           return { activityId, assertionId: graph.confirmed.id,
             recipe: graph.recipe, originalRecipe: original ?? null, importId };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async getEditableBeautyRoutine(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => {
+          const graph = editableBeautyGraph(state, activityId);
+          return { activityId, templateId: graph.template.id,
+            revision: graph.revision, graphFingerprint: graph.graphFingerprint,
+            steps: graph.steps, originalSteps: graph.template.steps };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctBeautyRoutine(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedGraphFingerprint", "steps", "confirmed"].includes(key)) ||
+          input.confirmed !== true ||
+          typeof input.expectedGraphFingerprint !== "string" ||
+          !/^[a-f0-9]{64}$/.test(input.expectedGraphFingerprint) ||
+          !Array.isArray(input.steps) || input.steps.length < 1 ||
+          input.steps.length > 5 || input.steps.some((item) =>
+            !item || typeof item !== "object" || Array.isArray(item) ||
+            Object.keys(item).some((key) => !["id", "title", "variantId"].includes(key)) ||
+            typeof item.title !== "string" || !item.title.trim() ||
+            item.title.trim().length > 100)) {
+          throw new AppError("INVALID_REQUEST", "정정할 루틴 단계를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const steps = input.steps.map((item) => ({ id: safeId(item.id, "stepId"),
+          title: item.title.trim(), variantId: safeId(item.variantId, "variantId") }));
+        if (new Set(steps.map((item) => item.id)).size !== steps.length ||
+            new Set(steps.map((item) => item.variantId)).size !== steps.length) {
+          throw new AppError("INVALID_REQUEST", "루틴 단계나 제품이 중복됐어요.",
+            { httpStatus: 400 });
+        }
+        const hash = requestFingerprint({ activityId,
+          expectedGraphFingerprint: input.expectedGraphFingerprint, steps });
+        return await store.transact((state) => {
+          assertState(state);
+          state.beautyCorrectionReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const prior = state.beautyCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 루틴 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 루틴 정정은 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const graph = editableBeautyGraph(state, activityId);
+          if (graph.graphFingerprint !== input.expectedGraphFingerprint) {
+            throw new AppError("BEAUTY_REVISION_CONFLICT", "루틴 관계가 먼저 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          if (steps.length !== graph.steps.length ||
+              steps.some((item) => !graph.lines.has(item.id)) ||
+              steps.some((item) => !graph.steps.some((old) =>
+                old.variantId === item.variantId))) {
+            throw new AppError("INVALID_REQUEST", "확정한 단계와 제품만 정정할 수 있어요.",
+              { httpStatus: 400 });
+          }
+          if (requestFingerprint(steps) === requestFingerprint(graph.steps.map((item) =>
+            ({ id: item.id, title: item.title, variantId: item.variantId })))) {
+            throw new AppError("UNCHANGED_ROUTINE", "변경된 루틴 내용이 없어요.",
+              { httpStatus: 409 });
+          }
+          const stem = `beauty-correction:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const now = new Date().toISOString();
+          const beforeSequence = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 정정한 뷰티 루틴",
+            provenance: { scenario: "beauty_correction", activityId,
+              confirmationSourceId: graph.source.id,
+              importedSourceIds: graph.scenario.importIds.map((id) =>
+                state.importReceipts[id].sourceId) } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(steps), content: { steps }, capturedAt: now });
+          for (const [index, item] of steps.entries()) {
+            const previous = graph.lines.get(item.id);
+            const role = fingerprint(item.id).slice(0, 16);
+            const evidenceId = `${stem}:evidence:${role}`;
+            apply(`evidence:${role}`, "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId,
+              quote: `${index + 1}. ${item.title}`,
+              locator: { kind: "user_confirmation", jsonPointer: `/steps/${index}` } });
+            const correct = (field, predicate, value, valueType = null) => {
+              const old = previous[field];
+              const oldValue = valueType ? old.typedValue?.value : old.objectEntityId;
+              if (oldValue === value) return;
+              apply(`${field}:${role}`, "assertion.correct", {
+                assertionId: old.id, expectedRevision: old.revision,
+                assertion: { id: `${stem}:${field}:${role}`, subjectId: item.id,
+                  predicate, scope: graph.scope, origin: "user_reported",
+                  assertedBy: { type: "user", id: ownerId },
+                  evidenceIds: [evidenceId], observedAt: now,
+                  ...(valueType ? { typedValue: { type: valueType, value } } :
+                    { objectEntityId: value }) },
+              });
+            };
+            correct("order", "beauty.step_order", index + 1, "core.revision");
+            correct("title", "beauty.step_title", item.title, "core.text");
+            correct("uses", "beauty.uses_variant", item.variantId);
+          }
+          recordAffectedConsumers(state, beforeSequence);
+          state.reviewEvents.push({ key: `${activityId}:beauty-correction:${commandId}`,
+            activityId, reasonCode: "SCENARIO_GRAPH_CORRECTED",
+            eventIds: state.knowledge.events.filter((event) =>
+              event.sequence > beforeSequence).map((event) => event.id), timeDue: false });
+          const next = editableBeautyGraph(state, activityId);
+          const result = { activityId, revision: next.revision + 1,
+            graphFingerprint: next.graphFingerprint, sourceId,
+            knowledgeSequence: state.knowledge.sequence };
+          state.beautyCorrectionReceipts[key] = { ownerId, activityId,
+            sourceId, hash, result };
+          return { state, result: { ...result, replayed: false } };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async getEditableTravelItinerary(activityId) {
+      try {
+        safeId(activityId, "activityId");
+        return await read((state) => {
+          const graph = editableTravelGraph(state, activityId);
+          return { activityId, itineraryId: graph.itinerary.id,
+            revision: graph.revision, graphFingerprint: graph.graphFingerprint,
+            area: graph.itinerary.area, startAt: graph.itinerary.startAt,
+            stops: graph.stops, originalStops: graph.itinerary.stops };
+        });
+      } catch (error) { throw toHttpError(error); }
+    },
+    async correctTravelItinerary(raw) {
+      try {
+        const input = requestObject(raw);
+        if (Object.keys(input).some((key) => !["commandId", "activityId",
+          "expectedGraphFingerprint", "stops", "confirmed"].includes(key)) ||
+          input.confirmed !== true ||
+          typeof input.expectedGraphFingerprint !== "string" ||
+          !/^[a-f0-9]{64}$/.test(input.expectedGraphFingerprint) ||
+          !Array.isArray(input.stops) || input.stops.length < 1 ||
+          input.stops.length > 8 || input.stops.some((item) =>
+            !item || typeof item !== "object" || Array.isArray(item) ||
+            Object.keys(item).some((key) => !["id", "plannedAt"].includes(key)) ||
+            typeof item.plannedAt !== "string")) {
+          throw new AppError("INVALID_REQUEST", "정정할 여행 장소를 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const commandId = safeId(input.commandId, "commandId");
+        const activityId = safeId(input.activityId, "activityId");
+        const stops = input.stops.map((item) => ({ id: safeId(item.id, "stopId"),
+          plannedAt: item.plannedAt }));
+        for (const item of stops) registry.validate("core.timestamp", item.plannedAt);
+        if (new Set(stops.map((item) => item.id)).size !== stops.length) {
+          throw new AppError("INVALID_REQUEST", "같은 여행 장소를 중복 선택했어요.",
+            { httpStatus: 400 });
+        }
+        const hash = requestFingerprint({ activityId,
+          expectedGraphFingerprint: input.expectedGraphFingerprint, stops });
+        return await store.transact((state) => {
+          assertState(state);
+          state.travelCorrectionReceipts ??= {};
+          const key = requestFingerprint([ownerId, commandId]);
+          const prior = state.travelCorrectionReceipts[key];
+          if (prior) {
+            if (prior.hash !== hash) throw new AppError("COMMAND_CONFLICT",
+              "명령 ID가 다른 일정 정정에 사용됐어요.", { httpStatus: 409 });
+            if (prior.deleted) throw new AppError("CORRECTION_DELETED",
+              "삭제한 일정 정정은 다시 사용할 수 없어요.", { httpStatus: 410 });
+            return { state, result: { ...prior.result, replayed: true } };
+          }
+          const graph = editableTravelGraph(state, activityId);
+          if (graph.graphFingerprint !== input.expectedGraphFingerprint) {
+            throw new AppError("TRAVEL_REVISION_CONFLICT", "일정 관계가 먼저 변경됐어요.",
+              { httpStatus: 409 });
+          }
+          if (stops.length !== graph.stops.length ||
+              stops.some((item) => !graph.lines.has(item.id))) {
+            throw new AppError("INVALID_REQUEST", "확정한 장소만 정정할 수 있어요.",
+              { httpStatus: 400 });
+          }
+          const start = Date.parse(graph.itinerary.startAt);
+          let previous = start - 1;
+          for (const item of stops) {
+            const at = Date.parse(item.plannedAt);
+            if (at < start || at >= start + 24 * 60 * 60 * 1000 ||
+                at <= previous) {
+              throw new AppError("INVALID_REQUEST",
+                "방문 시각은 시작 후 24시간 안에서 순서대로 입력해 주세요.",
+                { httpStatus: 400 });
+            }
+            previous = at;
+          }
+          if (requestFingerprint(stops) === requestFingerprint(graph.stops.map((item) =>
+            ({ id: item.id, plannedAt: item.plannedAt })))) {
+            throw new AppError("UNCHANGED_ITINERARY", "변경된 여행 일정이 없어요.",
+              { httpStatus: 409 });
+          }
+          const stem = `travel-correction:${fingerprint([ownerId, commandId]).slice(0, 32)}`;
+          const sourceId = `${stem}:source`;
+          const versionId = `${stem}:version`;
+          const now = new Date().toISOString();
+          const beforeSequence = state.knowledge.sequence;
+          const apply = (role, type, payload) => {
+            if (type === "assertion.correct") validateAssertionRelation(state, payload.assertion);
+            state.knowledge = applyKnowledgeCommand(state.knowledge, { ownerId,
+              commandId: `${stem}:${role}`, type, payload }, { predicates }).state;
+          };
+          apply("source", "source.create", { id: sourceId, kind: "user_confirmation",
+            title: "사용자가 정정한 여행 일정",
+            provenance: { scenario: "travel_correction", activityId,
+              confirmationSourceId: graph.source.id,
+              importedSourceIds: graph.scenario.importIds.map((id) =>
+                state.importReceipts[id].sourceId) } });
+          apply("version", "source.version.add", { id: versionId, sourceId,
+            contentHash: fingerprint(stops), content: { stops }, capturedAt: now });
+          for (const [index, item] of stops.entries()) {
+            const previousLine = graph.lines.get(item.id);
+            const role = fingerprint(item.id).slice(0, 16);
+            const evidenceId = `${stem}:evidence:${role}`;
+            apply(`evidence:${role}`, "evidence.add", { id: evidenceId,
+              sourceVersionId: versionId,
+              quote: `${index + 1}. ${previousLine.title} · ${item.plannedAt}`,
+              locator: { kind: "user_confirmation", jsonPointer: `/stops/${index}` } });
+            const correct = (field, predicate, value, type) => {
+              const old = previousLine[field];
+              if (old.typedValue?.value === value) return;
+              apply(`${field}:${role}`, "assertion.correct", {
+                assertionId: old.id, expectedRevision: old.revision,
+                assertion: { id: `${stem}:${field}:${role}`, subjectId: item.id,
+                  predicate, scope: graph.scope, origin: "user_reported",
+                  assertedBy: { type: "user", id: ownerId },
+                  evidenceIds: [evidenceId], observedAt: now,
+                  typedValue: { type, value } },
+              });
+            };
+            correct("order", "travel.stop_order", index + 1, "core.revision");
+            correct("time", "travel.planned_at", item.plannedAt, "core.timestamp");
+          }
+          recordAffectedConsumers(state, beforeSequence);
+          state.reviewEvents.push({ key: `${activityId}:travel-correction:${commandId}`,
+            activityId, reasonCode: "SCENARIO_GRAPH_CORRECTED",
+            eventIds: state.knowledge.events.filter((event) =>
+              event.sequence > beforeSequence).map((event) => event.id), timeDue: false });
+          const next = editableTravelGraph(state, activityId);
+          const result = { activityId, revision: next.revision + 1,
+            graphFingerprint: next.graphFingerprint, sourceId,
+            knowledgeSequence: state.knowledge.sequence };
+          state.travelCorrectionReceipts[key] = { ownerId, activityId,
+            sourceId, hash, result };
+          return { state, result: { ...result, replayed: false } };
         });
       } catch (error) { throw toHttpError(error); }
     },

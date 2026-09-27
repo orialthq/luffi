@@ -416,9 +416,11 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ["/fashion/wear-outcome", "recordFashionWearOutcome"],
     ["/beauty/scenarios", "createBeautyScenario"],
     ["/beauty/confirm-routine", "confirmBeautyRoutine"],
+    ["/beauty/corrections", "correctBeautyRoutine"],
     ["/beauty/routine-outcome", "recordBeautyRoutineOutcome"],
     ["/travel/scenarios", "createTravelScenario"],
     ["/travel/confirm-itinerary", "confirmTravelItinerary"],
+    ["/travel/corrections", "correctTravelItinerary"],
     ["/travel/stop-outcomes", "recordTravelStopOutcomes"],
     ["/life-tip/scenarios", "createLifeTipScenario"],
     ["/life-tip/confirm-actions", "confirmLifeTipActions"],
@@ -474,6 +476,10 @@ test("kernel HTTP routes forward each request to its declared service method", a
     ({ method: "getEditableCaptureFields", importId });
   kernelService.getEditableRecipe = async (activityId) =>
     ({ method: "getEditableRecipe", activityId });
+  kernelService.getEditableBeautyRoutine = async (activityId) =>
+    ({ method: "getEditableBeautyRoutine", activityId });
+  kernelService.getEditableTravelItinerary = async (activityId) =>
+    ({ method: "getEditableTravelItinerary", activityId });
   kernelService.getRecipeShoppingPlanReview = async (shoppingActivityId, connectionId) =>
     ({ method: "getRecipeShoppingPlanReview", shoppingActivityId, connectionId });
   kernelService.listShoppingInventory = async (activityId) =>
@@ -514,6 +520,10 @@ test("kernel HTTP routes forward each request to its declared service method", a
       { method: "getEditableCaptureFields", importId: "item-1" }],
     ["/recipe/editable/meal%20plan",
       { method: "getEditableRecipe", activityId: "meal plan" }],
+    ["/beauty/editable/beauty%20plan",
+      { method: "getEditableBeautyRoutine", activityId: "beauty plan" }],
+    ["/travel/editable/travel%20plan",
+      { method: "getEditableTravelItinerary", activityId: "travel plan" }],
     ["/shopping/recipe-needs/review/shop%20one/link%20one",
       { method: "getRecipeShoppingPlanReview", shoppingActivityId: "shop one",
         connectionId: "link one" }],
