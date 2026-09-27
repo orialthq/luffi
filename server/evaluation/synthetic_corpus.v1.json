@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 1,
+  "dataset": "public-synthetic-2026-09",
+  "dataClass": "synthetic",
+  "entries": [
+    {
+      "id": "beauty_a_cleanser",
+      "domain": "beauty",
+      "imageSha256": "114e7964624233360d5e46a97ca825383737e9c193efa46a044a7ae9c8c17dda",
+      "recording": "beauty_a_cleanser_live_analysis.json",
+      "expected": {
+        "contentKind": "beauty_product",
+        "title": "데일리 클렌징 젤"
+      }
+    },
+    {
+      "id": "beauty_b_moisturizer",
+      "domain": "beauty",
+      "imageSha256": "ca30083dc64a5f3dcc2dca95ad7b8b894d189e27508fc7d8e5d84f2f81b0944a",
+      "recording": "beauty_b_moisturizer_live_analysis.json",
+      "expected": {
+        "contentKind": "beauty_product",
+        "title": "수분 장벽 크림"
+      }
+    },
+    {
+      "id": "dining_a_seongsu",
+      "domain": "dining",
+      "imageSha256": "deb96a44db7455330d1bdff63ff77d21b0b89eaa6e244f145970e4b7b223d11b",
+      "recording": "dining_a_seongsu_live_analysis.json",
+      "expected": {
+        "contentKind": "place",
+        "title": "모퉁이식당 성수점"
+      }
+    },
+    {
+      "id": "dining_b_yeonnam",
+      "domain": "dining",
+      "imageSha256": "a74f847027b5ed15f66bafafa88de22045776d20538bda497d1ee3e9cda99955",
+      "recording": "dining_b_yeonnam_live_analysis.json",
+      "expected": {
+        "contentKind": "place",
+        "title": "모퉁이식당 연남점"
+      }
+    },
+    {
+      "id": "dining_c_seongsu",
+      "domain": "dining",
+      "imageSha256": "0769efeb768dbf6095ed6a03a337d26e0f96a7c08c32248253ae98820520cbcd",
+      "recording": "dining_c_seongsu_live_analysis.json",
+      "expected": {
+        "contentKind": "place",
+        "title": "모퉁이식당 성수점"
+      }
+    },
+    {
+      "id": "dining_d_noodles",
+      "domain": "dining",
+      "imageSha256": "eeec1579bc1acf6e7d212629b7f160b9689e3c6cf8f28f62d7fe8ea2db19732e",
+      "recording": "dining_d_noodles_live_analysis.json",
+      "expected": {
+        "contentKind": "place",
+        "title": "성수국수집"
+      }
+    },
+    {
+      "id": "fashion_a_blazer",
+      "domain": "fashion",
+      "imageSha256": "33a5db2639a0125196de6ccfb64cd668c8d5066eceeffe8676303a14e423643d",
+      "recording": "fashion_a_blazer_live_analysis.json",
+      "expected": {
+        "contentKind": "commerce_product",
+        "title": "차콜 싱글 재킷"
+      }
+    },
+    {
+      "id": "fashion_b_trousers",
+      "domain": "fashion",
+      "imageSha256": "3c0e56a2b659de402f0b67129a060d479274c8a093eb9fb1c3c2f0f63ecd9d65",
+      "recording": "fashion_b_trousers_live_analysis.json",
+      "expected": {
+        "contentKind": "commerce_product",
+        "title": "베이지 슬랙스"
+      }
+    },
+    {
+      "id": "health_home_workout",
+      "domain": "health",
+      "imageSha256": "c1000800307a89f4c8341d50111e6e2acbbcac6b8ad6e9be1d9048efa4f6abe7",
+      "recording": "health_home_workout_live_analysis.json",
+      "expected": {
+        "contentKind": "unknown",
+        "title": "집에서 하는 3단계 홈트"
+      }
+    },
+    {
+      "id": "life_tip_receipts",
+      "domain": "life_tip",
+      "imageSha256": "711b224d91b4b1b6e888e281bf208ec310dd486c82b1975b472a328999f96b46",
+      "recording": "life_tip_receipts_live_analysis.json",
+      "expected": {
+        "contentKind": "unknown",
+        "title": "영수증 정리 3단계"
+      }
+    },
+    {
+      "id": "recipe_tomato_egg_generated",
+      "domain": "recipe",
+      "imageSha256": "4344034d26aeab2e3d42316b08d0f24fa3894e5a61f7536b0dedb3cf33d65106",
+      "recording": "recipe_tomato_egg_live_analysis.json",
+      "expected": {
+        "contentKind": "recipe",
+        "title": "토마토 달걀 볶음"
+      }
+    },
+    {
+      "id": "shopping_a_fabric_box",
+      "domain": "shopping",
+      "imageSha256": "ce71495de8243c750e0b17a67499534c9f9e691b6d2cb818046e38706634e542",
+      "recording": "shopping_a_fabric_box_live_analysis.json",
+      "expected": {
+        "contentKind": "commerce_product",
+        "title": "접이식 패브릭 수납함"
+      }
+    },
+    {
+      "id": "shopping_b_clear_box",
+      "domain": "shopping",
+      "imageSha256": "ab0406cd684d8f3021ed83dc37eb737a3a8bca9102d5d7ec4b142878a91fcbe5",
+      "recording": "shopping_b_clear_box_live_analysis.json",
+      "expected": {
+        "contentKind": "commerce_product",
+        "title": "투명 적층 수납함"
+      }
+    },
+    {
+      "id": "travel_a_viewpoint",
+      "domain": "travel",
+      "imageSha256": "07ddb947d3d725a1cd0737346f8a5817a7bd63e67301a88277cad4cbce483099",
+      "recording": "travel_a_viewpoint_live_analysis.json",
+      "expected": {
+        "contentKind": "place",
+        "title": "바람언덕 전망대"
+      }
+    },
+    {
+      "id": "travel_b_coastwalk",
+      "domain": "travel",
+      "imageSha256": "0746124c05158934bb348be03c57ea0f7408c2cb000477edaffe94c8806642d1",
+      "recording": "travel_b_coastwalk_live_analysis.json",
+      "expected": {
+        "contentKind": "place",
+        "title": "푸른곶 해안길"
+      }
+    },
+    {
+      "id": "variation_dining_jeju_noodles",
+      "domain": "dining",
+      "imageSha256": "207ca5abbbfa507fade08f353f744d407be4f780266ca37f0b94329fe5a166d3",
+      "recording": "variation_dining_jeju_noodles_live_analysis.json",
+      "expected": {
+        "contentKind": "place",
+        "title": "제주 바다국수"
+      }
+    },
+    {
+      "id": "variation_life_tip_workout_prep",
+      "domain": "life_tip",
+      "imageSha256": "2fb64f37eb1a20749f13e70674f0f8ee1f024c38542b4ca097e928b450251432",
+      "recording": "variation_life_tip_workout_prep_live_analysis.json",
+      "expected": {
+        "contentKind": "unknown",
+        "title": "집에서 운동할 때 준비 꿀팁"
+      }
+    },
+    {
+      "id": "variation_recipe_tofu_egg_as_needed",
+      "domain": "recipe",
+      "imageSha256": "4ee2de07ece75c1a7b467430701efbc19e1775584738147bd427ab0129baf47e",
+      "recording": "variation_recipe_tofu_egg_as_needed_live_analysis.json",
+      "expected": {
+        "contentKind": "recipe",
+        "title": "두부 달걀 볶음"
+      }
+    },
+    {
+      "id": "variation_shopping_egg_pack",
+      "domain": "shopping",
+      "imageSha256": "db39f40c0062dacd52cbfa6c87c41302cdd668405d783368a8b6f67515c9db6f",
+      "recording": "variation_shopping_egg_pack_live_analysis.json",
+      "expected": {
+        "contentKind": "commerce_product",
+        "title": "달걀 10개입"
+      }
+    },
+    {
+      "id": "variation_shopping_old_current_price",
+      "domain": "shopping",
+      "imageSha256": "7c3da692d80c16dc3d838743ec3496608e7579738f38fda3b386843f64bf3633",
+      "recording": "variation_shopping_old_current_price_live_analysis.json",
+      "expected": {
+        "contentKind": "commerce_product",
+        "title": "접이식 패브릭 수납함"
+      }
+    },
+    {
+      "id": "variation_shopping_tofu_ingredient",
+      "domain": "shopping",
+      "imageSha256": "7a87bb882a641e8a344ce59750f7b34d9c4842d659f6ed91898b856d8602c442",
+      "recording": "variation_shopping_tofu_ingredient_live_analysis.json",
+      "expected": {
+        "contentKind": "commerce_product",
+        "title": "부침용 두부 300g"
+      }
+    }
+  ]
+}

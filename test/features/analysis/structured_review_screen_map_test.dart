@@ -3,8 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ori_beauty/core/app_theme.dart';
 import 'package:ori_beauty/data/content_analysis_service.dart';
+import 'package:ori_beauty/data/app_snapshot_store.dart';
 import 'package:ori_beauty/data/incoming_share_service.dart';
 import 'package:ori_beauty/data/place_reminder_service.dart';
+import 'package:ori_beauty/data/place_enrichment_service.dart';
+import 'package:ori_beauty/data/reviewed_capture_import_client.dart';
+import 'package:ori_beauty/data/tag_merge_service.dart';
+import 'package:ori_beauty/data/tag_sense_service.dart';
 import 'package:ori_beauty/domain/models.dart';
 import 'package:ori_beauty/features/analysis/structured_review_screen.dart';
 import 'package:ori_beauty/state/app_controller.dart';
@@ -84,6 +89,40 @@ void main() {
 
     expect(find.text('지도를 열지 못했어요.'), findsNothing);
   });
+
+  testWidgets(
+    'correction opens only when server still owns the synced source',
+    (tester) async {
+      final client = _StatusClient();
+      final fixture = await _StructuredMapFixture.createReviewed(client);
+      addTearDown(fixture.dispose);
+      await _pumpScreen(
+        tester,
+        fixture,
+        onMapOpened:
+            ({required provider, required captureId, String? planId}) {},
+      );
+      final button = find.byKey(const Key('open-imported-field-correction'));
+      await tester.ensureVisible(button);
+      client.status = 'deleted';
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.text('캡처 내용 정정'), findsNothing);
+      expect(find.textContaining('서버에서 이 캡처를 찾지 못했어요'), findsOneWidget);
+
+      client.status = 'active';
+      client.sourceId = 'wrong-source';
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.text('캡처 내용 정정'), findsNothing);
+
+      client.sourceId = 'source-map';
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(client.checked, 3);
+      expect(find.text('캡처 내용 정정'), findsOneWidget);
+    },
+  );
 }
 
 void _mockMapChannel(
@@ -168,7 +207,75 @@ final class _StructuredMapFixture {
     return _StructuredMapFixture(controller, 'capture-map-capture');
   }
 
+  static Future<_StructuredMapFixture> createReviewed(
+    ReviewedCaptureImportClient importClient,
+  ) async {
+    final share = IncomingShare(
+      id: 'reviewed-map',
+      receivedAt: DateTime.utc(2026, 8, 18),
+      sharedText: '성수 맛집 서울 성동구 서울숲길 24',
+      discoveredUrl: null,
+    );
+    final capture = const _PlaceAnalysisService()
+        .analyzeShare(share)
+        .copyWith(
+          reviewedImport: const ReviewedCaptureImport(
+            request: {'importId': 'import-map'},
+            status: ReviewedCaptureImportStatus.synced,
+            sourceId: 'source-map',
+          ),
+        );
+    final store = InMemoryAppSnapshotStore();
+    await store.save([PersistedCapture.fromRecord(capture, null)]);
+    final controller = AppController(
+      InMemoryIncomingShareService(),
+      const _PlaceAnalysisService(),
+      store,
+      null,
+      const NoPlaceEnrichmentService(),
+      const NoTagMergeService(),
+      const NoTagSenseService(),
+      null,
+      null,
+      importClient,
+    );
+    await controller.initialize();
+    return _StructuredMapFixture(controller, capture.raw.id);
+  }
+
   void dispose() => controller.dispose();
+}
+
+final class _StatusClient implements ReviewedCaptureImportClient {
+  String status = 'active';
+  String sourceId = 'source-map';
+  int checked = 0;
+
+  @override
+  Future<List<ReviewedCaptureServerStatus>> checkReviewedImports(
+    List<String> importIds,
+  ) async {
+    checked += 1;
+    return [
+      for (final importId in importIds)
+        ReviewedCaptureServerStatus(
+          importId: importId,
+          status: status,
+          sourceId: sourceId,
+        ),
+    ];
+  }
+
+  @override
+  Future<void> deleteReviewedImport({
+    required String importId,
+    required String commandId,
+  }) async {}
+
+  @override
+  Future<ReviewedCaptureImportReceipt> importReviewedCapture(
+    Map<String, Object?> request,
+  ) async => throw UnimplementedError();
 }
 
 final class _PlaceAnalysisService implements ContentAnalysisService {
@@ -177,7 +284,7 @@ final class _PlaceAnalysisService implements ContentAnalysisService {
   static const _baseline = BaselineContentAnalysisService();
   static const _structured = StructuredContentAnalysis(
     schemaVersion: '2.0',
-    model: 'test-model',
+    model: 'gpt-5.6-luna',
     domain: ContentDomain.food,
     contentKind: ContentKind.place,
     tags: [ContentTag(value: '맛집')],

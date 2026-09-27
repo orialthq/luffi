@@ -52,7 +52,13 @@ final class _ImportedFieldCorrectionScreenState
       setState(() => _data = data);
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = error);
+      setState(() {
+        if (_isMissingImport(error)) {
+          _data = null;
+          _pendingRequest = null;
+        }
+        _error = error;
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -147,11 +153,18 @@ final class _ImportedFieldCorrectionScreenState
       if (!retryable) {
         _pendingRequest = null;
       }
-      setState(() => _error = error);
+      setState(() {
+        if (_isMissingImport(error)) _data = null;
+        _error = error;
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  bool _isMissingImport(Object error) =>
+      error is CommonKernelException &&
+      (error.code == 'IMPORT_NOT_FOUND' || error.statusCode == 404);
 
   @override
   Widget build(BuildContext context) {

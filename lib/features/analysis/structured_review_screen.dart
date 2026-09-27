@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../core/app_theme.dart';
-import '../../data/common_kernel_client.dart';
 import '../../data/place_reminder_service.dart';
 import '../../domain/models.dart';
 import '../../state/app_controller.dart';
@@ -40,7 +39,46 @@ final class StructuredReviewScreen extends StatefulWidget {
 
 final class _StructuredReviewScreenState extends State<StructuredReviewScreen> {
   var _saving = false;
+  var _openingCorrection = false;
   List<ContentTag>? _selectedTags;
+
+  Future<void> _openImportedCorrection(
+    String importId,
+    List<IncomingAttachment> attachments,
+  ) async {
+    if (_openingCorrection) return;
+    setState(() => _openingCorrection = true);
+    try {
+      final verified = await widget.controller.verifiedReviewedCaptureImports(
+        importIds: {importId},
+      );
+      if (!mounted) return;
+      if (!verified.any(
+        (item) =>
+            item.importId == importId && item.captureId == widget.captureId,
+      )) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('서버에서 이 캡처를 찾지 못했어요. 정정을 열 수 없어요.')),
+        );
+        return;
+      }
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ImportedFieldCorrectionScreen(
+            importId: importId,
+            attachments: attachments,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('서버 상태를 확인하지 못했어요. 다시 시도해 주세요.')),
+      );
+    } finally {
+      if (mounted) setState(() => _openingCorrection = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -53,7 +91,7 @@ final class _StructuredReviewScreenState extends State<StructuredReviewScreen> {
     final isPortableTip = capture.raw.origin == CaptureOrigin.portableTip;
     final selectedTags = _selectedTags ?? capture.contentTags;
     String? syncedImportId;
-    if (commonKernelDebugEnabled) {
+    if (widget.controller.canRetryReviewedCaptureImports) {
       for (final imported
           in widget.controller.allSyncedReviewedCaptureImports) {
         if (imported.captureId == widget.captureId) {
@@ -160,14 +198,12 @@ final class _StructuredReviewScreenState extends State<StructuredReviewScreen> {
             const SizedBox(height: 16),
             OutlinedButton.icon(
               key: const Key('open-imported-field-correction'),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => ImportedFieldCorrectionScreen(
-                    importId: syncedImportId!,
-                    attachments: capture.raw.attachments,
-                  ),
-                ),
-              ),
+              onPressed: _openingCorrection
+                  ? null
+                  : () => _openImportedCorrection(
+                      syncedImportId!,
+                      capture.raw.attachments,
+                    ),
               icon: const Icon(Icons.edit_note_rounded),
               label: const Text('캡처에서 읽은 내용 정정'),
             ),

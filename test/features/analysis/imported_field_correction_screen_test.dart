@@ -8,23 +8,34 @@ final class _CorrectionClient implements CommonKernelClient {
   int revision = 1;
   bool timeOutOnce = true;
   bool rejectOnce = false;
+  bool deleted = false;
+  bool deleteAfterCorrection = false;
   final requests = <KernelJson>[];
 
   @override
-  Future<KernelJson> getEditableCaptureFields(String importId) async => {
-    'importId': importId,
-    'fields': [
-      {
-        'path': '/place/name',
-        'value': value,
-        'originalValue': '모퉁이식당 성수점',
-        'revision': revision,
-        'evidence': [
-          {'quote': '모퉁이식당 성수점', 'region': 'image_text'},
-        ],
-      },
-    ],
-  };
+  Future<KernelJson> getEditableCaptureFields(String importId) async {
+    if (deleted) {
+      throw const CommonKernelException(
+        'IMPORT_NOT_FOUND',
+        '캡처를 찾지 못했어요',
+        statusCode: 404,
+      );
+    }
+    return {
+      'importId': importId,
+      'fields': [
+        {
+          'path': '/place/name',
+          'value': value,
+          'originalValue': '모퉁이식당 성수점',
+          'revision': revision,
+          'evidence': [
+            {'quote': '모퉁이식당 성수점', 'region': 'image_text'},
+          ],
+        },
+      ],
+    };
+  }
 
   @override
   Future<KernelJson> correctImportedField(KernelJson request) async {
@@ -45,6 +56,7 @@ final class _CorrectionClient implements CommonKernelClient {
       timeOutOnce = false;
       throw const CommonKernelException('NETWORK_TIMEOUT', '시간이 지났어요');
     }
+    if (deleteAfterCorrection) deleted = true;
     return {'importId': request['importId'], 'replayed': true};
   }
 
@@ -121,5 +133,35 @@ void main() {
     await tester.pumpAndSettle();
     expect(client.requests, hasLength(2));
     expect(client.requests[1]['value'], '새 이름');
+  });
+
+  testWidgets('deleted server import removes fields already on screen', (
+    tester,
+  ) async {
+    final client = _CorrectionClient()
+      ..timeOutOnce = false
+      ..deleteAfterCorrection = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ImportedFieldCorrectionScreen(
+          importId: 'capture-1',
+          attachments: const [],
+          client: client,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('correct-field-/place/name')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('correct-field-/place/name')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('field-correction-input')),
+      '정정한 이름',
+    );
+    await tester.tap(find.byKey(const Key('field-correction-confirm')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('correct-field-/place/name')), findsNothing);
+    expect(find.textContaining('캡처를 찾지 못했어요'), findsOneWidget);
   });
 }
