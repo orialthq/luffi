@@ -1527,23 +1527,53 @@ void main() {
             },
           ],
         },
+        {
+          'shoppingActivityId': 'another-shop',
+          'shoppingTitle': '다른 장보기',
+          'purchaseFingerprint': 'purchase-2',
+          'observations': [
+            {
+              'observationId': 'stock-egg-new',
+              'ingredientId': 'egg',
+              'ingredientName': '달걀',
+              'quantity': {'status': 'known', 'amount': 3, 'unit': 'count'},
+              'graphFingerprint': 'graph-egg-new',
+            },
+          ],
+        },
       ],
     };
     await _pump(tester, client);
-    await tester.tap(find.byKey(const Key('recipe-adopt-from-shopping-board')));
+    await tester.tap(find.byKey(const Key('recipe-adopt-shopping-stock')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('recipe-adopt-stock-confirm')), findsOneWidget);
     await tester.tap(find.byKey(const Key('recipe-stock-stock-tofu')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('recipe-stock-stock-egg')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('recipe-stock-stock-egg-new')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('recipe-adopt-stock-confirm')));
     await tester.pumpAndSettle();
-    expect(client.inventoryAdoptionRequests.single['observations'], [
-      {'observationId': 'stock-tofu', 'graphFingerprint': 'graph-tofu'},
+    expect(client.inventoryAdoptionRequests.single['sources'], [
+      {
+        'shoppingActivityId': 'shopping-board',
+        'purchaseFingerprint': 'purchase-1',
+        'observations': [
+          {'observationId': 'stock-tofu', 'graphFingerprint': 'graph-tofu'},
+        ],
+      },
+      {
+        'shoppingActivityId': 'another-shop',
+        'purchaseFingerprint': 'purchase-2',
+        'observations': [
+          {
+            'observationId': 'stock-egg-new',
+            'graphFingerprint': 'graph-egg-new',
+          },
+        ],
+      },
     ]);
-    expect(
-      client.inventoryAdoptionRequests.single['purchaseFingerprint'],
-      'purchase-1',
-    );
   });
 
   testWidgets('completed recipe calculation starts a separate stock recheck', (

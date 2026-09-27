@@ -2563,8 +2563,17 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
     }
   }
 
-  Future<void> _adoptShoppingInventory(KernelJson source) async {
-    final candidates = _objects(source['observations']);
+  Future<void> _adoptShoppingInventory() async {
+    final candidates = [
+      for (final source in _objects(_recipeInventoryReview?['sources']))
+        for (final observation in _objects(source['observations']))
+          <String, Object?>{
+            ...observation,
+            'shoppingActivityId': source['shoppingActivityId'],
+            'shoppingTitle': source['shoppingTitle'],
+            'purchaseFingerprint': source['purchaseFingerprint'],
+          },
+    ];
     final selected = <String, KernelJson>{};
     final choice = await showDialog<List<KernelJson>>(
       context: context,
@@ -2586,7 +2595,10 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
                       '${_text(observation['ingredientName'], _text(observation['ingredientId']))} · '
                       '${_shoppingQuantityLabel(observation['quantity'])}',
                     ),
-                    subtitle: Text(_text(observation['observedAt'])),
+                    subtitle: Text(
+                      '${_text(observation['shoppingTitle'], _text(observation['shoppingActivityId']))} · '
+                      '${_text(observation['observedAt'])}',
+                    ),
                     value: selected.containsKey(
                       _text(observation['observationId']),
                     ),
@@ -2625,20 +2637,28 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
       ),
     );
     if (choice == null || choice.isEmpty || !mounted) return;
+    final selectedSources = <String, KernelJson>{};
+    for (final item in choice) {
+      final shoppingActivityId = _text(item['shoppingActivityId']);
+      final source = selectedSources.putIfAbsent(
+        shoppingActivityId,
+        () => {
+          'shoppingActivityId': shoppingActivityId,
+          'purchaseFingerprint': item['purchaseFingerprint'],
+          'observations': <KernelJson>[],
+        },
+      );
+      (source['observations'] as List<KernelJson>).add({
+        'observationId': item['observationId'],
+        'graphFingerprint': item['graphFingerprint'],
+      });
+    }
     await _mutate((revision, commandId) async {
       await widget.client.adoptShoppingInventoryForRecipe({
         'activityId': widget.activityId,
-        'shoppingActivityId': source['shoppingActivityId'],
         'commandId': commandId,
         'expectedRevision': revision,
-        'purchaseFingerprint': source['purchaseFingerprint'],
-        'observations': [
-          for (final item in choice)
-            {
-              'observationId': item['observationId'],
-              'graphFingerprint': item['graphFingerprint'],
-            },
-        ],
+        'sources': selectedSources.values.toList(),
         'confirmed': true,
       });
     });
@@ -4465,19 +4485,18 @@ final class _CommonBoardScreenState extends State<CommonBoardScreen> {
               const Text(
                 '실제로 확인한 관측값을 선택하면 재고 확인 작업에 근거와 함께 기록해요. 선택하지 않은 재료는 미확인으로 남아요.',
               ),
-              for (final source in sources)
-                TextButton.icon(
-                  key: ValueKey(
-                    'recipe-adopt-from-${source['shoppingActivityId']}',
-                  ),
-                  onPressed: _busy || _needsRefresh
-                      ? null
-                      : () => _adoptShoppingInventory(source),
-                  icon: const Icon(Icons.inventory_2_outlined),
-                  label: Text(
-                    '쇼핑 보드 재고 ${_objects(source['observations']).length}건 선택',
-                  ),
+              if (_objects(review?['conflicts']).isNotEmpty)
+                Text(
+                  '같은 재료의 관측값이 겹치는 항목 ${_objects(review?['conflicts']).length}개 · 하나씩 직접 선택해 주세요.',
                 ),
+              TextButton.icon(
+                key: const Key('recipe-adopt-shopping-stock'),
+                onPressed: _busy || _needsRefresh
+                    ? null
+                    : _adoptShoppingInventory,
+                icon: const Icon(Icons.inventory_2_outlined),
+                label: Text('쇼핑 ${sources.length}개 보드의 재고 선택'),
+              ),
             ],
             if (status == 'adopted') const Text('선택한 재고가 현재 재료 계산에 연결됐어요.'),
             if (status == 'stale') ...[

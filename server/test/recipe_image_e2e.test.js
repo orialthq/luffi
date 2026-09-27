@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createCommonKernelService, createCommonKernelState } from "../src/common/kernel_service.js";
+import { createHttpServer } from "../src/http_app.js";
 import { validateLegacyAnalysis } from "../src/ingestion/index.js";
 import { validateAnalyzeRequest } from "../src/request_validation.js";
 import { createJsonStateStore } from "../src/storage/json_state_store.js";
@@ -32,6 +34,26 @@ test("generated image and recorded live API response reach a confirmed recipe bo
     ["달걀", "2", "개"], ["토마토", "200", "g"], ["식용유", "1", "큰술"],
   ]);
   assert.equal(analysis.steps.length, 3);
+
+  let received;
+  const api = createHttpServer({ analysisService: { async analyze(input) {
+    received = input;
+    return analysis;
+  } } });
+  api.listen(0, "127.0.0.1");
+  await once(api, "listening");
+  t.after(() => new Promise((resolve) => api.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${api.address().port}/v1/analyze`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: { mimeType: "image/png",
+      base64: image.toString("base64") },
+    capture: { id: "generated-tomato-egg-recipe",
+      sourceApp: "synthetic.recipe", locale: "ko-KR" } }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(createHash("sha256").update(Buffer.from(received.imageBase64, "base64"))
+    .digest("hex"), createHash("sha256").update(image).digest("hex"));
+  assert.deepEqual(await response.json(), analysis);
 
   const folder = await fs.mkdtemp(join(tmpdir(), "luffi-recipe-image-"));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));

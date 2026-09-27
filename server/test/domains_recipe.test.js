@@ -89,3 +89,33 @@ test("fractional counts remain fractional and calculation overflow is rejected",
   assert.deepEqual(output.ingredients[0].quantity, known(0.5, "count"));
   rejects(() => registry.execute("recipe.scale_servings", { recipe: recipe([ingredient("line", "sugar", Number.MAX_VALUE)]), targetServings: 4 }));
 });
+
+test("mixed mass units, fixed amounts and optional repeated lines share one stock deduction", () => {
+  const source = recipe([
+    ingredient("base", "tofu", 0.25, "kg"),
+    ingredient("sauce", "tofu", 50, "g", { scaling: "fixed" }),
+    ingredient("extra", "tofu", 25, "g", { optional: true }),
+  ]);
+  const stock = [inventory("tofu", 400, "g")];
+  const withoutOptional = calculate(source, stock).items[0];
+  assert.deepEqual(withoutOptional.requirementIds, ["base", "sauce"]);
+  assert.deepEqual(withoutOptional.requiredQuantity, known(0.55, "kg"));
+  assert.deepEqual(withoutOptional.missingQuantity, known(0.15, "kg"));
+  const withOptional = calculate(source, stock,
+    { includeOptionalIngredientIds: ["extra"] }).items[0];
+  assert.deepEqual(withOptional.requirementIds, ["base", "sauce", "extra"]);
+  assert.deepEqual(withOptional.requiredQuantity, known(0.6, "kg"));
+  assert.deepEqual(withOptional.missingQuantity, known(0.2, "kg"));
+});
+
+test("as-needed or unknown repeated lines never turn into an invented numeric shortage", () => {
+  for (const status of ["as_needed", "unknown"]) {
+    const source = recipe([
+      ingredient("base", "salt", 2, "g"),
+      ingredient("finish", "salt", 1, "g", { quantity: { status } }),
+    ]);
+    const item = calculate(source, [inventory("salt", 1)]).items[0];
+    assert.equal(item.status, "unknown");
+    assert.deepEqual(item.missingQuantity, { status: "unknown" });
+  }
+});

@@ -72,6 +72,8 @@ async function approve(service, created, commandId) {
 
 const active = (state, predicate) => state.knowledge.assertions.filter((item) =>
   item.status === "active" && item.predicate === predicate);
+const activeInActivity = (state, predicate, activityId) =>
+  active(state, predicate).filter((item) => item.scope?.id === activityId);
 
 for (const backend of ["json", "postgres"]) {
 test(`recipe amount 'as needed' stays nonnumeric and an actual tofu offer links without a purchase (${backend})`, async (t) => {
@@ -296,6 +298,54 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
     observations: [{ ingredientId: "tofu", quantity: { status: "known",
       amount: 700, unit: "g" }, supportingChoiceIds: [choiceId] }] })).replayed, true);
   assert.equal(stock.observations[0].quantity.amount, 700);
+  const otherShopping = await service.createShoppingScenario({
+    commandId: "other-shopping", activityId: "other-shopping-board", confirmed: true,
+    importIds: ["tofu", "egg"], purpose: "같은 요리 재료 추가 장보기" });
+  let otherBoard = await approve(service, otherShopping, "approve-other-shopping");
+  const otherLink = await service.createScenarioConnection({
+    commandId: "link-other-shopping", fromActivityId: recipeBoard.id,
+    toActivityId: otherBoard.id, kind: "recipe_shopping", confirmed: true,
+    expectedFromRevision: (await service.getBoard(recipeBoard.id)).revision,
+    expectedToRevision: otherBoard.revision });
+  const otherReview = await service.getRecipeShoppingPlanReview(otherBoard.id,
+    otherLink.id);
+  const otherProposal = await service.proposeRecipeShoppingPlan({
+    commandId: "other-recipe-needs", shoppingActivityId: otherBoard.id,
+    connectionId: otherLink.id, expectedRevision: otherReview.expectedRevision,
+    expectedSourceResultId: otherReview.reference.sourceResultId, confirmed: true });
+  await service.acceptProposal({ proposalId: otherProposal.proposalId,
+    commandId: "approve-other-needs" });
+  otherBoard = await service.getBoard(otherBoard.id);
+  const otherCandidates = otherBoard.tasks.find((item) =>
+    item.id === "confirm_choice").readiness.inputs.candidates;
+  await service.confirmShoppingBasket({ commandId: "confirm-other-basket",
+    activityId: otherBoard.id, expectedRevision: otherBoard.revision,
+    selections: [{ ingredientId: "tofu", selectedImportId: "tofu", quantity: 1,
+      packageQuantity: { status: "known", amount: 300, unit: "g" },
+      packageEvidenceIds: otherCandidates.find((item) =>
+        item.importId === "tofu").titleEvidenceIds },
+    { ingredientId: "egg", selectedImportId: "egg", quantity: 1,
+      packageQuantity: { status: "known", amount: 10, unit: "count" },
+      packageEvidenceIds: otherCandidates.find((item) =>
+        item.importId === "egg").titleEvidenceIds }] });
+  otherBoard = await service.getBoard(otherBoard.id);
+  const otherBasket = otherBoard.results.find((item) =>
+    item.taskId === "confirm_choice").value.choice;
+  const otherTofuChoice = otherBasket.lines.find((item) =>
+    item.ingredientId === "tofu").choices[0].id;
+  const otherEggChoice = otherBasket.lines.find((item) =>
+    item.ingredientId === "egg").choices[0].id;
+  await service.recordShoppingBasketOutcomes({ commandId: "purchase-other-basket",
+    activityId: otherBoard.id, expectedRevision: otherBoard.revision,
+    outcomes: [{ choiceId: otherTofuChoice, status: "purchased", actualPaidKrw: 2400 },
+      { choiceId: otherEggChoice, status: "purchased", actualPaidKrw: 4900 }] });
+  otherBoard = await service.getBoard(otherBoard.id);
+  await service.recordShoppingInventory({ commandId: "other-observed-stock",
+    activityId: otherBoard.id, expectedRevision: otherBoard.revision,
+    observations: [{ ingredientId: "tofu", quantity: { status: "known",
+      amount: 200, unit: "g" }, supportingChoiceIds: [otherTofuChoice] },
+    { ingredientId: "egg", quantity: { status: "known",
+      amount: 3, unit: "count" }, supportingChoiceIds: [otherEggChoice] }] });
   assert.equal((await service.getRecipeInventoryCarryoverReview(recipeBoard.id)).status,
     "new_activity_required");
   const recheckRequest = { commandId: "recheck-after-shopping",
@@ -313,28 +363,49 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
   assert.equal(carryover.status, "available");
   const sourceStock = carryover.sources.find((item) =>
     item.shoppingActivityId === shoppingBoard.id);
+  const otherSourceStock = carryover.sources.find((item) =>
+    item.shoppingActivityId === otherBoard.id);
+  assert.equal(carryover.conflicts[0].ingredientId, "tofu");
   const tofuStock = sourceStock.observations.find((item) => item.ingredientId === "tofu");
+  const otherEggStock = otherSourceStock.observations.find((item) =>
+    item.ingredientId === "egg");
   assert.equal(tofuStock.quantity.amount, 700);
   const adoptionRequest = { commandId: "adopt-tofu-stock",
-    activityId: recheck.activityId, shoppingActivityId: shoppingBoard.id,
-    expectedRevision: recheckBoard.revision,
-    purchaseFingerprint: sourceStock.purchaseFingerprint,
-    observations: [{ observationId: tofuStock.observationId,
-      graphFingerprint: tofuStock.graphFingerprint }], confirmed: true };
+    activityId: recheck.activityId, expectedRevision: recheckBoard.revision,
+    sources: [{ shoppingActivityId: shoppingBoard.id,
+      purchaseFingerprint: sourceStock.purchaseFingerprint,
+      observations: [{ observationId: tofuStock.observationId,
+        graphFingerprint: tofuStock.graphFingerprint }] },
+    { shoppingActivityId: otherBoard.id,
+      purchaseFingerprint: otherSourceStock.purchaseFingerprint,
+      observations: [{ observationId: otherEggStock.observationId,
+        graphFingerprint: otherEggStock.graphFingerprint }] }], confirmed: true };
   await assert.rejects(service.adoptShoppingInventoryForRecipe({ ...adoptionRequest,
-    commandId: "forged-stock", observations: [{ observationId: "unrelated",
-      graphFingerprint: tofuStock.graphFingerprint }] }),
+    commandId: "forged-stock", sources: [{ ...adoptionRequest.sources[0],
+      observations: [{ observationId: "unrelated",
+        graphFingerprint: tofuStock.graphFingerprint }] }, adoptionRequest.sources[1]] }),
   (error) => error.code === "INVENTORY_REVIEW_STALE");
   await assert.rejects(service.adoptShoppingInventoryForRecipe({ ...adoptionRequest,
-    commandId: "stale-stock", observations: [{ observationId: tofuStock.observationId,
-      graphFingerprint: "outdated" }] }),
+    commandId: "stale-stock", sources: [{ ...adoptionRequest.sources[0],
+      observations: [{ observationId: tofuStock.observationId,
+        graphFingerprint: "outdated" }] }, adoptionRequest.sources[1]] }),
   (error) => error.code === "INVENTORY_REVIEW_STALE");
+  const otherTofuStock = otherSourceStock.observations.find((item) =>
+    item.ingredientId === "tofu");
+  await assert.rejects(service.adoptShoppingInventoryForRecipe({ ...adoptionRequest,
+    commandId: "double-count-tofu", sources: [adoptionRequest.sources[0],
+      { ...adoptionRequest.sources[1], observations: [
+        { observationId: otherTofuStock.observationId,
+          graphFingerprint: otherTofuStock.graphFingerprint },
+        ...adoptionRequest.sources[1].observations ] }] }),
+  (error) => error.code === "INVALID_REQUEST");
   const adopted = await service.adoptShoppingInventoryForRecipe(adoptionRequest);
   assert.equal((await service.adoptShoppingInventoryForRecipe(adoptionRequest)).replayed, true);
   assert.equal(adopted.observationIds[0], tofuStock.observationId);
   recheckBoard = await service.getBoard(recheck.activityId);
   const inventoryResult = recheckBoard.results.find((item) => item.id === adopted.resultId);
   assert.equal(inventoryResult.value[0].quantity.amount, 700);
+  assert.equal(inventoryResult.value[1].quantity.amount, 3);
   assert.ok(inventoryResult.evidenceRefs.length > 0);
   await service.runTask({ commandId: "calculate-recheck", activityId: recheck.activityId,
     taskId: "calculate_requirements", expectedRevision: recheckBoard.revision });
@@ -343,6 +414,8 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
     item.taskId === "calculate_requirements").value;
   assert.equal(newNeeds.items.find((item) => item.ingredientId === "tofu")
     .missingQuantity.amount, 0);
+  assert.equal(newNeeds.items.find((item) => item.ingredientId === "egg")
+    .missingQuantity.amount, 1);
   assert.equal((await service.listScenarioConnections(shoppingBoard.id)).connections[0]
     .recipeNeeds.items.find((item) => item.ingredientId === "tofu")
     .missingQuantity.amount, 500);
@@ -361,8 +434,8 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
   assert.equal(paidCorrection.outcome.actualPaidKrw, 4700);
   assert.equal((await service.getRecipeInventoryCarryoverReview(recheck.activityId)).status,
     "adopted");
-  assert.equal(active(await store.snapshot(), "shopping.actual_paid_krw")[0]
-    .typedValue.value, 4700);
+  assert.equal(activeInActivity(await store.snapshot(), "shopping.actual_paid_krw",
+    shoppingBoard.id).some((item) => item.typedValue.value === 4700), true);
   await assert.rejects(service.correctShoppingPurchaseOutcome({
     ...paidCorrectionRequest, commandId: "stale-payment", actualPaidKrw: 4600,
   }), (error) => error.code === "SHOPPING_OUTCOME_CONFLICT");
@@ -466,17 +539,23 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
   assert.equal((await service.getRecipeInventoryCarryoverReview(refreshed.activityId)).status,
     "adopted");
   assert.equal(observations[0].assertionId, inventoryCorrection.assertionId);
-  assert.equal(active(await store.snapshot(), "recipe.observes_inventory").length, 1);
-  assert.equal(active(await store.snapshot(), "shopping.inventory_after_choice").length, 1);
+  assert.equal(activeInActivity(await store.snapshot(), "recipe.observes_inventory",
+    shoppingBoard.id).length, 1);
+  assert.equal(activeInActivity(await store.snapshot(), "shopping.inventory_after_choice",
+    shoppingBoard.id).length, 1);
   await assert.rejects(service.correctShoppingInventoryObservation({
     ...inventoryCorrectionRequest, commandId: "stale-tofu-stock",
     quantity: { status: "known", amount: 600, unit: "g" },
   }), (error) => error.code === "INVENTORY_REVISION_CONFLICT");
   const state = await store.snapshot();
-  assert.equal(active(state, "shopping.purchase_for_choice").length, 1);
-  assert.equal(active(state, "shopping.purchase_for_choice")[0].objectEntityId, choiceId);
-  assert.equal(active(state, "recipe.observed_inventory").length, 1);
-  assert.equal(active(state, "shopping.inventory_after_choice").length, 1);
+  assert.equal(activeInActivity(state, "shopping.purchase_for_choice",
+    shoppingBoard.id).length, 1);
+  assert.equal(activeInActivity(state, "shopping.purchase_for_choice",
+    shoppingBoard.id)[0].objectEntityId, choiceId);
+  assert.equal(activeInActivity(state, "recipe.observed_inventory",
+    shoppingBoard.id).length, 1);
+  assert.equal(activeInActivity(state, "shopping.inventory_after_choice",
+    shoppingBoard.id).length, 1);
   assert.equal((await service.listScenarioConnections(shoppingBoard.id)).connections[0]
     .recipeNeeds.items.find((item) => item.ingredientId === "tofu")
     .missingQuantity.amount, 500);
@@ -527,9 +606,11 @@ test(`image-backed recipe basket keeps unselected ingredients and reports purcha
   assert.equal(active(await store.snapshot(), "shopping.basket_supersedes_basket")
     .find((item) => item.subjectId === basketCorrection.basketId)?.objectEntityId,
   basket.id);
-  assert.equal(active(await store.snapshot(), "shopping.purchase_for_choice")[0]
+  assert.equal(activeInActivity(await store.snapshot(), "shopping.purchase_for_choice",
+    shoppingBoard.id)[0]
     .objectEntityId, choiceId);
-  assert.equal(active(await store.snapshot(), "shopping.inventory_after_choice")[0]
+  assert.equal(activeInActivity(await store.snapshot(), "shopping.inventory_after_choice",
+    shoppingBoard.id)[0]
     .objectEntityId, choiceId);
   const reassigned = await service.correctShoppingBasket({
     commandId: "reassign-basket", activityId: shoppingBoard.id,
@@ -626,6 +707,13 @@ test(`one inventory observation can change its purchased support and then be can
   await service.runTask({ commandId: "support-scale", activityId: recipeBoard.id,
     taskId: "scale_servings", expectedRevision: recipeBoard.revision });
   recipeBoard = await service.getBoard(recipeBoard.id);
+  await assert.rejects(service.activityCommand({ commandId: "support-unrelated-stock",
+    type: "task.recordResult", activityId: recipeBoard.id,
+    expectedRevision: recipeBoard.revision,
+    payload: { taskId: "check_inventory", value: [{ ingredientId: "unrelated",
+      quantity: { status: "known", amount: 100, unit: "g" },
+      observedAt: "2026-09-27T09:00:00+09:00" }] } }),
+  (error) => error.code === "INVALID_OUTPUT");
   await service.activityCommand({ commandId: "support-stock", type: "task.recordResult",
     activityId: recipeBoard.id, expectedRevision: recipeBoard.revision,
     payload: { taskId: "check_inventory", value: [{ ingredientId: "tofu",
@@ -700,12 +788,40 @@ test(`one inventory observation can change its purchased support and then be can
   await assert.rejects(service.correctShoppingInventorySupport({
     ...request, commandId: "support-stale", supportingChoiceIds: [firstChoice],
   }), (error) => error.code === "INVENTORY_REVISION_CONFLICT");
+  const recheck = await service.createRecipeRecheck({ commandId: "support-recheck",
+    activityId: recipeBoard.id, expectedRevision: recipeBoard.revision,
+    confirmed: true });
+  let recheckBoard = await approve(service, recheck, "approve-support-recheck");
+  await service.runTask({ commandId: "support-recheck-scale",
+    activityId: recheck.activityId, taskId: "scale_servings",
+    expectedRevision: recheckBoard.revision });
+  recheckBoard = await service.getBoard(recheck.activityId);
+  const carryover = await service.getRecipeInventoryCarryoverReview(recheck.activityId);
+  const candidate = carryover.sources.find((item) =>
+    item.shoppingActivityId === shoppingBoard.id);
+  await service.adoptShoppingInventoryForRecipe({ commandId: "support-adopt",
+    activityId: recheck.activityId, expectedRevision: recheckBoard.revision,
+    confirmed: true, sources: [{ shoppingActivityId: shoppingBoard.id,
+      purchaseFingerprint: candidate.purchaseFingerprint,
+      observations: [{ observationId,
+        graphFingerprint: candidate.observations[0].graphFingerprint }] }] });
+  recheckBoard = await service.getBoard(recheck.activityId);
+  const adoptedResult = recheckBoard.results.find((item) =>
+    item.taskId === "check_inventory");
   const cancelRequest = { commandId: "support-cancel", activityId: shoppingBoard.id,
     observationId, expectedGraphFingerprint: after.graphFingerprint };
   const canceled = await service.cancelShoppingInventoryObservation(cancelRequest);
   assert.equal((await service.cancelShoppingInventoryObservation(cancelRequest)).replayed, true);
   assert.equal(canceled.canceled, true);
   assert.deepEqual((await service.listShoppingInventory(shoppingBoard.id)).observations, []);
+  assert.equal((await service.getRecipeInventoryCarryoverReview(recheck.activityId)).status,
+    "stale");
+  await assert.rejects(service.runTask({ commandId: "support-canceled-needs",
+    activityId: recheck.activityId, taskId: "calculate_requirements",
+    expectedRevision: recheckBoard.revision }),
+  (error) => ["CONTEXT_STALE", "TASK_BLOCKED"].includes(error.code));
+  assert.deepEqual((await service.getBoard(recheck.activityId)).results.find((item) =>
+    item.id === adoptedResult.id), adoptedResult);
   const state = await store.snapshot();
   assert.equal(state.knowledge.sources.find((item) =>
     item.id === recorded.observations[0].observationId.replace(/:observation:\d+$/, ""))

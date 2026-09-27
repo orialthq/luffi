@@ -328,6 +328,13 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       },
       validateOutput(task, value) {
         registry.validateCapabilityOutput(task.capabilityId, value);
+        if (task.capabilityId === "recipe.check_inventory") {
+          const allowed = new Set(task.inputBindings.ingredientIds);
+          if (value.some((entry) => !allowed.has(entry.ingredientId))) {
+            throw new AppError("INVALID_OUTPUT",
+              "재고 확인 대상이 아닌 재료가 포함됐어요.", { httpStatus: 400 });
+          }
+        }
         validateEvidenceReferences(state, value);
       },
       validateTaskCompletion(task, activity) {
@@ -343,6 +350,10 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         const result = activity.results.find((item) => item.id === task.latestOutputRef);
         if (!result) return false;
         registry.validateCapabilityOutput(spec.id, result.value);
+        if (spec.id === "recipe.check_inventory" &&
+            result.value.some((entry) => !task.inputBindings.ingredientIds.includes(entry.ingredientId))) {
+          return false;
+        }
         validateEvidenceReferences(state, result.value);
         return true;
       },
@@ -2416,23 +2427,29 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
     const receipt = Object.values(state.recipeInventoryAdoptionReceipts ?? {}).find((item) =>
       item.ownerId === ownerId && item.activityId === activityId && !item.deleted);
     if (!receipt) return true;
-    const connection = Object.values(state.scenarioConnections ?? {}).find((item) =>
-      item.ownerId === ownerId && item.kind === "recipe_shopping" &&
-      item.fromActivityId === receipt.rootActivityId &&
-      item.toActivityId === receipt.shoppingActivityId && connectionLive(state, item));
-    if (!connection || !state.activities.activities[receipt.rootActivityId]) return false;
+    if (!state.activities.activities[receipt.rootActivityId]) return false;
     try {
       const sourceRecipe = editableRecipeGraph(state, receipt.rootActivityId).recipe;
       const targetRecipe = editableRecipeGraph(state, activityId).recipe;
       if (requestFingerprint({ ...sourceRecipe, id: null, revision: null }) !==
           requestFingerprint({ ...targetRecipe, id: null, revision: null })) return false;
-      const purchased = new Set(shoppingPurchaseProjection(state,
-        receipt.shoppingActivityId).outcomes.filter((item) =>
-        item.status === "purchased").map((item) => item.choiceId));
-      if (!receipt.supportingChoiceIds.every((id) => purchased.has(id))) return false;
-      return receipt.observations.every((item) =>
-        shoppingInventoryGraph(state, receipt.shoppingActivityId,
-          item.observationId).graphFingerprint === item.graphFingerprint);
+      const sources = receipt.sources ?? [{ shoppingActivityId: receipt.shoppingActivityId,
+        supportingChoiceIds: receipt.supportingChoiceIds,
+        observations: receipt.observations }];
+      return sources.every((source) => {
+        const connection = Object.values(state.scenarioConnections ?? {}).find((item) =>
+          item.ownerId === ownerId && item.kind === "recipe_shopping" &&
+          item.fromActivityId === receipt.rootActivityId &&
+          item.toActivityId === source.shoppingActivityId && connectionLive(state, item));
+        if (!connection) return false;
+        const purchased = new Set(shoppingPurchaseProjection(state,
+          source.shoppingActivityId).outcomes.filter((item) =>
+          item.status === "purchased").map((item) => item.choiceId));
+        return source.supportingChoiceIds.every((id) => purchased.has(id)) &&
+          source.observations.every((item) =>
+            shoppingInventoryGraph(state, source.shoppingActivityId,
+              item.observationId).graphFingerprint === item.graphFingerprint);
+      });
     } catch { return false; }
   }
 
@@ -2483,7 +2500,9 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             supportingChoiceIds: graph.supportingChoiceIds,
             graphFingerprint: graph.graphFingerprint }];
         });
-      return { shoppingActivityId: connection.toActivityId, connectionId: connection.id,
+      return { shoppingActivityId: connection.toActivityId,
+        shoppingTitle: state.activities.activities[connection.toActivityId]?.title ??
+          connection.toActivityId, connectionId: connection.id,
         purchaseFingerprint: inventoryPurchaseFingerprint(purchase), observations };
     }).filter((item) => item && item.observations.length);
     const task = current.tasks.find((item) => item.id === "check_inventory" &&
@@ -2498,9 +2517,17 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
       current.currentPlanRevision === 0 ? "plan_pending" :
       task?.executionStatus === "not_started" && task.readiness.status === "ready"
         ? "available" : "task_blocked";
+    const grouped = new Map();
+    for (const source of sources) for (const observation of source.observations) {
+      const group = grouped.get(observation.ingredientId) ?? [];
+      group.push({ shoppingActivityId: source.shoppingActivityId,
+        observationId: observation.observationId });
+      grouped.set(observation.ingredientId, group);
+    }
     return { activityId, rootActivityId, revision: current.revision, status,
       adoptedObservationIds: adoption?.observations.map((item) => item.observationId) ?? [],
-      sources };
+      conflicts: [...grouped].filter(([, items]) => items.length > 1)
+        .map(([ingredientId, candidates]) => ({ ingredientId, candidates })), sources };
   }
 
   function editableShoppingBasketGraph(state, activityId) {
@@ -9513,30 +9540,58 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
         const input = requestObject(raw);
         if (Object.keys(input).some((key) => !["commandId", "activityId",
           "shoppingActivityId", "expectedRevision", "purchaseFingerprint",
-          "observations", "confirmed"].includes(key)) || input.confirmed !== true ||
+          "observations", "sources", "confirmed"].includes(key)) || input.confirmed !== true ||
           !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 ||
-          !Array.isArray(input.observations) || input.observations.length < 1 ||
-          input.observations.length > 25 || typeof input.purchaseFingerprint !== "string") {
+          (Object.hasOwn(input, "sources") === Object.hasOwn(input, "shoppingActivityId")) ||
+          (Object.hasOwn(input, "sources") &&
+            (Object.hasOwn(input, "purchaseFingerprint") ||
+              Object.hasOwn(input, "observations")))) {
           throw new AppError("INVALID_REQUEST", "가져올 재고 관측을 확인해 주세요.",
             { httpStatus: 400 });
         }
         const commandId = safeId(input.commandId, "commandId");
         const activityId = safeId(input.activityId, "activityId");
-        const shoppingActivityId = safeId(input.shoppingActivityId, "shoppingActivityId");
-        const observations = input.observations.map((item) => {
-          if (!item || typeof item !== "object" || Array.isArray(item) ||
-              Object.keys(item).some((key) => !["observationId", "graphFingerprint"].includes(key)) ||
-              typeof item.graphFingerprint !== "string") throw new AppError(
-            "INVALID_REQUEST", "관측값 선택을 확인해 주세요.", { httpStatus: 400 });
-          return { observationId: safeId(item.observationId, "observationId"),
-            graphFingerprint: item.graphFingerprint };
+        const rawSources = input.sources ?? [{ shoppingActivityId: input.shoppingActivityId,
+          purchaseFingerprint: input.purchaseFingerprint,
+          observations: input.observations }];
+        if (!Array.isArray(rawSources) || rawSources.length < 1 || rawSources.length > 8) {
+          throw new AppError("INVALID_REQUEST", "쇼핑 보드 선택을 확인해 주세요.",
+            { httpStatus: 400 });
+        }
+        const sources = rawSources.map((source) => {
+          if (!source || typeof source !== "object" || Array.isArray(source) ||
+              Object.keys(source).some((key) => !["shoppingActivityId",
+                "purchaseFingerprint", "observations"].includes(key)) ||
+              typeof source.purchaseFingerprint !== "string" ||
+              !Array.isArray(source.observations) || source.observations.length < 1) {
+            throw new AppError("INVALID_REQUEST", "쇼핑 관측값 선택을 확인해 주세요.",
+              { httpStatus: 400 });
+          }
+          return { shoppingActivityId: safeId(source.shoppingActivityId,
+            "shoppingActivityId"), purchaseFingerprint: source.purchaseFingerprint,
+          observations: source.observations.map((item) => {
+            if (!item || typeof item !== "object" || Array.isArray(item) ||
+                Object.keys(item).some((key) => !["observationId", "graphFingerprint"].includes(key)) ||
+                typeof item.graphFingerprint !== "string") throw new AppError(
+              "INVALID_REQUEST", "관측값 선택을 확인해 주세요.", { httpStatus: 400 });
+            return { observationId: safeId(item.observationId, "observationId"),
+              graphFingerprint: item.graphFingerprint };
+          }) };
         });
-        if (new Set(observations.map((item) => item.observationId)).size !==
-            observations.length) throw new AppError("INVALID_REQUEST",
-          "같은 관측값을 중복 선택했어요.", { httpStatus: 400 });
-        const hash = requestFingerprint({ activityId, shoppingActivityId,
-          expectedRevision: input.expectedRevision,
-          purchaseFingerprint: input.purchaseFingerprint, observations });
+        const observations = sources.flatMap((source) => source.observations);
+        if (observations.length > 25 ||
+            new Set(sources.map((item) => item.shoppingActivityId)).size !== sources.length ||
+            new Set(observations.map((item) => item.observationId)).size !==
+              observations.length) throw new AppError("INVALID_REQUEST",
+          "같은 쇼핑 보드나 관측값을 중복 선택했어요.", { httpStatus: 400 });
+        const hash = Object.hasOwn(input, "sources")
+          ? requestFingerprint({ activityId,
+            expectedRevision: input.expectedRevision, sources })
+          : requestFingerprint({ activityId,
+            shoppingActivityId: sources[0].shoppingActivityId,
+            expectedRevision: input.expectedRevision,
+            purchaseFingerprint: sources[0].purchaseFingerprint,
+            observations: sources[0].observations });
         return await store.transact((state) => {
           assertState(state);
           state.recipeInventoryAdoptionReceipts ??= {};
@@ -9554,21 +9609,25 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
             "REVISION_CONFLICT", "레시피 활동이 변경됐어요.", { httpStatus: 409 });
           if (review.status !== "available") throw new AppError("TASK_BLOCKED",
             "새 레시피의 재고 확인 작업을 먼저 준비해 주세요.", { httpStatus: 409 });
-          const source = review.sources.find((item) =>
-            item.shoppingActivityId === shoppingActivityId);
-          if (!source || source.purchaseFingerprint !== input.purchaseFingerprint) {
-            throw new AppError("INVENTORY_REVIEW_STALE",
-              "쇼핑 구매 결과가 변경됐어요. 다시 확인해 주세요.", { httpStatus: 409 });
-          }
-          const selected = observations.map((item) => {
-            const candidate = source.observations.find((entry) =>
-              entry.observationId === item.observationId);
-            if (!candidate || candidate.graphFingerprint !== item.graphFingerprint) {
+          const selectedSources = sources.map((requested) => {
+            const source = review.sources.find((item) =>
+              item.shoppingActivityId === requested.shoppingActivityId);
+            if (!source || source.purchaseFingerprint !== requested.purchaseFingerprint) {
               throw new AppError("INVENTORY_REVIEW_STALE",
-                "재고 관측이 변경됐어요. 다시 확인해 주세요.", { httpStatus: 409 });
+                "쇼핑 구매 결과가 변경됐어요. 다시 확인해 주세요.", { httpStatus: 409 });
             }
-            return candidate;
+            const selected = requested.observations.map((item) => {
+              const candidate = source.observations.find((entry) =>
+                entry.observationId === item.observationId);
+              if (!candidate || candidate.graphFingerprint !== item.graphFingerprint) {
+                throw new AppError("INVENTORY_REVIEW_STALE",
+                  "재고 관측이 변경됐어요. 다시 확인해 주세요.", { httpStatus: 409 });
+              }
+              return candidate;
+            });
+            return { ...requested, selected };
           });
+          const selected = selectedSources.flatMap((source) => source.selected);
           if (new Set(selected.map((item) => item.ingredientId)).size !==
               selected.length) throw new AppError("INVALID_REQUEST",
             "재료별로 하나의 관측값만 선택해 주세요.", { httpStatus: 400 });
@@ -9579,17 +9638,15 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           if (!task || task.executionStatus !== "not_started" ||
               task.readiness.status !== "ready") throw new AppError("TASK_BLOCKED",
             "재고 확인 작업을 완료할 수 없어요.", { httpStatus: 409 });
-          const output = selected.map((item) => {
-            const graph = shoppingInventoryGraph(state, shoppingActivityId,
-              item.observationId);
-            return structuredClone(graph.quantity.typedValue.value);
-          });
-          const evidenceRefs = [...new Set(selected.flatMap((item) => {
-            const graph = shoppingInventoryGraph(state, shoppingActivityId,
-              item.observationId);
-            return [graph.quantity, graph.ingredient, ...graph.supports]
-              .flatMap((assertion) => assertion.evidenceIds);
-          }))];
+          const selectedGraphs = selectedSources.flatMap((source) =>
+            source.selected.map((item) => ({ source, item,
+              graph: shoppingInventoryGraph(state, source.shoppingActivityId,
+                item.observationId) })));
+          const output = selectedGraphs.map(({ graph }) =>
+            structuredClone(graph.quantity.typedValue.value));
+          const evidenceRefs = [...new Set(selectedGraphs.flatMap(({ graph }) =>
+            [graph.quantity, graph.ingredient, ...graph.supports]
+              .flatMap((assertion) => assertion.evidenceIds)))];
           validateEvidenceReferences(state, { evidenceRefs });
           const applied = applyActivityCommand(state.activities, { ownerId,
             commandId: `${commandId}:complete`, type: "task.transition", activityId,
@@ -9600,15 +9657,21 @@ export function createCommonKernelService({ store, ownerId, registry = domainReg
           const completed = board(state, activityId);
           const resultId = completed.tasks.find((item) =>
             item.id === "check_inventory")?.latestOutputRef;
-          const result = { activityId, shoppingActivityId,
+          const result = { activityId,
+            shoppingActivityIds: sources.map((item) => item.shoppingActivityId),
+            ...(sources.length === 1 ? { shoppingActivityId: sources[0].shoppingActivityId } : {}),
             rootActivityId: review.rootActivityId,
             observationIds: selected.map((item) => item.observationId),
             resultId, revision: completed.revision };
           state.recipeInventoryAdoptionReceipts[key] = { ownerId, hash, result,
-            activityId, shoppingActivityId, rootActivityId: review.rootActivityId,
-            purchaseFingerprint: input.purchaseFingerprint,
-            supportingChoiceIds: [...new Set(selected.flatMap((item) =>
-              item.supportingChoiceIds))],
+            activityId, rootActivityId: review.rootActivityId,
+            sources: selectedSources.map((source) => ({
+              shoppingActivityId: source.shoppingActivityId,
+              purchaseFingerprint: source.purchaseFingerprint,
+              supportingChoiceIds: [...new Set(source.selected.flatMap((item) =>
+                item.supportingChoiceIds))],
+              observations: structuredClone(source.observations),
+            })),
             observations: structuredClone(observations) };
           return { state, result: { ...result, replayed: false } };
         });
