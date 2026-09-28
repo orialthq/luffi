@@ -2,7 +2,7 @@ import { SCHEMA_VERSION } from "./constants.js";
 
 // Bump independently when the instructions change without a response-schema
 // revision. This keeps cache routing and rollout metrics unambiguous.
-const ANALYSIS_PROMPT_VERSION = "3";
+export const ANALYSIS_PROMPT_VERSION = "3";
 
 const SYSTEM_INSTRUCTIONS = `
 You extract structured facts from a user's social-media screenshot.

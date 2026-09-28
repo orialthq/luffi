@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | 합성 이미지 기록 리포트 | `npm run test:corpus-report --prefix server` | 공개 합성 PNG 21장과 녹화된 분석 응답의 해시·형식·분류·제목·근거 참조를 검사하고 분야별 통과 건수를 JSON으로 출력한다. `mode: recorded_synthetic_regression`은 새 모델 정확도가 아니다. |
 | 라벨 입력 이미지 사전 검사 | `npm run check:labeled-inputs --prefix server -- LABELS.json IMAGES_DIR` | 라벨 ID와 같은 이름의 PNG/JPG/JPEG/WebP 파일이 하나씩 있고 실제 바이트의 형식·크기·SHA-256이 라벨과 일치하는지 확인한다. 불일치 이유와 ID만 출력하며 모델 호출·서버 적용은 하지 않는다. |
+| 라벨 이미지 새 분석 기록 | `npm run record:labeled-predictions --prefix server -- LABELS.json IMAGES_DIR OUTPUT_NAME SERVER_COMMIT` | 로컬 분석 서버에 검증된 이미지를 보내 새 결과를 받고 모델·프롬프트·스키마·커밋·실행 시각을 묶어 비공개 예측 파일을 만든다. **이 명령은 실제 분석 API를 호출한다.** |
 | 개발·최종 평가 분할 검사 | `npm run check:labeled-splits --prefix server -- DEVELOPMENT_LABELS.json HOLDOUT_LABELS.json` | 두 비공개 라벨 파일 사이에 같은 캡처 ID·원본 출처 그룹·이미지 해시가 없는지 확인한다. 자료 내용은 출력하지 않는다. |
 | 서버 전체 회귀 | `npm test --prefix server` | 출처·그래프·계획 승인·분야별 정정과 삭제, 분야 연결의 불변식. 로컬 HTTP 테스트에 포트 사용 권한이 필요하다. 실제 PostgreSQL 선택 테스트는 별도 DB가 없으면 건너뛴다. |
 | 앱 전체 회귀 | `flutter analyze --fatal-infos` 및 `flutter test` | 서버의 현재 출처가 삭제되거나 바뀌면 정정 진입을 막고, 열린 정정 화면의 삭제된 필드를 숨기는 동작을 포함한다. |
@@ -55,6 +56,8 @@
 ```
 
 `npm run test:labeled-report --prefix server -- LABELS.json PREDICTIONS.json IMAGES_DIR`는 비공개 평가 시 이미지 원본 검사까지 통과해야 점수를 낸다. 합성 평가만 기존 두 파일 형식으로 실행할 수 있다. 이 명령은 파일을 읽기만 하며 모델 호출이나 서버 적용을 하지 않는다. 실제 자료·라벨 값은 Git과 터미널 출력에 넣지 않는다.
+
+새 예측을 만들 때는 로컬 분석 서버를 준비한 뒤 `LUFFI_ANALYSIS_BASE_URL`(기본값 `http://127.0.0.1:8787`)과 서버의 실제 Git 커밋 SHA를 지정한다. 기록 명령은 서버 주소를 로컬 호스트로 제한하고, 먼저 모든 이미지를 검증한 뒤 요청마다 해시를 다시 확인한다. `/health`에서 모델·분석 스키마·프롬프트 버전을 읽고, 분석 응답의 모델·스키마가 바뀌면 실패한다. 출력은 Git에서 제외한 `tool/evals/local/OUTPUT_NAME.json`에 권한 `0600`으로 새로 만들며 기존 파일은 덮어쓰지 않는다. 그 디렉터리는 본인만 접근할 수 있는 `0700`이어야 한다. **서버가 말한 버전과 사람이 지정한 커밋이 실제로 일치하는지 자동 확인하지는 못한다.** 분석 원문이 든 출력 파일은 비공개로 보관하고 필요가 없어지면 삭제한다. 이 기록 명령은 `analysis` 예측만 만들며, `expected.graph`가 있는 그래프 판정에는 별도의 사용자 확인·그래프 스냅샷이 필요하다.
 
 평가에 앞서 위 사전 검사로 **라벨이 가리키는 이미지 원본**을 확인한다. 이미지 파일명은 각 `entry.id`에 확장자(`.png`, `.jpg`, `.jpeg`, `.webp`)를 붙인 형태여야 하며, 같은 ID에 두 확장자가 있으면 실패한다. 링크 파일과 이미지 디렉터리 링크도 거부한다. 출력에는 이미지 내용과 라벨 값을 넣지 않는다. 이 절차는 공개 합성 이미지로 검증했으며, 실제 비공개 이미지를 검사하거나 분석한 결과는 아니다.
 

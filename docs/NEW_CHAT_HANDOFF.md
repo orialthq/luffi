@@ -65,7 +65,7 @@ Android 공유 시트·사진 선택기 / 앱 입력
 
 | 검증 층 | 마지막으로 확인한 결과 | 한계 |
 | --- | --- | --- |
-| 서버 전체 | 2026-09-28 로컬 전체 실행 **597개 중 594 통과·3 skipped·0 실패**. skipped는 외부 PostgreSQL 선택 테스트다. 직전 `1aa7b16`의 서버 CI는 실제 PostgreSQL 포함으로 성공했고, 이번 라벨 평가 계약 변경의 CI는 새 커밋에서 다시 확인한다. | 운영 DB 부하·배포·실데이터 정확도 아님 |
+| 서버 전체 | 2026-09-28 로컬 전체 실행 **601개 중 598 통과·3 skipped·0 실패**. skipped는 외부 PostgreSQL 선택 테스트다. 직전 `e4820e7`의 서버 CI는 실제 PostgreSQL 포함으로 성공했고, 이번 예측 기록기 변경의 CI는 새 커밋에서 다시 확인한다. | 운영 DB 부하·배포·실데이터 정확도 아님 |
 | Flutter | `flutter analyze --fatal-infos` 통과, **521개 테스트 통과**. 이후 Flutter 소스 변경 없음 | 테스트는 실물 공유 시트의 자동 증거가 아님 |
 | Android | API 35 에뮬레이터에서 Google Photos 외부 공유·서버 중단과 재시도를 확인했다. API 36 실물 기기에서는 앱 사진 선택기→실제 분석→레시피/쇼핑 보드 승인·연결→상품 출처 삭제→열린 보드 숨김→재시작을 확인했다. 디버그 APK 빌드 통과 | 실물 기기의 외부 앱 공유 경로와 실제 사용자 자료 평가는 미실행 |
 | 합성 코퍼스 | 21장 원본·저장 응답의 해시와 근거 참조 회귀 | 현재 모델의 새 응답·실제 SNS 자료의 통계 아님 |
@@ -84,7 +84,7 @@ Android 공유 시트·사진 선택기 / 앱 입력
 1. **현 상태 확인:** `dev`의 최신 커밋과 CI, 작업 트리 상태를 확인한다. 새 변경이 있으면 이 문서의 숫자보다 현재 코드/테스트를 우선한다. 개인 자료나 키가 있는지 출력하지 않는다.
 2. **실물 Android 검증 결과 확인:** [실물 기기 검증 기록](ANDROID_E2E_VALIDATION.md#실물-기기-검증-2026-09-27)에 합성 이미지 앱 내부 사진 선택기→실제 분석→두 보드 승인·연결→쇼핑 캡처 삭제→열린 보드 숨김·독립 보드 보존→앱 재시작까지 기록했다. 다른 기기나 외부 공유 경로를 검증할 때만 같은 절차를 다시 실행한다. 개인 사진을 시험 자료로 쓰지 않는다.
 3. **지속 테스트 환경 설정:** 실제 사용할 JSON 상태 또는 PostgreSQL DB가 정해지면 그 상태를 확인하고, 백업과 독립된 삭제 기록 경로를 정해 초기화·점검한다. 현재 토큰은 단일 개발 사용자용이므로 공개 운영 서비스의 인증으로 사용하지 않는다.
-4. **사용자가 실제 데이터 단계로 넘어가라고 요청할 때:** 동의·보존·삭제 처리, 비공개 입력/라벨, 출처 단위 개발/최종 평가 분리, 모델·프롬프트·스키마·커밋·입력 해시 고정부터 정한다. 비공개 라벨에는 `consentRef`·`sourceGroupId`·`split`이 필수다. 두 라벨 파일로 나누었다면 `npm run check:labeled-splits --prefix server -- DEVELOPMENT_LABELS.json HOLDOUT_LABELS.json`로 출처 그룹·이미지·ID 중복을 확인한다. `npm run check:labeled-inputs --prefix server -- LABELS.json IMAGES_DIR`로 라벨 해시와 실제 이미지 바이트를 대조한다. `server/src/evaluation/labeled_analysis.js`는 분야별 필드와 근거, 위험한 Mention 병합, 근거 없는 행동 Assertion을 평가한다. 비공개 점수 명령 `npm run test:labeled-report --prefix server -- LABELS.json PREDICTIONS.json IMAGES_DIR`에는 모델·프롬프트·스키마·커밋·실행 시각 기록과 검증된 이미지가 필요하다. 모델 호출·서버 적용은 하지 않는다. 비공개 17장이나 결과를 임의로 재구성하지 말 것.
+4. **사용자가 실제 데이터 단계로 넘어가라고 요청할 때:** 동의·보존·삭제 처리, 비공개 입력/라벨, 출처 단위 개발/최종 평가 분리, 모델·프롬프트·스키마·커밋·입력 해시 고정부터 정한다. 비공개 라벨에는 `consentRef`·`sourceGroupId`·`split`이 필수다. 두 라벨 파일로 나누었다면 `npm run check:labeled-splits --prefix server -- DEVELOPMENT_LABELS.json HOLDOUT_LABELS.json`로 출처 그룹·이미지·ID 중복을 확인한다. `npm run check:labeled-inputs --prefix server -- LABELS.json IMAGES_DIR`로 라벨 해시와 실제 이미지 바이트를 대조한다. 새 모델 결과가 필요하면 `npm run record:labeled-predictions --prefix server -- LABELS.json IMAGES_DIR OUTPUT_NAME SERVER_COMMIT`으로 로컬 서버에 이미지를 보내 Git 제외·권한 제한된 예측 파일을 만든다. `server/src/evaluation/labeled_analysis.js`는 분야별 필드와 근거, 위험한 Mention 병합, 근거 없는 행동 Assertion을 평가한다. 비공개 점수 명령 `npm run test:labeled-report --prefix server -- LABELS.json PREDICTIONS.json IMAGES_DIR`에는 모델·프롬프트·스키마·커밋·실행 시각 기록과 검증된 이미지가 필요하다. 점수 명령 자체는 모델 호출·서버 적용을 하지 않는다. 비공개 17장이나 결과를 임의로 재구성하지 말 것.
 5. **실제 오류에 따라 분야별 고도화:** 레시피에서 했듯 맛집의 지점 동일성, 패션 옵션, 뷰티 단계/사용, 여행 일정/방문, 쇼핑 가격/실결제, 운동 계획/수행 등을 따로 측정·수정한다. 공통 커널 하나에 모든 분야 규칙을 우겨 넣지 않는다. 다음 큰 개발 과제(대규모 그래프 부분 조회, 운영 인증, 서버 원본 보관 등)는 실제 평가 결과와 사용자 우선순위를 받은 뒤 선택한다.
 
 실제 사용자 자료 평가가 미실행이라는 경계를 유지하고, 합성 기기 E2E 결과를 정확도 통계로 부르지 말 것. 이 단계까지 사용자는 `dev` 직접 반영을 허용했지만, 다른 계정의 GitHub 접근 권한은 별도 확인이 필요할 수 있다.

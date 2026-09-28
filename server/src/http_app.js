@@ -8,6 +8,7 @@ import {
   SCHEMA_VERSION,
 } from "./constants.js";
 import { AppError, normalizeError } from "./errors.js";
+import { ANALYSIS_PROMPT_VERSION } from "./prompt.js";
 import { assertBatchRequestId } from "./batch_analysis_service.js";
 import {
   validateAnalyzeRequest,
@@ -159,6 +160,7 @@ export function createHttpServer({
           status: "ok",
           service: "ori-capture-analysis",
           schemaVersion: SCHEMA_VERSION,
+          promptVersion: ANALYSIS_PROMPT_VERSION,
           model: MODEL,
           enrichmentModel,
           ...(analysis === null ? {} : { analysis }),

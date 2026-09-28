@@ -36,6 +36,7 @@ test("health endpoint exposes only non-sensitive service metadata", async (t) =>
     status: "ok",
     service: "ori-capture-analysis",
     schemaVersion: "2.1",
+    promptVersion: "3",
     model: "gpt-5.6-luna",
     enrichmentModel: "gpt-5.6-luna",
   });
