@@ -13,6 +13,7 @@
     "test:corpus-report": "node scripts/evaluate-synthetic-corpus.mjs",
     "test:labeled-report": "node scripts/evaluate-labeled-analysis.mjs",
     "check:labeled-inputs": "node scripts/check-labeled-inputs.mjs",
+    "check:labeled-splits": "node scripts/check-labeled-splits.mjs",
     "check:kernel-restore": "node scripts/check-kernel-restore.mjs",
     "bootstrap:deletion-ledger": "node scripts/bootstrap-deletion-ledger.mjs",
     "check:deletion-ledger": "node scripts/check-deletion-ledger.mjs",

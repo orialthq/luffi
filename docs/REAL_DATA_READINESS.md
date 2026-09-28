@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | 합성 이미지 기록 리포트 | `npm run test:corpus-report --prefix server` | 공개 합성 PNG 21장과 녹화된 분석 응답의 해시·형식·분류·제목·근거 참조를 검사하고 분야별 통과 건수를 JSON으로 출력한다. `mode: recorded_synthetic_regression`은 새 모델 정확도가 아니다. |
 | 라벨 입력 이미지 사전 검사 | `npm run check:labeled-inputs --prefix server -- LABELS.json IMAGES_DIR` | 라벨 ID와 같은 이름의 PNG/JPG/JPEG/WebP 파일이 하나씩 있고 실제 바이트의 형식·크기·SHA-256이 라벨과 일치하는지 확인한다. 불일치 이유와 ID만 출력하며 모델 호출·서버 적용은 하지 않는다. |
+| 개발·최종 평가 분할 검사 | `npm run check:labeled-splits --prefix server -- DEVELOPMENT_LABELS.json HOLDOUT_LABELS.json` | 두 비공개 라벨 파일 사이에 같은 캡처 ID·원본 출처 그룹·이미지 해시가 없는지 확인한다. 자료 내용은 출력하지 않는다. |
 | 서버 전체 회귀 | `npm test --prefix server` | 출처·그래프·계획 승인·분야별 정정과 삭제, 분야 연결의 불변식. 로컬 HTTP 테스트에 포트 사용 권한이 필요하다. 실제 PostgreSQL 선택 테스트는 별도 DB가 없으면 건너뛴다. |
 | 앱 전체 회귀 | `flutter analyze --fatal-infos` 및 `flutter test` | 서버의 현재 출처가 삭제되거나 바뀌면 정정 진입을 막고, 열린 정정 화면의 삭제된 필드를 숨기는 동작을 포함한다. |
 | 삭제 후 JSON 복구 | `cd server && node --test test/kernel_backup_recovery.test.js` | 삭제 **후** 만든 백업을 빈 저장소에 복원하면 삭제 영수증, 소유자 격리, 독립 자료가 유지되고 같은 가져오기 ID의 재생성이 거부된다. |
@@ -33,7 +34,7 @@
 
 조건에 맞는 항목이 없거나 둘 이상이면 실패로 기록한다. 그래프 라벨의 `expected.graph`에는 `ownerId`, `distinctMentions`(서로 합치면 안 되는 언급 ID 쌍), `forbiddenAssertions`(사용자 결과 보고 전에는 없어야 할 관계와 활동 범위)를 넣을 수 있다. 잘못된 동일 대상 병합과 방문·구매 등 근거 없는 행동 관계는 필드 오독과 별도 실패로 집계한다. 입력 해시가 다르거나 결과가 빠지면 통과로 세지 않는다. 결과 리포트는 분야별 분모와 실패 위치·이유만 내고 라벨 값이나 분석 본문은 출력하지 않는다. 실제 데이터 평가는 아직 실행하지 않았다.
 
-비공개 평가 항목은 `consentRef`, `sourceGroupId`, `split`(`development` 또는 `holdout`)이 필수다. 같은 게시물·출처의 크롭과 재캡처에는 **같은 `sourceGroupId`**를 적는다. 같은 출처 그룹 또는 완전히 같은 이미지 바이트의 해시가 두 분할에 걸치면 라벨 자체를 거부한다. 합성 라벨에는 이 두 분할 필드를 생략할 수 있지만, 하나라도 쓰면 모든 항목에 둘 다 필요하다. 이 검사는 출처 그룹을 정확히 기입했다는 전제하에서만 크롭·재캡처 누수를 막는다.
+비공개 평가 항목은 `consentRef`, `sourceGroupId`, `split`(`development` 또는 `holdout`)이 필수다. 같은 게시물·출처의 크롭과 재캡처에는 **같은 `sourceGroupId`**를 적는다. 같은 라벨 파일 안에서 출처 그룹이나 완전히 같은 이미지 바이트의 해시가 두 분할에 걸치면 거부한다. 개발·최종 평가 라벨을 별도 파일로 두는 경우에는 위 `check:labeled-splits`로 두 파일을 함께 확인해야 한다. 합성 라벨에는 분할 필드를 생략할 수 있지만, 하나라도 쓰면 모든 항목에 둘 다 필요하다. 검사는 출처 그룹을 정확히 기입했다는 전제하에서만 크롭·재캡처 누수를 막는다.
 
 비공개 예측 파일은 다음 실행 기록을 포함해야 한다. `serverCommit`은 40자리 Git SHA, `executedAt`은 UTC ISO 시각이다. 값은 실제 분석을 실행한 모델·프롬프트·분석 스키마·커밋으로 기록해야 하며, 도구가 그 진위를 자동으로 보증하지는 않는다.
 
