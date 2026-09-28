@@ -3,6 +3,7 @@ import { validateLegacyAnalysis } from "../ingestion/index.js";
 const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
 const domainSet = new Set(["recipe", "dining", "fashion", "beauty", "travel",
   "life_tip", "shopping", "health"]);
+const splitSet = new Set(["development", "holdout"]);
 
 function fail() { throw new Error("INVALID_EVALUATION_LABELS"); }
 
@@ -49,15 +50,29 @@ export function validateLabelManifest(manifest) {
       typeof manifest.dataset !== "string" || !idPattern.test(manifest.dataset) || !Array.isArray(manifest.entries) ||
       manifest.entries.length === 0) fail();
   const ids = new Set();
+  const sourceSplits = new Map();
+  const imageSplits = new Map();
+  const splitRequired = manifest.dataClass === "consented_private" ||
+    manifest.entries.some((entry) => entry?.split !== undefined || entry?.sourceGroupId !== undefined);
   for (const entry of manifest.entries) {
     if (typeof entry?.id !== "string" || !idPattern.test(entry.id) ||
         !domainSet.has(entry?.domain) || ids.has(entry.id) ||
         !/^[a-f0-9]{64}$/.test(entry.inputSha256) ||
         (manifest.dataClass === "consented_private" &&
           (typeof entry.consentRef !== "string" || !idPattern.test(entry.consentRef))) ||
+        (splitRequired && (!splitSet.has(entry.split) ||
+          typeof entry.sourceGroupId !== "string" || !idPattern.test(entry.sourceGroupId))) ||
         !entry.expected || !Array.isArray(entry.expected.fields) ||
         entry.expected.fields.length === 0) fail();
     ids.add(entry.id);
+    if (splitRequired) {
+      if ((sourceSplits.has(entry.sourceGroupId) &&
+          sourceSplits.get(entry.sourceGroupId) !== entry.split) ||
+          (imageSplits.has(entry.inputSha256) &&
+          imageSplits.get(entry.inputSha256) !== entry.split)) fail();
+      sourceSplits.set(entry.sourceGroupId, entry.split);
+      imageSplits.set(entry.inputSha256, entry.split);
+    }
     validateGraphLabels(entry.expected.graph);
     const paths = new Set();
     for (const field of entry.expected.fields) {
@@ -85,6 +100,27 @@ export function validateLabelManifest(manifest) {
     }
   }
   return manifest;
+}
+
+function validateRunEnvelope(value, required) {
+  if (value?.schemaVersion !== 1) {
+    if (required) fail();
+    return { predictions: value, run: null };
+  }
+  if (!Object.hasOwn(value, "predictions") ||
+      Object.keys(value).some((key) => !["schemaVersion", "run", "predictions"].includes(key)) ||
+      !value.run || typeof value.run !== "object" || Array.isArray(value.run) ||
+      Object.keys(value.run).sort().join(",") !==
+        "analysisSchemaVersion,executedAt,modelId,promptVersion,serverCommit" ||
+      !["modelId", "promptVersion", "analysisSchemaVersion"].every((key) =>
+        typeof value.run[key] === "string" &&
+        /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.run[key])) ||
+      typeof value.run.serverCommit !== "string" ||
+      !/^[a-f0-9]{40}$/.test(value.run.serverCommit) ||
+      typeof value.run.executedAt !== "string" ||
+      Number.isNaN(Date.parse(value.run.executedAt)) ||
+      new Date(value.run.executedAt).toISOString() !== value.run.executedAt) fail();
+  return { predictions: value.predictions, run: value.run };
 }
 
 function atPointer(value, pointer) {
@@ -165,6 +201,8 @@ export function evaluateLabeledAnalysis(entry, analysis) {
 
 export function evaluateLabeledBatch(manifest, predictions) {
   validateLabelManifest(manifest);
+  const envelope = validateRunEnvelope(predictions, manifest.dataClass === "consented_private");
+  predictions = envelope.predictions;
   if (!predictions || typeof predictions !== "object" || Array.isArray(predictions)) fail();
   const cases = manifest.entries.map((entry) => {
     const prediction = predictions[entry.id];
@@ -189,6 +227,7 @@ export function evaluateLabeledBatch(manifest, predictions) {
   const expectedIds = new Set(manifest.entries.map((entry) => entry.id));
   const unexpectedPredictions = Object.keys(predictions).filter((id) => !expectedIds.has(id)).sort();
   return { dataset: manifest.dataset, dataClass: manifest.dataClass,
+    ...(envelope.run ? { run: envelope.run } : {}),
     cases: cases.length, validResponses: cases.filter((item) => item.valid).length,
     labeledFields: cases.reduce((sum, item) => sum + item.fields.length, 0),
     matchedFields: cases.reduce((sum, item) => sum + item.fields.filter((field) => field.matched).length, 0),

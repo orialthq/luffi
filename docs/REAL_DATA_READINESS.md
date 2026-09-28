@@ -31,7 +31,29 @@
 }
 ```
 
-조건에 맞는 항목이 없거나 둘 이상이면 실패로 기록한다. 그래프 라벨의 `expected.graph`에는 `ownerId`, `distinctMentions`(서로 합치면 안 되는 언급 ID 쌍), `forbiddenAssertions`(사용자 결과 보고 전에는 없어야 할 관계와 활동 범위)를 넣을 수 있다. 잘못된 동일 대상 병합과 방문·구매 등 근거 없는 행동 관계는 필드 오독과 별도 실패로 집계한다. `consented_private` 자료에는 항목마다 `consentRef`가 필요하다. 입력 해시가 다르거나 결과가 빠지면 통과로 세지 않는다. 결과 리포트는 분야별 분모와 실패 위치·이유만 내고 라벨 값이나 분석 본문은 출력하지 않는다. 실제 데이터 평가는 아직 실행하지 않았다. `npm run test:labeled-report --prefix server -- LABELS.json PREDICTIONS.json`은 파일을 읽기만 하며 모델 호출이나 서버 적용을 하지 않는다.
+조건에 맞는 항목이 없거나 둘 이상이면 실패로 기록한다. 그래프 라벨의 `expected.graph`에는 `ownerId`, `distinctMentions`(서로 합치면 안 되는 언급 ID 쌍), `forbiddenAssertions`(사용자 결과 보고 전에는 없어야 할 관계와 활동 범위)를 넣을 수 있다. 잘못된 동일 대상 병합과 방문·구매 등 근거 없는 행동 관계는 필드 오독과 별도 실패로 집계한다. 입력 해시가 다르거나 결과가 빠지면 통과로 세지 않는다. 결과 리포트는 분야별 분모와 실패 위치·이유만 내고 라벨 값이나 분석 본문은 출력하지 않는다. 실제 데이터 평가는 아직 실행하지 않았다.
+
+비공개 평가 항목은 `consentRef`, `sourceGroupId`, `split`(`development` 또는 `holdout`)이 필수다. 같은 게시물·출처의 크롭과 재캡처에는 **같은 `sourceGroupId`**를 적는다. 같은 출처 그룹 또는 완전히 같은 이미지 바이트의 해시가 두 분할에 걸치면 라벨 자체를 거부한다. 합성 라벨에는 이 두 분할 필드를 생략할 수 있지만, 하나라도 쓰면 모든 항목에 둘 다 필요하다. 이 검사는 출처 그룹을 정확히 기입했다는 전제하에서만 크롭·재캡처 누수를 막는다.
+
+비공개 예측 파일은 다음 실행 기록을 포함해야 한다. `serverCommit`은 40자리 Git SHA, `executedAt`은 UTC ISO 시각이다. 값은 실제 분석을 실행한 모델·프롬프트·분석 스키마·커밋으로 기록해야 하며, 도구가 그 진위를 자동으로 보증하지는 않는다.
+
+```json
+{
+  "schemaVersion": 1,
+  "run": {
+    "modelId": "model-id",
+    "promptVersion": "prompt-1",
+    "analysisSchemaVersion": "2.1",
+    "serverCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "executedAt": "2026-09-28T00:00:00.000Z"
+  },
+  "predictions": {
+    "capture-a": { "inputSha256": "<64자리 SHA-256>", "analysis": "<분석 객체>" }
+  }
+}
+```
+
+`npm run test:labeled-report --prefix server -- LABELS.json PREDICTIONS.json IMAGES_DIR`는 비공개 평가 시 이미지 원본 검사까지 통과해야 점수를 낸다. 합성 평가만 기존 두 파일 형식으로 실행할 수 있다. 이 명령은 파일을 읽기만 하며 모델 호출이나 서버 적용을 하지 않는다. 실제 자료·라벨 값은 Git과 터미널 출력에 넣지 않는다.
 
 평가에 앞서 위 사전 검사로 **라벨이 가리키는 이미지 원본**을 확인한다. 이미지 파일명은 각 `entry.id`에 확장자(`.png`, `.jpg`, `.jpeg`, `.webp`)를 붙인 형태여야 하며, 같은 ID에 두 확장자가 있으면 실패한다. 링크 파일과 이미지 디렉터리 링크도 거부한다. 출력에는 이미지 내용과 라벨 값을 넣지 않는다. 이 절차는 공개 합성 이미지로 검증했으며, 실제 비공개 이미지를 검사하거나 분석한 결과는 아니다.
 

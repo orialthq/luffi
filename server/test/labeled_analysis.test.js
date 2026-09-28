@@ -146,3 +146,39 @@ test("all eight domains keep labeled observations when display lists reorder", a
   assert.equal(report.matchedFields, 8, JSON.stringify(report.failures));
   assert.equal(Object.keys(report.domains).length, 8);
 });
+
+test("private evaluation refuses source and byte overlap between development and holdout", () => {
+  const first = { ...structuredClone(manifest.entries[0]), id: "capture-a",
+    consentRef: "consent-a", sourceGroupId: "post-a", split: "development" };
+  const second = { ...structuredClone(first), id: "capture-b", inputSha256: "1".repeat(64),
+    sourceGroupId: "post-b", split: "holdout" };
+  const labels = { schemaVersion: 1, dataset: "private-eval-test", dataClass: "consented_private",
+    entries: [first, second] };
+  assert.equal(validateLabelManifest(labels), labels);
+  assert.throws(() => validateLabelManifest({ ...labels, entries: [first,
+    { ...second, sourceGroupId: "post-a" }] }), /INVALID_EVALUATION_LABELS/);
+  assert.throws(() => validateLabelManifest({ ...labels, entries: [first,
+    { ...second, inputSha256: hash }] }), /INVALID_EVALUATION_LABELS/);
+  assert.throws(() => validateLabelManifest({ ...labels, entries: [first,
+    { ...second, split: undefined }] }), /INVALID_EVALUATION_LABELS/);
+});
+
+test("private evaluation requires a versioned run record and retains it in the report", async () => {
+  const analysis = JSON.parse(await readFile(new URL(
+    "./fixtures/recipe_tomato_egg_live_analysis.json", import.meta.url), "utf8"));
+  const labels = { schemaVersion: 1, dataset: "private-eval-test", dataClass: "consented_private",
+    entries: [{ ...structuredClone(manifest.entries[0]), consentRef: "consent-a",
+      sourceGroupId: "post-a", split: "holdout" }] };
+  const prediction = { "recipe-1": { inputSha256: hash, analysis } };
+  assert.throws(() => evaluateLabeledBatch(labels, prediction), /INVALID_EVALUATION_LABELS/);
+  const run = { modelId: "synthetic-model", promptVersion: "prompt-1",
+    analysisSchemaVersion: "2.1", serverCommit: "a".repeat(40),
+    executedAt: "2026-09-28T00:00:00.000Z" };
+  const envelope = { schemaVersion: 1, run, predictions: prediction };
+  const report = evaluateLabeledBatch(labels, envelope);
+  assert.deepEqual(report.run, run);
+  assert.throws(() => evaluateLabeledBatch(labels, { ...envelope,
+    run: { ...run, serverCommit: "main" } }), /INVALID_EVALUATION_LABELS/);
+  assert.throws(() => evaluateLabeledBatch(labels, { ...envelope,
+    run: { ...run, promptVersion: undefined } }), /INVALID_EVALUATION_LABELS/);
+});
