@@ -1,7 +1,7 @@
 # 경쟁·인접 제품 정리 (2026년 9월)
 
 > 조사일: 2026-09-29
-> 근거: 기술 조사 [`04_X_THREADS`](../TECH/SECOND_BRAIN_2026_09/04_X_THREADS.md), [`05_REDDIT`](../TECH/SECOND_BRAIN_2026_09/05_REDDIT.md), [`07_HN_TALKS_PAPERS`](../TECH/SECOND_BRAIN_2026_09/07_HN_TALKS_PAPERS.md), [`08_PROACTIVE_PRODUCTS`](../TECH/SECOND_BRAIN_2026_09/08_PROACTIVE_PRODUCTS.md), [`10_KOREAN`](../TECH/SECOND_BRAIN_2026_09/10_KOREAN.md)에 나온 제품만 모았습니다. 원문 링크는 각 문서와 `sources/`에 있습니다.
+> 근거: 기술 조사 [`04_X_THREADS`](../tech/SECOND_BRAIN_2026_09/04_X_THREADS.md), [`05_REDDIT`](../tech/SECOND_BRAIN_2026_09/05_REDDIT.md), [`07_HN_TALKS_PAPERS`](../tech/SECOND_BRAIN_2026_09/07_HN_TALKS_PAPERS.md), [`08_PROACTIVE_PRODUCTS`](../tech/SECOND_BRAIN_2026_09/08_PROACTIVE_PRODUCTS.md), [`10_KOREAN`](../tech/SECOND_BRAIN_2026_09/10_KOREAN.md)에 나온 제품만 모았습니다. 원문 링크는 각 문서와 `sources/`에 있습니다.
 > 성격: 연구 자료입니다. 조회수·사용자 수·투자액은 기사·자체 발표 기준입니다.
 > Sorti·Mem·Fabric 심층 분석은 [`2026-09-15_SORTI_MEM_FABRIC.md`](2026-09-15_SORTI_MEM_FABRIC.md)에 있습니다.
 
