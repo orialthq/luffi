@@ -61,3 +61,10 @@ assets/capture/
 
 # Place lookups the server caches between runs.
 server/data/
+
+# Generated decks, renders and scratch work. Large, and rebuilt from sources.
+/output/
+/tmp/
+
+# Obsidian remembers each person's open panes here. Not shared state.
+**/.obsidian/workspace*.json

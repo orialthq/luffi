@@ -1,0 +1,24 @@
+formulas:
+  priority_score: ((value_score * 2 + frequency_score + timing_score + data_feasibility_score * 2 + outcome_measurability_score * 2 + low_friction_score + build_feasibility_score + learning_loop_score * 2 + differentiation_score) / 65 * 100).round()
+views:
+  - type: table
+    name: 표
+    filters:
+      and:
+        - type == "user-scenario"
+        - file.folder == "오리알트/70_시나리오"
+    order:
+      - file.name
+      - domain
+      - job
+      - trigger
+      - frequency
+      - status
+      - evidence_level
+      - score_status
+      - formula.priority_score
+    sort:
+      - property: frequency
+        direction: ASC
+      - property: formula.priority_score
+        direction: DESC

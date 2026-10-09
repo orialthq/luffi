@@ -13,6 +13,7 @@
 | **README** (여기) | 계획 전체의 틀, 세 성격, 순서 |
 | [RECOMMENDATION](RECOMMENDATION.md) | 추천 — 저장한 것 중 하나를 고르는 판단. 모든 성격이 공유한다 |
 | [PLACE_TYPE](PLACE_TYPE.md) | 장소형 — 좌표, 지오펜스, 근처 알림 |
+| [AUTO_CAPTURE/](AUTO_CAPTURE/README.md) | 자동 수집 — 찍기만 하면 들어와서 정리되어 있는 것. 계획과 별개의 줄기 |
 
 물건형과 행위형은 아직 문서가 없다. 장소형을 먼저 세우고 그때 나눈다.
 
