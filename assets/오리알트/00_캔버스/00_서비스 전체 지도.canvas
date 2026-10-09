@@ -1,0 +1,18 @@
+{
+	"nodes":[
+		{"id":"c79fa6b5576bfb02","type":"file","file":"10_데이터 소스/DAT-001_맛집 캡처.md","x":-292,"y":-211,"width":400,"height":400},
+		{"id":"0c5b5c3d9b86f0c9","type":"file","file":"20_엔티티/ENT-001_식당 지점.md","x":420,"y":-211,"width":400,"height":400},
+		{"id":"d13ad4ad3824726a","type":"file","file":"30_상황/CTX-001_식사 상황.md","x":420,"y":300,"width":400,"height":400},
+		{"id":"2f4a9c3b9be7ab92","type":"file","file":"40_결정/DEC-001_이번 식사 결정.md","x":1080,"y":300,"width":400,"height":400},
+		{"id":"bd81b3302da77f73","type":"file","file":"50_행동/ACT-001_지도·예약·공유.md","x":1740,"y":300,"width":400,"height":400},
+		{"id":"d2dc6b983ad6b921","x":2360,"y":300,"width":400,"height":400,"type":"file","file":"60_결과/OUT-001_방문 결과.md"}
+	],
+	"edges":[
+		{"id":"1b12efd964ac41d9","fromNode":"c79fa6b5576bfb02","fromSide":"right","toNode":"0c5b5c3d9b86f0c9","toSide":"left","label":"추출·식별"},
+		{"id":"21bc1796b19e517c","fromNode":"0c5b5c3d9b86f0c9","fromSide":"right","toNode":"2f4a9c3b9be7ab92","toSide":"top","label":"후보 제공"},
+		{"id":"f139f70f87275bd0","fromNode":"d13ad4ad3824726a","fromSide":"right","toNode":"2f4a9c3b9be7ab92","toSide":"left","label":"조건 제공"},
+		{"id":"4dae99748f57132a","fromNode":"2f4a9c3b9be7ab92","fromSide":"right","toNode":"bd81b3302da77f73","toSide":"left","label":"즉시 실행"},
+		{"id":"d4c9fdfaa2b1030b","fromNode":"bd81b3302da77f73","fromSide":"right","toNode":"d2dc6b983ad6b921","toSide":"left","label":"방문 확인"},
+		{"id":"b9ca269e5af7cc4c","fromNode":"d2dc6b983ad6b921","fromSide":"bottom","toNode":"2f4a9c3b9be7ab92","toSide":"bottom","label":"다음 결정에 반영"}
+	]
+}
